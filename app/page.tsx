@@ -1,0 +1,1014 @@
+'use client';
+
+import { useState, useEffect, useRef, useCallback } from 'react';
+import Sidebar from '@/components/Sidebar';
+import ChatMessage from '@/components/ChatMessage';
+import ChatInput from '@/components/ChatInput';
+import {
+  PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
+  Save, X, FileDown, ArrowDown
+} from 'lucide-react';
+import { useDeepThink } from '@/lib/useDeepThink';
+import DeepThinkToggle from '@/components/DeepThinkToggle';
+import type { Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis } from '@/types';
+import {
+  loadApiKeys, saveApiKeys, getNextAvailableKey, markKeyBlocked,
+  markKeyUsed, unblockExpiredKeys, isRateLimitError, isInvalidKeyError,
+} from '@/lib/apiKeyManager';
+import {
+  loadSavedChats, saveChatToStorage, deleteChatFromStorage,
+  getActiveChatId, setActiveChatId,
+} from '@/lib/storage';
+
+function generateId() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function generateChatTitle(messages: Message[]): string {
+  const firstUser = messages.find(m => m.role === 'user');
+  if (!firstUser) return 'Новый чат';
+  const text = (firstUser.parts.find(p => 'text' in p) as any)?.text || '';
+  if (!text) return 'Новый чат';
+  return text.slice(0, 50).trim() + (text.length > 50 ? '…' : '');
+}
+
+// Построить улучшенный промпт из анализа
+function buildEnhancedPromptFromAnalysis(analysis: DeepThinkAnalysis): string {
+  return `${analysis.enhancedSystemPrompt}
+
+---
+[DeepThink — Внутренний план для идеального ответа]
+
+${analysis.characterDetails ? `Персонаж: ${analysis.characterDetails}\n` : ''}Стиль пользователя: ${analysis.userStyle}
+Настроение: ${analysis.mood}
+Реальное намерение: ${analysis.realIntent}
+
+ЧТО СКАЗАТЬ СЕЙЧАС: ${analysis.revealNow || analysis.answerStrategy}
+ЧТО ПРИБЕРЕЧЬ НА ПОТОМ: ${analysis.revealLater || 'продолжать естественно'}
+
+Стратегия ответа: ${analysis.answerStrategy}
+Тон и стиль: ${analysis.toneAdvice}
+${analysis.futureStrategy ? `План на будущее: ${analysis.futureStrategy}` : ''}
+
+ВАЖНО: Используй этот план для ответа. Не упоминай анализ явно — просто воплоти его.
+---`;
+}
+
+export default function Home() {
+  // API Keys (multiple)
+  const [apiKeys, setApiKeys] = useState<ApiKeyEntry[]>([]);
+  const [activeKeyIndex, setActiveKeyIndex] = useState(0);
+
+  // Model
+  const [model, setModel] = useState<string>('');
+  const [models, setModels] = useState<GeminiModel[]>([]);
+
+  // Settings
+  const [systemPrompt, setSystemPrompt] = useState<string>('');
+  const [temperature, setTemperature] = useState<number>(1.0);
+  const [thinkingBudget, setThinkingBudget] = useState<number>(-1); // -1=авто
+
+  // UI state
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Chat state
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamingId, setStreamingId] = useState<string | null>(null);
+  const [tokenCount, setTokenCount] = useState(0);
+  const [error, setError] = useState<string>('');
+
+  // Saved chats
+  const [savedChats, setSavedChats] = useState<SavedChat[]>([]);
+  const [currentChatId, setCurrentChatId] = useState<string | null>(null);
+  const [chatTitle, setChatTitle] = useState('');
+  const [unsaved, setUnsaved] = useState(false);
+
+  // Scroll state
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight > 150) {
+      setShowScrollBottom(true);
+    } else {
+      setShowScrollBottom(false);
+    }
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  // Refs
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const tokenDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const lastKeyIndexRef = useRef(-1);
+
+  const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze } = useDeepThink();
+
+  // Detect mobile
+  useEffect(() => {
+    const check = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (mobile) setSidebarOpen(false);
+    };
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
+
+  // Load from localStorage
+  useEffect(() => {
+    const keys = unblockExpiredKeys(loadApiKeys());
+    setApiKeys(keys);
+
+    const savedModel = localStorage.getItem('gemini_model');
+    const savedSysPrompt = localStorage.getItem('gemini_sys_prompt');
+    const savedTemp = localStorage.getItem('gemini_temperature');
+    const savedSidebar = localStorage.getItem('gemini_sidebar');
+    const savedThinking = localStorage.getItem('gemini_thinking_budget');
+
+    if (savedModel) setModel(savedModel);
+    if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
+    if (savedTemp) setTemperature(parseFloat(savedTemp));
+    if (savedSidebar !== null) setSidebarOpen(savedSidebar === 'true');
+    if (savedThinking !== null) setThinkingBudget(parseInt(savedThinking));
+
+    const chats = loadSavedChats();
+    setSavedChats(chats);
+
+    const activeChatId = getActiveChatId();
+    if (activeChatId) {
+      const chat = chats.find(c => c.id === activeChatId);
+      if (chat) {
+        setMessages(chat.messages);
+        setCurrentChatId(chat.id);
+        setChatTitle(chat.title);
+        setModel(chat.model || savedModel || '');
+        setSystemPrompt(chat.systemPrompt || savedSysPrompt || '');
+        setTemperature(chat.temperature ?? parseFloat(savedTemp || '1'));
+      }
+    }
+  }, []);
+
+  // Persist simple settings
+  useEffect(() => { if (model) localStorage.setItem('gemini_model', model); }, [model]);
+  useEffect(() => { localStorage.setItem('gemini_sys_prompt', systemPrompt); }, [systemPrompt]);
+  useEffect(() => { localStorage.setItem('gemini_temperature', temperature.toString()); }, [temperature]);
+  useEffect(() => { localStorage.setItem('gemini_sidebar', sidebarOpen.toString()); }, [sidebarOpen]);
+  useEffect(() => { localStorage.setItem('gemini_thinking_budget', thinkingBudget.toString()); }, [thinkingBudget]);
+
+  // Auto-scroll
+  useEffect(() => {
+    if (isStreaming || messages.length > 0) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, isStreaming]);
+
+  // Mark unsaved when messages change
+  useEffect(() => {
+    if (messages.length > 0) setUnsaved(true);
+  }, [messages]);
+
+  // Token counting
+  const countTokens = useCallback(async (msgs: Message[], sys: string, mod: string, keys: ApiKeyEntry[]) => {
+    const activeKey = keys.find(k => !k.blockedUntil || k.blockedUntil <= Date.now());
+    if (!activeKey || !mod || msgs.length === 0) { setTokenCount(0); return; }
+    try {
+      const res = await fetch('/api/tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: msgs.map(m => ({
+            role: m.role,
+            parts: m.parts.map(p => {
+              if ('text' in p) return { text: p.text };
+              return { inlineData: { mimeType: (p as any).inlineData.mimeType, data: (p as any).inlineData.data.slice(0, 100) } };
+            }),
+          })),
+          model: mod,
+          systemInstruction: sys,
+          apiKey: activeKey.key,
+        }),
+      });
+      const data = await res.json();
+      setTokenCount(data.totalTokens || 0);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (tokenDebounceRef.current) clearTimeout(tokenDebounceRef.current);
+    tokenDebounceRef.current = setTimeout(() => {
+      countTokens(messages, systemPrompt, model, apiKeys);
+    }, 1000);
+    return () => { if (tokenDebounceRef.current) clearTimeout(tokenDebounceRef.current); };
+  }, [messages, systemPrompt, model, apiKeys, countTokens]);
+
+  // ============ SAVE CHAT ============
+  const saveCurrentChat = useCallback((msgs: Message[], title?: string) => {
+    if (msgs.length === 0) return;
+    const chatId = currentChatId || generateId();
+    const chatObj: SavedChat = {
+      id: chatId,
+      title: title || chatTitle || generateChatTitle(msgs),
+      messages: msgs,
+      model,
+      systemPrompt,
+      temperature,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    // Если чат уже существует, сохраняем createdAt
+    const existing = savedChats.find(c => c.id === chatId);
+    if (existing) chatObj.createdAt = existing.createdAt;
+
+    saveChatToStorage(chatObj);
+    const updated = loadSavedChats();
+    setSavedChats(updated);
+    setCurrentChatId(chatId);
+    setActiveChatId(chatId);
+    setChatTitle(chatObj.title);
+    setUnsaved(false);
+    return chatObj;
+  }, [currentChatId, chatTitle, model, systemPrompt, temperature, savedChats]);
+
+  // ============ STREAMING ============
+  const streamGeneration = useCallback(async (
+    history: Message[],
+    targetMessageId: string,
+    isAppending: boolean,
+    customAnalysis?: DeepThinkAnalysis, // Кастомный анализ после редактирования
+  ) => {
+    // Получить следующий доступный ключ
+    const keyResult = getNextAvailableKey(apiKeys, lastKeyIndexRef.current);
+    if (!keyResult) {
+      setError('Все API ключи временно заблокированы. Попробуйте позже.');
+      setIsStreaming(false);
+      setStreamingId(null);
+      return;
+    }
+
+    const { key, index } = keyResult;
+    lastKeyIndexRef.current = index;
+
+    // Отметить ключ как используемый
+    const usedKeys = markKeyUsed(apiKeys, index);
+    setApiKeys(usedKeys);
+    saveApiKeys(usedKeys);
+
+    abortControllerRef.current = new AbortController();
+    setIsStreaming(true);
+    setStreamingId(targetMessageId);
+    setError('');
+
+    // DeepThink Pass 1 — если включён, анализируем сначала
+    let effectiveSystemPrompt = systemPrompt;
+    let finalAnalysis: DeepThinkAnalysis | null = null;
+    
+    if (deepThinkState.enabled && !customAnalysis) {
+      // Показываем визуально, что идет анализ - создаем пустое сообщение с deepThinking
+      setMessages(prev => prev.map(m =>
+        m.id !== targetMessageId ? m : {
+          ...m,
+          parts: [{ text: '' }],
+          deepThinking: '',
+          isStreaming: true,
+        }
+      ));
+
+      const dtResult = await deepThinkAnalyze(
+        history,
+        systemPrompt,
+        key,
+        model,
+        (thinking: string) => {
+          setMessages(prev => prev.map(m =>
+            m.id !== targetMessageId ? m : {
+              ...m,
+              deepThinking: thinking,
+              isStreaming: true,
+            }
+          ));
+        }
+      );
+
+      effectiveSystemPrompt = dtResult.enhancedPrompt;
+      finalAnalysis = dtResult.analysis;
+      
+      if (dtResult.error) {
+        // Записываем ошибку прямо в сообщение
+        setMessages(prev => prev.map(m =>
+          m.id !== targetMessageId ? m : {
+            ...m,
+            deepThinkError: dtResult.error || 'DeepThink failed',
+          }
+        ));
+        setError(`DeepThink Error: ${dtResult.error}`);
+      }
+
+      if (finalAnalysis) {
+        setMessages(prev => prev.map(m =>
+          m.id !== targetMessageId ? m : {
+            ...m,
+            deepThinkAnalysis: finalAnalysis || undefined,
+            isStreaming: true,
+          }
+        ));
+      }
+    } else if (customAnalysis) {
+      // Используем кастомный анализ после редактирования
+      finalAnalysis = customAnalysis;
+      effectiveSystemPrompt = buildEnhancedPromptFromAnalysis(customAnalysis);
+      
+      // Обновляем анализ в сообщении
+      setMessages(prev => prev.map(m =>
+        m.id !== targetMessageId ? m : {
+          ...m,
+          deepThinkAnalysis: customAnalysis,
+          parts: [{ text: '' }], // Очищаем старый ответ
+          thinking: undefined, // Очищаем старые размышления
+          isStreaming: true,
+        }
+      ));
+    }
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: abortControllerRef.current.signal,
+        body: JSON.stringify({
+          messages: history.map(m => ({ role: m.role, parts: m.parts })),
+          model,
+          systemInstruction: effectiveSystemPrompt,
+          temperature,
+          apiKey: key,
+          thinkingBudget,
+        }),
+      });
+
+      if (!response.ok) {
+        setError(`API error: ${response.status}`);
+        return;
+      }
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let thinkingAccumulator = isAppending ? (history.find(m => m.id === targetMessageId)?.thinking || '') : '';
+      let retryWithNextKey = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+          const jsonStr = trimmed.slice(6);
+          if (jsonStr === '[DONE]') break;
+
+          try {
+            const parsed = JSON.parse(jsonStr);
+
+            // Ошибка
+            if (parsed.error) {
+              const errMsg = parsed.error;
+              if (isRateLimitError(errMsg) || (parsed.isRateLimit)) {
+                // Блокируем ключ на 10 часов
+                const blockedKeys = markKeyBlocked(usedKeys, index);
+                setApiKeys(blockedKeys);
+                saveApiKeys(blockedKeys);
+                retryWithNextKey = true;
+                break;
+              }
+              setError(errMsg);
+              return;
+            }
+
+            // Контент заблокирован
+            if (parsed.isBlocked) {
+              setMessages(prev => prev.map(m =>
+                m.id !== targetMessageId ? m : {
+                  ...m,
+                  isBlocked: true,
+                  blockReason: parsed.finishReason,
+                  finishReason: parsed.finishReason,
+                  isStreaming: false,
+                }
+              ));
+              continue;
+            }
+
+            // Размышления
+            if (parsed.thinking) {
+              thinkingAccumulator += parsed.thinking;
+              setMessages(prev => prev.map(m =>
+                m.id !== targetMessageId ? m : {
+                  ...m,
+                  thinking: thinkingAccumulator,
+                  isStreaming: true,
+                }
+              ));
+            }
+
+            // Текст ответа
+            if (parsed.text) {
+              setMessages(prev => prev.map(m => {
+                if (m.id !== targetMessageId) return m;
+                const hasTextPart = m.parts.some(p => 'text' in p);
+                if (hasTextPart) {
+                  return {
+                    ...m,
+                    parts: m.parts.map(p =>
+                      'text' in p ? { text: (p as { text: string }).text + parsed.text } : p
+                    ),
+                    isStreaming: true,
+                  };
+                } else {
+                  return {
+                    ...m,
+                    parts: [...m.parts, { text: parsed.text }],
+                    isStreaming: true,
+                  };
+                }
+              }));
+            }
+          } catch {}
+        }
+
+        if (retryWithNextKey) break;
+      }
+
+      // Retry с другим ключом если rate limit
+      if (retryWithNextKey) {
+        // Сбросить накопленный текст только если это не продолжение
+        if (!isAppending) {
+          setMessages(prev => prev.map(m =>
+            m.id !== targetMessageId ? m : {
+              ...m,
+              parts: [{ text: '' }],
+              thinking: undefined,
+              isStreaming: true,
+            }
+          ));
+        }
+        // Рекурсивный вызов с обновлёнными ключами
+        await streamGeneration(history, targetMessageId, isAppending);
+        return;
+      }
+
+    } catch (e: any) {
+      if (e.name !== 'AbortError') {
+        setError(e.message || 'Ошибка стриминга');
+      }
+    } finally {
+      setIsStreaming(false);
+      setStreamingId(null);
+      abortControllerRef.current = null;
+      setMessages(prev => prev.map(m =>
+        m.id === targetMessageId ? { ...m, isStreaming: false } : m
+      ));
+    }
+  }, [apiKeys, model, systemPrompt, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze]);
+
+  // ============ HANDLERS ============
+  const handleSend = useCallback(async (text: string, files: AttachedFile[]) => {
+    if (apiKeys.length === 0 || !model || isStreaming) return;
+
+    setError('');
+    const userParts: Part[] = [];
+    if (text) userParts.push({ text });
+    files.forEach(f => userParts.push({ inlineData: { mimeType: f.mimeType, data: f.data } }));
+
+    const userMsg: Message = {
+      id: generateId(),
+      role: 'user',
+      parts: userParts,
+      files: files.length > 0 ? files : undefined,
+    };
+
+    const assistantMsgId = generateId();
+    const assistantMsg: Message = {
+      id: assistantMsgId,
+      role: 'model',
+      parts: [{ text: '' }],
+      isStreaming: true,
+      modelName: model,
+    };
+
+    const newMessages = [...messages, userMsg, assistantMsg];
+    setMessages(newMessages);
+
+    const historyToSend = [...messages, userMsg];
+    await streamGeneration(historyToSend, assistantMsgId, false);
+  }, [apiKeys, model, isStreaming, messages, streamGeneration]);
+
+  const handleRegenerate = useCallback(async () => {
+    if (isStreaming || messages.length === 0) return;
+    
+    const lastMsg = messages[messages.length - 1];
+
+    // Если последнее сообщение от пользователя — генерируем ответ на него
+    if (lastMsg.role === 'user') {
+      const newMsgId = generateId();
+      const assistantMsg: Message = {
+        id: newMsgId,
+        role: 'model',
+        parts: [{ text: '' }],
+        isStreaming: true,
+        modelName: model,
+      };
+      setMessages([...messages, assistantMsg]);
+      await streamGeneration(messages, newMsgId, false);
+      return;
+    }
+
+    // Иначе это сообщение от модели — находим его, удаляем и пересоздаём (регенерация)
+    const lastModelIdx = [...messages].reverse().findIndex(m => m.role === 'model');
+    if (lastModelIdx === -1) return;
+    const actualIdx = messages.length - 1 - lastModelIdx;
+    const newMsgId = generateId();
+    const newMessages = [
+      ...messages.slice(0, actualIdx),
+      { id: newMsgId, role: 'model' as const, parts: [{ text: '' }], isStreaming: true, modelName: model },
+    ];
+    setMessages(newMessages);
+    await streamGeneration(messages.slice(0, actualIdx), newMsgId, false);
+  }, [isStreaming, messages, streamGeneration, model]);
+
+  const handleContinue = useCallback(async () => {
+    if (isStreaming) return;
+    const lastMsg = messages[messages.length - 1];
+    if (!lastMsg || lastMsg.role !== 'model') return;
+
+    const lastText = (lastMsg.parts.find(p => 'text' in p) as any)?.text || '';
+
+    // Если последнее сообщение модели — это DeepThink без финального текста,
+    // создаём новое сообщение модели (обычная генерация)
+    if (!lastText && lastMsg.deepThinkAnalysis) {
+      const newMsgId = generateId();
+      const assistantMsg: Message = {
+        id: newMsgId,
+        role: 'model',
+        parts: [{ text: '' }],
+        isStreaming: true,
+        modelName: model,
+      };
+      // История: всё до DeepThink-сообщения включительно, кроме него
+      const historyUpTo = messages.slice(0, messages.length - 1);
+      setMessages([...messages, assistantMsg]);
+      await streamGeneration(historyUpTo, newMsgId, false);
+      return;
+    }
+
+    await streamGeneration(messages, lastMsg.id, true);
+  }, [isStreaming, messages, streamGeneration, model]);
+
+  const handleEdit = useCallback((id: string, newParts: Part[]) => {
+    const msgIdx = messages.findIndex(m => m.id === id);
+    if (msgIdx === -1) return;
+    const msg = messages[msgIdx];
+    if (msg.role === 'user') {
+      const updatedUser = { ...msg, parts: newParts };
+      const historyUpTo = [...messages.slice(0, msgIdx), updatedUser];
+      const assistantMsgId = generateId();
+      const assistantMsg: Message = {
+        id: assistantMsgId,
+        role: 'model',
+        parts: [{ text: '' }],
+        isStreaming: true,
+        modelName: model,
+      };
+      setMessages([...historyUpTo, assistantMsg]);
+      streamGeneration(historyUpTo, assistantMsgId, false);
+    } else {
+      setMessages(prev => prev.map(m =>
+        m.id === id ? { ...m, parts: newParts, isBlocked: false } : m
+      ));
+    }
+  }, [messages, streamGeneration, model]);
+
+  // Удаляет строго одно сообщение по ID — никакого каскада
+  const handleDelete = useCallback((id: string) => {
+    setMessages(prev => {
+      const idx = prev.findIndex(m => m.id === id);
+      if (idx === -1) return prev;
+      const next = [...prev];
+      next.splice(idx, 1);
+      return next;
+    });
+  }, []);
+
+  const handleEditDeepThinkAnalysis = useCallback((id: string, analysis: DeepThinkAnalysis) => {
+    // Найти сообщение и перегенерировать с новым анализом
+    const msgIdx = messages.findIndex(m => m.id === id);
+    if (msgIdx === -1) return;
+    
+    // Получить историю до этого сообщения
+    const historyUpTo = messages.slice(0, msgIdx);
+    
+    // Перегенерировать с кастомным анализом
+    streamGeneration(historyUpTo, id, false, analysis);
+  }, [messages, streamGeneration]);
+
+  const handleStop = useCallback(() => {
+    abortControllerRef.current?.abort();
+  }, []);
+
+  const handleAddUserMessage = useCallback(() => {
+    const msg: Message = { id: generateId(), role: 'user', parts: [{ text: '' }] };
+    setMessages(prev => [...prev, msg]);
+  }, []);
+
+  const handleClearChat = useCallback(() => {
+    if (isStreaming) return;
+    setMessages([]);
+    setTokenCount(0);
+    setError('');
+    setCurrentChatId(null);
+    setChatTitle('');
+    setUnsaved(false);
+    setActiveChatId(null);
+  }, [isStreaming]);
+
+  const handleNewChat = useCallback(() => {
+    if (isStreaming) return;
+    // Автосохранение текущего чата
+    if (messages.length > 0) {
+      saveCurrentChat(messages);
+    }
+    handleClearChat();
+  }, [isStreaming, messages, saveCurrentChat, handleClearChat]);
+
+  const handleExportMarkdown = useCallback(() => {
+    if (messages.length === 0) return;
+    
+    let md = `# ${chatTitle || generateChatTitle(messages)}\n\n`;
+    messages.forEach(m => {
+      const text = (m.parts.find(p => 'text' in p) as any)?.text || '';
+      if (!text) return;
+      
+      if (m.role === 'user') {
+        md += `## 🧑 Вы\n\n${text}\n\n`;
+      } else {
+        md += `## ✨ Gemini${model ? ` (${model.replace('models/', '')})` : ''}\n\n`;
+        if (m.thinking) {
+          md += `> **Размышления:**\n> ${m.thinking.split('\n').join('\n> ')}\n\n`;
+        }
+        if (m.isBlocked) {
+          md += `> 🛑 **Контент заблокирован (${m.blockReason || m.finishReason})**\n\n`;
+        }
+        md += `${text}\n\n`;
+      }
+      md += `---\n\n`;
+    });
+
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(chatTitle || 'chat').replace(/[^a-z0-9а-яё]/gi, '_').slice(0, 50)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [messages, chatTitle, model]);
+
+  const handleLoadChat = useCallback((chat: SavedChat) => {
+    if (isStreaming) return;
+    if (messages.length > 0 && unsaved) {
+      saveCurrentChat(messages);
+    }
+    setMessages(chat.messages);
+    setCurrentChatId(chat.id);
+    setChatTitle(chat.title);
+    setModel(chat.model);
+    setSystemPrompt(chat.systemPrompt || '');
+    setTemperature(chat.temperature ?? 1.0);
+    setActiveChatId(chat.id);
+    setUnsaved(false);
+    setError('');
+  }, [isStreaming, messages, unsaved, saveCurrentChat]);
+
+  const handleDeleteSavedChat = useCallback((id: string) => {
+    deleteChatFromStorage(id);
+    const updated = loadSavedChats();
+    setSavedChats(updated);
+    if (currentChatId === id) {
+      handleClearChat();
+    }
+  }, [currentChatId, handleClearChat]);
+
+  const handleSavedChatsChange = useCallback((chats: SavedChat[]) => {
+    setSavedChats(chats);
+    chats.forEach(c => saveChatToStorage(c));
+  }, []);
+
+  const handleApiKeysChange = useCallback((keys: ApiKeyEntry[]) => {
+    setApiKeys(keys);
+    saveApiKeys(keys);
+  }, []);
+
+  // Auto-save when streaming stops
+  useEffect(() => {
+    if (!isStreaming && messages.length > 0 && unsaved) {
+      const lastMsg = messages[messages.length - 1];
+      // Сохраняем только если получили реальный ответ
+      const lastText = (lastMsg.parts.find(p => 'text' in p) as any)?.text;
+      if (lastMsg.role === 'model' && (lastText || lastMsg.isBlocked)) {
+        saveCurrentChat(messages);
+      }
+    }
+  }, [isStreaming]);
+
+  const hasKeys = apiKeys.some(k => !k.blockedUntil || k.blockedUntil <= Date.now());
+  const hasApiAndModel = hasKeys && !!model;
+  const lastMessage = messages[messages.length - 1];
+  const lastIsModel = lastMessage?.role === 'model';
+  const canContinue = lastIsModel && !isStreaming && (
+    (!!lastMessage?.parts[0] && 'text' in lastMessage.parts[0] && (lastMessage.parts[0] as any).text.length > 0) ||
+    !!lastMessage?.deepThinkAnalysis
+  );
+
+  return (
+    <div className="flex fixed inset-0 overflow-hidden bg-[var(--surface-0)]">
+
+      {/* Mobile overlay sidebar */}
+      {isMobile && sidebarOpen && (
+        <div className="sidebar-mobile-overlay" onClick={(e) => { if (e.target === e.currentTarget) setSidebarOpen(false); }}>
+          <div className="sidebar-backdrop" />
+          <div className="sidebar-panel">
+            <Sidebar
+              apiKeys={apiKeys}
+              onApiKeysChange={handleApiKeysChange}
+              activeKeyIndex={activeKeyIndex}
+              onActiveKeyIndexChange={setActiveKeyIndex}
+              model={model}
+              onModelChange={setModel}
+              models={models}
+              onModelsLoad={setModels}
+              systemPrompt={systemPrompt}
+              onSystemPromptChange={setSystemPrompt}
+              temperature={temperature}
+              onTemperatureChange={setTemperature}
+              thinkingBudget={thinkingBudget}
+              onThinkingBudgetChange={setThinkingBudget}
+              tokenCount={tokenCount}
+              isStreaming={isStreaming}
+              savedChats={savedChats}
+              onSavedChatsChange={handleSavedChatsChange}
+              currentChatId={currentChatId}
+              onLoadChat={handleLoadChat}
+              onNewChat={handleNewChat}
+              onDeleteChat={handleDeleteSavedChat}
+              onClose={() => setSidebarOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Desktop sidebar */}
+      {!isMobile && (
+        <div
+          className={`transition-all duration-300 ease-in-out flex-shrink-0 overflow-hidden ${
+            sidebarOpen ? 'w-[280px] opacity-100' : 'w-0 opacity-0 pointer-events-none'
+          }`}
+        >
+          <Sidebar
+            apiKeys={apiKeys}
+            onApiKeysChange={handleApiKeysChange}
+            activeKeyIndex={activeKeyIndex}
+            onActiveKeyIndexChange={setActiveKeyIndex}
+            model={model}
+            onModelChange={setModel}
+            models={models}
+            onModelsLoad={setModels}
+            systemPrompt={systemPrompt}
+            onSystemPromptChange={setSystemPrompt}
+            temperature={temperature}
+            onTemperatureChange={setTemperature}
+            thinkingBudget={thinkingBudget}
+            onThinkingBudgetChange={setThinkingBudget}
+            tokenCount={tokenCount}
+            isStreaming={isStreaming}
+            savedChats={savedChats}
+            onSavedChatsChange={handleSavedChatsChange}
+            currentChatId={currentChatId}
+            onLoadChat={handleLoadChat}
+            onNewChat={handleNewChat}
+            onDeleteChat={handleDeleteSavedChat}
+          />
+        </div>
+      )}
+
+      {/* Main Chat Area */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+
+        {/* Top bar */}
+        <div className="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] bg-[var(--surface-1)] flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="w-8 h-8 flex items-center justify-center text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-lg transition-all"
+            >
+              <PanelLeft size={15} />
+            </button>
+            <div className="flex items-center gap-2 min-w-0">
+              {chatTitle ? (
+                <span className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px] md:max-w-xs">
+                  {chatTitle}
+                </span>
+              ) : (
+                <span className="text-sm text-[var(--text-dim)]">Новый чат</span>
+              )}
+              {model && (
+                <span className="hidden md:block text-[11px] text-[var(--text-dim)] bg-[var(--surface-3)] border border-[var(--border)] px-2 py-0.5 rounded-full font-mono flex-shrink-0">
+                  {model.replace('models/', '')}
+                </span>
+              )}
+              {unsaved && messages.length > 0 && (
+                <button
+                  onClick={() => saveCurrentChat(messages)}
+                  className="flex items-center gap-1 px-2 py-0.5 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-all"
+                  title="Сохранить чат"
+                >
+                  <Save size={10} />
+                  <span className="hidden md:block">Сохранить</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1">
+            {messages.length > 0 && (
+              <button
+                onClick={handleExportMarkdown}
+                disabled={isStreaming}
+                className="flex items-center gap-1 h-7 px-2 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] border border-transparent rounded-lg transition-all"
+                title="Скачать чат в формате Markdown (.md)"
+              >
+                <FileDown size={13} />
+                <span className="hidden md:block">MD</span>
+              </button>
+            )}
+            <div className="w-[1px] h-4 bg-[var(--border)] mx-1 hidden sm:block" />
+            
+            {messages.length > 0 && (
+              <button
+                onClick={handleClearChat}
+                disabled={isStreaming}
+                className="flex items-center gap-1.5 px-2.5 h-7 text-xs text-[var(--text-dim)] hover:text-red-400 hover:bg-[rgba(239,68,68,0.08)] border border-transparent hover:border-[rgba(239,68,68,0.15)] rounded-lg transition-all disabled:opacity-50"
+              >
+                <Trash2 size={11} />
+                <span className="hidden md:block">Очистить</span>
+              </button>
+            )}
+            <button
+              onClick={handleNewChat}
+              disabled={isStreaming}
+              className="flex items-center gap-1.5 px-2.5 h-7 text-xs text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] border border-transparent hover:border-[var(--border)] rounded-lg transition-all disabled:opacity-50"
+            >
+              <MessageSquarePlus size={13} />
+              <span className="hidden md:block">Новый</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Error banner */}
+        {error && (
+          <div className="mx-4 mt-3 flex items-center gap-2 bg-red-500/8 border border-red-500/15 text-red-400 text-sm px-4 py-2.5 rounded-xl animate-fade-in">
+            <AlertCircle size={13} className="flex-shrink-0" />
+            <span className="text-xs">{error}</span>
+            <button onClick={() => setError('')} className="ml-auto text-red-300/60 hover:text-red-300">
+              <X size={13} />
+            </button>
+          </div>
+        )}
+
+        {/* Messages */}
+        <div 
+          className="flex-1 overflow-y-auto chat-messages-area px-4 py-6 relative"
+          onScroll={handleScroll}
+        >
+          {messages.length === 0 ? (
+            <EmptyState 
+              hasApiKey={hasKeys} 
+              hasModel={!!model} 
+              apiKeysCount={apiKeys.length} 
+              onSuggestionClick={(text) => handleSend(text, [])}
+            />
+          ) : (
+            <div className="max-w-3xl mx-auto space-y-5">
+              {messages.map((message, idx) => (
+                <ChatMessage
+                  key={message.id}
+                  message={message}
+                  index={idx}
+                  isLast={idx === messages.length - 1}
+                  isStreaming={isStreaming && message.id === streamingId}
+                  canRegenerate={hasApiAndModel && !isStreaming}
+                  onEdit={handleEdit}
+                  onDelete={handleDelete}
+                  onRegenerate={handleRegenerate}
+                  onContinue={handleContinue}
+                  onEditDeepThinkAnalysis={handleEditDeepThinkAnalysis}
+                />
+              ))}
+              <div ref={chatEndRef} />
+            </div>
+          )}
+
+          {/* Плавающая кнопка скролла вниз */}
+          {showScrollBottom && messages.length > 0 && (
+            <button
+              onClick={scrollToBottom}
+              className="fixed bottom-24 right-6 md:right-10 p-2.5 bg-[var(--surface-3)] text-[var(--text-primary)] border border-[var(--border)] rounded-full shadow-glow-sm hover:bg-[var(--surface-4)] transition-all animate-fade-in z-20"
+              title="Вниз"
+            >
+              <ArrowDown size={18} />
+            </button>
+          )}
+        </div>
+
+        {/* Input */}
+        <div className="flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper">
+          <div className="px-4 mb-2 flex items-center justify-end">
+            <DeepThinkToggle
+              state={deepThinkState}
+              onToggle={toggleDeepThink}
+            />
+          </div>
+          <ChatInput
+            onSend={handleSend}
+            onStop={handleStop}
+            onAddUserMessage={handleAddUserMessage}
+            isStreaming={isStreaming}
+            disabled={!hasApiAndModel}
+            canContinue={canContinue}
+            onContinue={handleContinue}
+            canRun={messages.length > 0 && !isStreaming && hasApiAndModel}
+            onRun={handleRegenerate}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ hasApiKey, hasModel, apiKeysCount, onSuggestionClick }: { hasApiKey: boolean; hasModel: boolean; apiKeysCount: number; onSuggestionClick: (text: string) => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-center px-4">
+      <div className="w-14 h-14 rounded-2xl bg-white flex items-center justify-center mb-6">
+        <Sparkles size={24} className="text-black" />
+      </div>
+
+      <h2 className="text-2xl font-semibold text-white mb-2 tracking-tight">Gemini Studio</h2>
+      <p className="text-[var(--text-muted)] max-w-sm leading-relaxed text-sm">
+        {!hasApiKey
+          ? 'Добавьте API ключ в левую панель для начала'
+          : !hasModel
+          ? 'Загрузка доступных моделей…'
+          : 'Начните разговор с Gemini'}
+      </p>
+
+      {!hasApiKey && (
+        <div className="mt-6 flex flex-col gap-2 items-center">
+          <a
+            href="https://aistudio.google.com/apikey"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 px-5 py-2.5 bg-white text-black text-sm font-medium rounded-xl hover:opacity-80 transition-opacity"
+          >
+            Получить API ключ
+          </a>
+          <p className="text-[11px] text-[var(--text-dim)]">Бесплатно · Без карты</p>
+        </div>
+      )}
+
+      {hasApiKey && hasModel && (
+        <div className="mt-8 grid grid-cols-1 gap-2 max-w-sm w-full">
+          {[
+            { label: '💬 Начать разговор', text: 'Привет! Что умеешь делать?' },
+            { label: '💻 Ревью кода', text: 'Посмотри этот код и предложи улучшения:' },
+            { label: '✍️ Написать текст', text: 'Напиши короткий рассказ о космическом путешествии.' },
+            { label: '🧠 Объяснить тему', text: 'Объясни квантовую запутанность простыми словами.' },
+          ].map(s => (
+            <div key={s.label}
+              onClick={() => onSuggestionClick(s.text)}
+              className="text-left text-sm text-[var(--text-dim)] bg-[var(--surface-2)] border border-[var(--border)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] rounded-xl px-4 py-3 cursor-pointer transition-all group shadow-sm hover:shadow-glow-sm"
+            >
+              <span className="font-medium text-[var(--text-muted)] group-hover:text-[var(--text-primary)] transition-colors">{s.label}</span>
+              <p className="mt-0.5 text-[var(--text-dim)] group-hover:text-[var(--text-muted)] transition-colors text-xs">{s.text}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
