@@ -1,11 +1,138 @@
-import type { SavedChat, SavedSystemPrompt } from '@/types';
+import type { SavedChat, SavedSystemPrompt, AttachedFile, Message } from '@/types';
+import { saveFiles, loadFiles } from './fileStorage';
+
+// ====================== FILE HELPERS ======================
+
+// Extract file IDs from messages
+function extractFileIds(messages: Message[]): string[] {
+  const ids: string[] = [];
+  for (const msg of messages) {
+    if (msg.files) {
+      for (const file of msg.files) {
+        ids.push(file.id);
+      }
+    }
+  }
+  return ids;
+}
+
+// Strip file data before saving to localStorage (save to IndexedDB instead)
+async function stripFileData(messages: Message[]): Promise<Message[]> {
+  const filesToSave: Array<{ id: string; data: string }> = [];
+  
+  const stripped = messages.map(msg => {
+    if (!msg.files || msg.files.length === 0) return msg;
+    
+    const strippedFiles = msg.files.map(file => {
+      if (file.data) {
+        filesToSave.push({ id: file.id, data: file.data });
+      }
+      // Keep metadata, remove data
+      return { ...file, data: '', previewUrl: undefined };
+    });
+    
+    return { ...msg, files: strippedFiles };
+  });
+  
+  // Save file data to IndexedDB
+  if (filesToSave.length > 0) {
+    try {
+      await saveFiles(filesToSave);
+    } catch (err) {
+      console.error('Failed to save files to IndexedDB:', err);
+    }
+  }
+  
+  return stripped;
+}
+
+// Restore file data from IndexedDB
+async function restoreFileData(messages: Message[]): Promise<Message[]> {
+  const fileIds = extractFileIds(messages);
+  if (fileIds.length === 0) return messages;
+  
+  const fileDataMap = await loadFiles(fileIds);
+  
+  return messages.map(msg => {
+    if (!msg.files || msg.files.length === 0) return msg;
+    
+    const restoredFiles = msg.files.map(file => {
+      const data = fileDataMap.get(file.id) || '';
+      return restoreFilePreviewUrl({ ...file, data });
+    });
+    
+    return { ...msg, files: restoredFiles };
+  });
+}
+
+// Restore previewUrl (object URL) for images from base64 data
+function restoreFilePreviewUrl(file: AttachedFile): AttachedFile {
+  if (file.mimeType.startsWith('image/') && file.data && !file.previewUrl) {
+    try {
+      const blob = base64ToBlob(file.data, file.mimeType);
+      return { ...file, previewUrl: URL.createObjectURL(blob) };
+    } catch {
+      return file;
+    }
+  }
+  return file;
+}
+
+function base64ToBlob(base64: string, mimeType: string): Blob {
+  const byteString = atob(base64);
+  const ab = new ArrayBuffer(byteString.length);
+  const ia = new Uint8Array(ab);
+  for (let i = 0; i < byteString.length; i++) {
+    ia[i] = byteString.charCodeAt(i);
+  }
+  return new Blob([ab], { type: mimeType });
+}
 
 // ====================== СОХРАНЁННЫЕ ЧАТЫ ======================
 
 const CHATS_KEY = 'gemini_saved_chats';
 const ACTIVE_CHAT_KEY = 'gemini_active_chat_id';
 
-export function loadSavedChats(): SavedChat[] {
+export async function loadSavedChats(): Promise<SavedChat[]> {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(CHATS_KEY);
+    if (!raw) return [];
+    const chats = JSON.parse(raw) as SavedChat[];
+    
+    // Restore file data from IndexedDB
+    const restored = await Promise.all(
+      chats.map(async chat => ({
+        ...chat,
+        messages: await restoreFileData(chat.messages),
+      }))
+    );
+    
+    return restored;
+  } catch {
+    return [];
+  }
+}
+
+export async function saveChatToStorage(chat: SavedChat): Promise<void> {
+  if (typeof window === 'undefined') return;
+  
+  // Strip file data and save to IndexedDB
+  const strippedMessages = await stripFileData(chat.messages);
+  const strippedChat = { ...chat, messages: strippedMessages };
+  
+  const chats = await loadSavedChatsSync(); // Load without file data
+  const idx = chats.findIndex(c => c.id === chat.id);
+  if (idx >= 0) {
+    chats[idx] = strippedChat;
+  } else {
+    chats.unshift(strippedChat);
+  }
+  localStorage.setItem(CHATS_KEY, JSON.stringify(chats));
+}
+
+// Sync version without file data restoration (for internal use)
+function loadSavedChatsSync(): SavedChat[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(CHATS_KEY);
@@ -16,22 +143,22 @@ export function loadSavedChats(): SavedChat[] {
   }
 }
 
-export function saveChatToStorage(chat: SavedChat): void {
+export async function deleteChatFromStorage(id: string): Promise<void> {
   if (typeof window === 'undefined') return;
-  const chats = loadSavedChats();
-  const idx = chats.findIndex(c => c.id === chat.id);
-  if (idx >= 0) {
-    chats[idx] = chat;
-  } else {
-    chats.unshift(chat); // новый чат в начало
+  const chats = loadSavedChatsSync();
+  const chat = chats.find(c => c.id === id);
+  
+  // Delete associated files from IndexedDB
+  if (chat) {
+    const fileIds = extractFileIds(chat.messages);
+    if (fileIds.length > 0) {
+      const { deleteFileData } = await import('./fileStorage');
+      await Promise.all(fileIds.map(fid => deleteFileData(fid)));
+    }
   }
-  localStorage.setItem(CHATS_KEY, JSON.stringify(chats));
-}
-
-export function deleteChatFromStorage(id: string): void {
-  if (typeof window === 'undefined') return;
-  const chats = loadSavedChats().filter(c => c.id !== id);
-  localStorage.setItem(CHATS_KEY, JSON.stringify(chats));
+  
+  const filtered = chats.filter(c => c.id !== id);
+  localStorage.setItem(CHATS_KEY, JSON.stringify(filtered));
 }
 
 export function getActiveChatId(): string | null {
@@ -73,14 +200,21 @@ export function exportSingleChat(chat: SavedChat): void {
 }
 
 // Импорт чатов из JSON файла (Gemini Studio формат)
-export function importChatsFromFile(file: File): Promise<SavedChat[]> {
+export async function importChatsFromFile(file: File): Promise<SavedChat[]> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const raw = JSON.parse(e.target?.result as string);
         if (raw.chats && Array.isArray(raw.chats)) {
-          resolve(raw.chats as SavedChat[]);
+          // Restore file data (will be saved to IndexedDB when chat is saved)
+          const chats = await Promise.all(
+            (raw.chats as SavedChat[]).map(async chat => ({
+              ...chat,
+              messages: await restoreFileData(chat.messages),
+            }))
+          );
+          resolve(chats);
         } else {
           reject(new Error('Неверный формат файла'));
         }
@@ -279,15 +413,32 @@ export function exportAllSettings(): void {
   URL.revokeObjectURL(url);
 }
 
-export function importAllSettings(file: File): Promise<void> {
+export async function importAllSettings(file: File): Promise<void> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const raw = JSON.parse(e.target?.result as string);
         if (raw.version && raw.exportedAt) {
           if (raw.keys) localStorage.setItem('gemini_api_keys', raw.keys);
-          if (raw.chats) localStorage.setItem(CHATS_KEY, raw.chats);
+          if (raw.chats) {
+            // Restore file data before saving
+            try {
+              const chats = JSON.parse(raw.chats) as SavedChat[];
+              const restored = await Promise.all(
+                chats.map(async chat => ({
+                  ...chat,
+                  messages: await restoreFileData(chat.messages),
+                }))
+              );
+              // Save each chat (will strip and save to IndexedDB)
+              for (const chat of restored) {
+                await saveChatToStorage(chat);
+              }
+            } catch {
+              localStorage.setItem(CHATS_KEY, raw.chats);
+            }
+          }
           if (raw.prompts) localStorage.setItem(SYSTEM_PROMPTS_KEY, raw.prompts);
           if (raw.model) localStorage.setItem('gemini_model', raw.model);
           if (raw.temperature) localStorage.setItem('gemini_temperature', raw.temperature);

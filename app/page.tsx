@@ -127,36 +127,39 @@ export default function Home() {
 
   // Load from localStorage
   useEffect(() => {
-    const keys = unblockExpiredKeys(loadApiKeys());
-    setApiKeys(keys);
+    const loadData = async () => {
+      const keys = unblockExpiredKeys(loadApiKeys());
+      setApiKeys(keys);
 
-    const savedModel = localStorage.getItem('gemini_model');
-    const savedSysPrompt = localStorage.getItem('gemini_sys_prompt');
-    const savedTemp = localStorage.getItem('gemini_temperature');
-    const savedSidebar = localStorage.getItem('gemini_sidebar');
-    const savedThinking = localStorage.getItem('gemini_thinking_budget');
+      const savedModel = localStorage.getItem('gemini_model');
+      const savedSysPrompt = localStorage.getItem('gemini_sys_prompt');
+      const savedTemp = localStorage.getItem('gemini_temperature');
+      const savedSidebar = localStorage.getItem('gemini_sidebar');
+      const savedThinking = localStorage.getItem('gemini_thinking_budget');
 
-    if (savedModel) setModel(savedModel);
-    if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
-    if (savedTemp) setTemperature(parseFloat(savedTemp));
-    if (savedSidebar !== null) setSidebarOpen(savedSidebar === 'true');
-    if (savedThinking !== null) setThinkingBudget(parseInt(savedThinking));
+      if (savedModel) setModel(savedModel);
+      if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
+      if (savedTemp) setTemperature(parseFloat(savedTemp));
+      if (savedSidebar !== null) setSidebarOpen(savedSidebar === 'true');
+      if (savedThinking !== null) setThinkingBudget(parseInt(savedThinking));
 
-    const chats = loadSavedChats();
-    setSavedChats(chats);
+      const chats = await loadSavedChats();
+      setSavedChats(chats);
 
-    const activeChatId = getActiveChatId();
-    if (activeChatId) {
-      const chat = chats.find(c => c.id === activeChatId);
-      if (chat) {
-        setMessages(chat.messages);
-        setCurrentChatId(chat.id);
-        setChatTitle(chat.title);
-        setModel(chat.model || savedModel || '');
-        setSystemPrompt(chat.systemPrompt || savedSysPrompt || '');
-        setTemperature(chat.temperature ?? parseFloat(savedTemp || '1'));
+      const activeChatId = getActiveChatId();
+      if (activeChatId) {
+        const chat = chats.find(c => c.id === activeChatId);
+        if (chat) {
+          setMessages(chat.messages);
+          setCurrentChatId(chat.id);
+          setChatTitle(chat.title);
+          setModel(chat.model || savedModel || '');
+          setSystemPrompt(chat.systemPrompt || savedSysPrompt || '');
+          setTemperature(chat.temperature ?? parseFloat(savedTemp || '1'));
+        }
       }
-    }
+    };
+    loadData();
   }, []);
 
   // Persist simple settings
@@ -213,7 +216,7 @@ export default function Home() {
   }, [messages, systemPrompt, model, apiKeys, countTokens]);
 
   // ============ SAVE CHAT ============
-  const saveCurrentChat = useCallback((msgs: Message[], title?: string) => {
+  const saveCurrentChat = useCallback(async (msgs: Message[], title?: string) => {
     if (msgs.length === 0) return;
     const chatId = currentChatId || generateId();
     const chatObj: SavedChat = {
@@ -230,8 +233,8 @@ export default function Home() {
     const existing = savedChats.find(c => c.id === chatId);
     if (existing) chatObj.createdAt = existing.createdAt;
 
-    saveChatToStorage(chatObj);
-    const updated = loadSavedChats();
+    await saveChatToStorage(chatObj);
+    const updated = await loadSavedChats();
     setSavedChats(updated);
     setCurrentChatId(chatId);
     setActiveChatId(chatId);
@@ -766,18 +769,20 @@ export default function Home() {
     setError('');
   }, [isStreaming, messages, unsaved, saveCurrentChat]);
 
-  const handleDeleteSavedChat = useCallback((id: string) => {
-    deleteChatFromStorage(id);
-    const updated = loadSavedChats();
+  const handleDeleteSavedChat = useCallback(async (id: string) => {
+    await deleteChatFromStorage(id);
+    const updated = await loadSavedChats();
     setSavedChats(updated);
     if (currentChatId === id) {
       handleClearChat();
     }
   }, [currentChatId, handleClearChat]);
 
-  const handleSavedChatsChange = useCallback((chats: SavedChat[]) => {
+  const handleSavedChatsChange = useCallback(async (chats: SavedChat[]) => {
     setSavedChats(chats);
-    chats.forEach(c => saveChatToStorage(c));
+    for (const c of chats) {
+      await saveChatToStorage(c);
+    }
   }, []);
 
   const handleApiKeysChange = useCallback((keys: ApiKeyEntry[]) => {

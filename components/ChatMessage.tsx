@@ -8,7 +8,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import {
   User, Sparkles, Copy, Check, Edit2, Trash2, RefreshCw,
   ChevronDown, ChevronUp, FileText, Image as ImageIcon, Volume2, Braces,
-  Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle
+  Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square
 } from 'lucide-react';
 import type { Message, AttachedFile, Part, DeepThinkAnalysis } from '@/types';
 
@@ -28,6 +28,8 @@ interface ChatMessageProps {
 }
 
 function FilePreview({ file }: { file: AttachedFile }) {
+  const [showModal, setShowModal] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
   const isImage = file.mimeType.startsWith('image/');
   const isAudio = file.mimeType.startsWith('audio/');
   const isJson = file.mimeType === 'application/json' || file.name.endsWith('.json');
@@ -40,19 +42,31 @@ function FilePreview({ file }: { file: AttachedFile }) {
 
   if (isImage && file.previewUrl) {
     return (
-      <div className="relative group rounded-lg overflow-hidden border border-[var(--border)] max-w-xs">
-        <img src={file.previewUrl} alt={file.name} className="max-h-48 w-auto object-cover" />
-        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-end">
-          <div className="opacity-0 group-hover:opacity-100 transition-opacity px-2 py-1 bg-black/70 w-full">
-            <p className="text-white text-xs truncate">{file.name}</p>
+      <>
+        <div
+          className="relative rounded-lg overflow-hidden border border-[var(--border)] max-w-xs cursor-pointer"
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+          onClick={() => setShowModal(true)}
+        >
+          <img src={file.previewUrl} alt={file.name} className="max-h-48 w-auto object-cover" />
+          <div className={`absolute inset-0 transition-colors flex items-end ${isHovered ? 'bg-black/30' : 'bg-black/0'}`}>
+            <div className={`transition-opacity px-2 py-1 bg-black/70 w-full ${isHovered ? 'opacity-100' : 'opacity-0'}`}>
+              <p className="text-white text-xs truncate">{file.name}</p>
+            </div>
           </div>
         </div>
-      </div>
+        {showModal && <ImageModal file={file} onClose={() => setShowModal(false)} />}
+      </>
     );
   }
 
-  const Icon = isAudio ? Volume2 : isJson ? Braces : FileText;
-  const color = isAudio ? '#f59e0b' : isJson ? '#60a5fa' : '#888';
+  if (isAudio) {
+    return <AudioPlayer file={file} />;
+  }
+
+  const Icon = isJson ? Braces : FileText;
+  const color = isJson ? '#60a5fa' : '#888';
 
   return (
     <div className="flex items-center gap-2 bg-[var(--surface-3)] border border-[var(--border)] rounded-lg px-3 py-2 max-w-xs">
@@ -60,6 +74,258 @@ function FilePreview({ file }: { file: AttachedFile }) {
       <div className="min-w-0">
         <p className="text-sm text-[var(--text-primary)] truncate font-medium">{file.name}</p>
         <p className="text-[11px] text-[var(--text-dim)]">{formatSize(file.size)}</p>
+      </div>
+    </div>
+  );
+}
+
+// Image modal with zoom
+function ImageModal({ file, onClose }: { file: AttachedFile; onClose: () => void }) {
+  const [scale, setScale] = useState(1);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    setScale(s => Math.max(0.5, Math.min(5, s * delta)));
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (scale > 1) {
+      setIsDragging(true);
+      setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (isDragging) {
+      setPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+    }
+  };
+
+  const handleMouseUp = () => setIsDragging(false);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 1 && scale > 1) {
+      setIsDragging(true);
+      setDragStart({ x: e.touches[0].clientX - position.x, y: e.touches[0].clientY - position.y });
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (isDragging && e.touches.length === 1) {
+      setPosition({ x: e.touches[0].clientX - dragStart.x, y: e.touches[0].clientY - dragStart.y });
+    }
+  };
+
+  const handleTouchEnd = () => setIsDragging(false);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <button
+        onClick={onClose}
+        className="absolute top-4 right-4 text-white/70 hover:text-white text-2xl w-10 h-10 flex items-center justify-center rounded-full bg-black/30 hover:bg-black/50 transition-colors z-10"
+      >
+        ×
+      </button>
+      <div className="absolute top-4 left-4 flex gap-2 z-10">
+        <button
+          onClick={(e) => { e.stopPropagation(); setScale(s => Math.max(0.5, s - 0.2)); }}
+          className="text-white/70 hover:text-white px-3 py-1.5 rounded-lg bg-black/30 hover:bg-black/50 transition-colors text-sm"
+        >
+          −
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); setScale(1); setPosition({ x: 0, y: 0 }); }}
+          className="text-white/70 hover:text-white px-3 py-1.5 rounded-lg bg-black/30 hover:bg-black/50 transition-colors text-sm"
+        >
+          {Math.round(scale * 100)}%
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); setScale(s => Math.min(5, s + 0.2)); }}
+          className="text-white/70 hover:text-white px-3 py-1.5 rounded-lg bg-black/30 hover:bg-black/50 transition-colors text-sm"
+        >
+          +
+        </button>
+      </div>
+      <div
+        className="relative max-w-full max-h-full overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        style={{ cursor: scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default' }}
+      >
+        <img
+          ref={imgRef}
+          src={file.previewUrl}
+          alt={file.name}
+          className="max-w-full max-h-[90vh] object-contain select-none"
+          style={{
+            transform: `scale(${scale}) translate(${position.x / scale}px, ${position.y / scale}px)`,
+            transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+          }}
+          draggable={false}
+        />
+      </div>
+      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/50 px-4 py-2 rounded-lg">
+        <p className="text-white text-sm">{file.name}</p>
+      </div>
+    </div>
+  );
+}
+
+// Audio player with waveform
+function AudioPlayer({ file }: { file: AttachedFile }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [waveform, setWaveform] = useState<number[]>([]);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleLoadedMetadata = () => setDuration(audio.duration);
+    const handleTimeUpdate = () => setCurrentTime(audio.currentTime);
+    const handleEnded = () => setIsPlaying(false);
+
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('ended', handleEnded);
+
+    // Generate waveform
+    generateWaveform(file);
+
+    return () => {
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('ended', handleEnded);
+    };
+  }, [file]);
+
+  const generateWaveform = async (f: AttachedFile) => {
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const response = await fetch(`data:${f.mimeType};base64,${f.data}`);
+      const arrayBuffer = await response.arrayBuffer();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      
+      const rawData = audioBuffer.getChannelData(0);
+      const samples = 60;
+      const blockSize = Math.floor(rawData.length / samples);
+      const bars: number[] = [];
+      
+      for (let i = 0; i < samples; i++) {
+        let sum = 0;
+        for (let j = 0; j < blockSize; j++) {
+          sum += Math.abs(rawData[i * blockSize + j]);
+        }
+        bars.push(sum / blockSize);
+      }
+      
+      const max = Math.max(...bars);
+      setWaveform(bars.map(b => b / max));
+    } catch (err) {
+      // Fallback to random waveform
+      setWaveform(Array.from({ length: 60 }, () => Math.random() * 0.5 + 0.3));
+    }
+  };
+
+  const togglePlay = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (isPlaying) {
+      audio.pause();
+    } else {
+      audio.play();
+    }
+    setIsPlaying(!isPlaying);
+  };
+
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    const audio = audioRef.current;
+    if (!audio || !duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const percent = x / rect.width;
+    audio.currentTime = percent * duration;
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="flex items-center gap-3 bg-[var(--surface-3)] border border-[var(--border)] rounded-lg px-3 py-2.5 min-w-[280px] max-w-sm">
+      <audio ref={audioRef} src={file.previewUrl || `data:${file.mimeType};base64,${file.data}`} />
+      
+      <button
+        onClick={togglePlay}
+        className="flex-shrink-0 w-8 h-8 rounded-full bg-[var(--gem-yellow)] hover:opacity-80 transition-opacity flex items-center justify-center"
+      >
+        {isPlaying ? (
+          <Square size={12} fill="black" stroke="black" />
+        ) : (
+          <span className="text-black text-sm ml-0.5">▶</span>
+        )}
+      </button>
+
+      <div className="flex-1 min-w-0">
+        <div
+          className="flex items-center gap-0.5 h-8 cursor-pointer"
+          onClick={handleSeek}
+        >
+          {waveform.map((height, i) => {
+            const progress = duration > 0 ? currentTime / duration : 0;
+            const isPast = i / waveform.length < progress;
+            return (
+              <div
+                key={i}
+                className="flex-1 rounded-full transition-colors"
+                style={{
+                  height: `${height * 100}%`,
+                  backgroundColor: isPast ? '#f59e0b' : 'rgba(255,255,255,0.2)',
+                  minWidth: '2px',
+                }}
+              />
+            );
+          })}
+        </div>
+        <div className="flex items-center justify-between mt-1">
+          <span className="text-[10px] text-[var(--text-dim)] font-mono">
+            {formatTime(currentTime)}
+          </span>
+          <span className="text-[10px] text-[var(--text-dim)] truncate max-w-[120px]">
+            {file.name}
+          </span>
+          <span className="text-[10px] text-[var(--text-dim)] font-mono">
+            {formatTime(duration)}
+          </span>
+        </div>
       </div>
     </div>
   );
