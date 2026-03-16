@@ -34,6 +34,14 @@ export interface Message {
   blockReason?: string;    // причина блокировки
   finishReason?: string;   // причина завершения
   modelName?: string;      // название модели, которая сгенерировала ответ
+  // Ошибка генерации (Gemini API / сеть / quota / invalid key и т.п.)
+  error?: string;
+  errorType?: 'rate_limit' | 'quota' | 'invalid_key' | 'permission' | 'bad_request' | 'network' | 'timeout' | 'internal' | 'unknown';
+  errorCode?: number;
+  errorStatus?: string;
+  errorRetryAfterMs?: number; // absolute timestamp when retry becomes available
+  // UI helper: force-open editor for user prompt
+  forceEdit?: boolean;
 }
 
 export interface DeepThinkAnalysis {
@@ -88,7 +96,10 @@ export interface SavedSystemPrompt {
 export interface ApiKeyEntry {
   key: string;
   label?: string;
-  blockedUntil?: number; // timestamp когда ключ снова будет доступен
+  // Legacy global block (older versions). Still respected for safety, but UI can clear it.
+  blockedUntil?: number; // timestamp when key becomes available again (global)
+  // Per-model blocking (preferred). Map: modelName -> blockedUntil timestamp
+  blockedByModel?: Record<string, number>;
   lastUsed?: number;
   errorCount: number;
 }

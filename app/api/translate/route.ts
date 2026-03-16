@@ -17,7 +17,8 @@ export async function POST(request: NextRequest) {
 
     return Response.json({ 
       translatedText: result.text,
-      from: result.from?.language?.iso || 'unknown',
+      // Library typings vary by version; keep response stable without relying on optional fields.
+      from: (result as any)?.from?.language?.iso || 'unknown',
     });
   } catch (error: any) {
     console.error('Translation error:', error);

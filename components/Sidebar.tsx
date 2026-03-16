@@ -1,18 +1,18 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import {
   Key, ChevronDown, Thermometer, BookOpen, Cpu,
   Eye, EyeOff, RefreshCw, Loader2, AlertCircle, CheckCircle2, Hash,
   Plus, Trash2, Copy, X, Shield, Clock, ShieldOff,
   MessageSquare, Download, Upload, Brain, ChevronRight,
-  Pencil, FolderOpen, Star, Save, Edit3
+  Pencil, FolderOpen, Star, Save, Edit3, Unlock
 } from 'lucide-react';
 import type { GeminiModel, ApiKeyEntry, SavedChat, SavedSystemPrompt } from '@/types';
 import {
   loadApiKeys, saveApiKeys, addApiKey, removeApiKey,
   getNextAvailableKey, markKeyBlocked, markKeyUsed,
-  unblockExpiredKeys, getKeyStatus, timeUntilUnblock, isRateLimitError,
+  unblockExpiredKeys, getKeyStatus, timeUntilUnblock, isRateLimitError, unblockKey,
 } from '@/lib/apiKeyManager';
 import {
   loadSavedChats, deleteChatFromStorage, exportChats, exportSingleChat,
@@ -90,6 +90,15 @@ export default function Sidebar({
   const importBackupRef = useRef<HTMLInputElement>(null);
   const [importError, setImportError] = useState('');
 
+  // Prevent re-fetching models when only apiKeys metadata changes (e.g. lastUsed).
+  const modelsAutoLoadSignature = useMemo(() => {
+    const now = Date.now();
+    return apiKeys
+      .map(k => `${k.key}:${k.blockedUntil && k.blockedUntil > now ? 'b' : 'a'}`)
+      .join('|');
+  }, [apiKeys]);
+  const lastModelsAutoLoadSigRef = useRef<string>('');
+
   // Load saved prompts
   useEffect(() => {
     setSavedPrompts(loadSystemPrompts());
@@ -141,9 +150,16 @@ export default function Sidebar({
   useEffect(() => {
     const activeKeys = apiKeys.filter(k => !k.blockedUntil || k.blockedUntil <= Date.now());
     if (activeKeys.length === 0) return;
+
+    // Only auto-load when models are empty OR the key availability set changed.
+    if (models.length > 0 && lastModelsAutoLoadSigRef.current === modelsAutoLoadSignature) {
+      return;
+    }
+    lastModelsAutoLoadSigRef.current = modelsAutoLoadSignature;
+
     const timer = setTimeout(() => loadModels(activeKeys[0].key), 800);
     return () => clearTimeout(timer);
-  }, [apiKeys, loadModels]);
+  }, [apiKeys, loadModels, models.length, modelsAutoLoadSignature]);
 
   const addKey = () => {
     const trimmed = newKeyInput.trim();
@@ -270,10 +286,11 @@ export default function Sidebar({
         {/* ===== API KEYS ===== */}
         <div className="border-b border-[var(--border)]">
           <SectionHeader id="keys" label="API Ключи" icon={Key} />
+          {openSections.has('keys') && (
             <div className="px-5 pb-5 space-y-3 animate-slide-down">
               {/* Список ключей */}
               {apiKeys.map((entry, idx) => {
-                const status = getKeyStatus(entry);
+                const status = getKeyStatus(entry, model);
                 const isActive = idx === activeKeyIndex;
                 return (
                   <div
@@ -305,13 +322,26 @@ export default function Sidebar({
                       {status !== 'active' && (
                         <p className="text-[10px] text-[var(--gem-red)] mt-0.5 flex items-center gap-1">
                           <Clock size={8} />
-                          Разблокируется через {timeUntilUnblock(entry)}
+                          Разблокируется через {timeUntilUnblock(entry, model)}
                         </p>
                       )}
                     </div>
 
                     {/* Действия */}
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {status !== 'active' && (
+                        <button
+                          onClick={() => {
+                            const updated = unblockKey(apiKeys, idx, model);
+                            onApiKeysChange(updated);
+                            saveApiKeys(updated);
+                          }}
+                          className="p-1 text-[var(--text-dim)] hover:text-[var(--text-muted)] rounded"
+                          title="Разблокировать ключ для текущей модели"
+                        >
+                          <Unlock size={11} />
+                        </button>
+                      )}
                       <button
                         onClick={() => setShowKeys(prev => ({ ...prev, [idx]: !prev[idx] }))}
                         className="p-1 text-[var(--text-dim)] hover:text-[var(--text-primary)] rounded"

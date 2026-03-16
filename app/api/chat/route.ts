@@ -13,6 +13,44 @@ function isRateLimitError(status: number, message: string): boolean {
   );
 }
 
+function classifyGeminiError(status: number, message: string): { errorType: string; isRateLimit: boolean; isQuota: boolean; isInvalidKey: boolean; isPermission: boolean } {
+  const m = (message || '').toLowerCase();
+  const isRateLimit = isRateLimitError(status, message);
+  const isQuota =
+    m.includes('exceeded your current quota') ||
+    m.includes('quota') ||
+    m.includes('billing') ||
+    m.includes('insufficient_quota');
+  const isInvalidKey =
+    status === 401 ||
+    (status === 403 && (m.includes('api key') || m.includes('api-key') || m.includes('key'))) ||
+    m.includes('api key not valid') ||
+    m.includes('api_key_invalid') ||
+    m.includes('invalid api key') ||
+    m.includes('permission denied') && m.includes('key');
+  const isPermission =
+    status === 403 && !isInvalidKey ||
+    m.includes('permission denied') ||
+    m.includes('not authorized');
+
+  let errorType = 'unknown';
+  if (isQuota) errorType = 'quota';
+  else if (isRateLimit) errorType = 'rate_limit';
+  else if (isInvalidKey) errorType = 'invalid_key';
+  else if (isPermission) errorType = 'permission';
+  else if (status === 400) errorType = 'bad_request';
+  else if (status === 408) errorType = 'timeout';
+  else if (status >= 500) errorType = 'internal';
+  return { errorType, isRateLimit, isQuota, isInvalidKey, isPermission };
+}
+
+function extractRetryAfterSeconds(message: string): number | null {
+  const m = (message || '').match(/retry\s+in\s+([0-9]+(?:\.[0-9]+)?)s/i);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -23,6 +61,7 @@ export async function POST(request: NextRequest) {
       temperature,
       apiKey,
       thinkingBudget, // -1 = авто, 0 = выкл, N = конкретное
+      includeThoughts, // request model thoughts (Gemini 2.x/3.x)
     } = body;
 
     if (!apiKey) {
@@ -66,27 +105,18 @@ export async function POST(request: NextRequest) {
       };
     }
 
-    // Режим размышлений (Gemini 2.5 / 2.0)
-    // -1 = авто (будет без явного ограничения), 0 = выключить, >0 = явное ограничение в токенах
-    if (thinkingBudget !== undefined) {
+    // Режим размышлений (актуально в основном для Gemini 2.x/3.x).
+    // По умолчанию мысли НЕ запрашиваем — это сильно ускоряет стрим и разгружает UI.
+    const wantsThoughts = includeThoughts === true;
+    if (wantsThoughts && thinkingBudget !== undefined) {
       if (thinkingBudget === 0) {
-        requestBody.generationConfig.thinkingConfig = {
-          thinkingBudget: 0,
-        };
+        requestBody.generationConfig.thinkingConfig = { thinkingBudget: 0 };
       } else if (thinkingBudget > 0) {
-        requestBody.generationConfig.thinkingConfig = {
-          thinkingBudget: thinkingBudget,
-        };
+        requestBody.generationConfig.thinkingConfig = { thinkingBudget };
+      } else {
+        requestBody.generationConfig.thinkingConfig = {};
       }
-      
-      // Независимо от бюджета (разве что кроме 0), мы всегда просим возвращать размышления
-      if (thinkingBudget !== 0) {
-        if (!requestBody.generationConfig.thinkingConfig) {
-          requestBody.generationConfig.thinkingConfig = {};
-        }
-        // В разных версиях API используется camelCase или snake_case, но стандарт для JSON обычно camelCase
-        requestBody.generationConfig.thinkingConfig.includeThoughts = true;
-      }
+      requestBody.generationConfig.thinkingConfig.includeThoughts = true;
     }
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}&alt=sse`;
@@ -109,14 +139,27 @@ export async function POST(request: NextRequest) {
       const errBody = await geminiResponse.text();
       let errMessage = 'Gemini API error';
       let isRateLimit = false;
+      let errorType = 'unknown';
+      let errorCode = geminiResponse.status;
+      let errorStatus: string | undefined = undefined;
       try {
         const errJson = JSON.parse(errBody);
         errMessage = errJson?.error?.message || errMessage;
-        isRateLimit = isRateLimitError(geminiResponse.status, errMessage);
+        errorCode = errJson?.error?.code || errorCode;
+        errorStatus = errJson?.error?.status || errorStatus;
+        const classified = classifyGeminiError(geminiResponse.status, errMessage);
+        isRateLimit = classified.isRateLimit;
+        errorType = classified.errorType;
       } catch {}
+      if (errorType === 'unknown') {
+        const classified = classifyGeminiError(geminiResponse.status, errMessage);
+        isRateLimit = classified.isRateLimit;
+        errorType = classified.errorType;
+      }
+      const retryAfterSeconds = extractRetryAfterSeconds(errMessage);
 
       return new Response(
-        `data: ${JSON.stringify({ error: errMessage, isRateLimit })}\n\ndata: [DONE]\n\n`,
+        `data: ${JSON.stringify({ error: errMessage, isRateLimit, errorType, errorCode, errorStatus, retryAfterSeconds })}\n\ndata: [DONE]\n\n`,
         {
           status: 200,
           headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
@@ -152,8 +195,20 @@ export async function POST(request: NextRequest) {
               const parsed = JSON.parse(jsonStr);
 
               if (parsed.error) {
+                const msg = parsed.error.message || 'Gemini API error';
+                const code = parsed.error.code || 0;
+                const statusText = parsed.error.status;
+                const classified = classifyGeminiError(code, msg);
+                const retryAfterSeconds = extractRetryAfterSeconds(msg);
                 await writer.write(
-                  encoder.encode(`data: ${JSON.stringify({ error: parsed.error.message, isRateLimit: isRateLimitError(parsed.error.code || 0, parsed.error.message || '') })}\n\n`)
+                  encoder.encode(`data: ${JSON.stringify({
+                    error: msg,
+                    isRateLimit: classified.isRateLimit,
+                    errorType: classified.errorType,
+                    errorCode: code,
+                    errorStatus: statusText,
+                    retryAfterSeconds,
+                  })}\n\n`)
                 );
                 continue;
               }

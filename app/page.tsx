@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Sidebar from '@/components/Sidebar';
 import ChatMessage from '@/components/ChatMessage';
 import ChatInput from '@/components/ChatInput';
@@ -12,7 +12,7 @@ import { useDeepThink } from '@/lib/useDeepThink';
 import DeepThinkToggle from '@/components/DeepThinkToggle';
 import type { Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis } from '@/types';
 import {
-  loadApiKeys, saveApiKeys, getNextAvailableKey, markKeyBlocked,
+  loadApiKeys, saveApiKeys, getNextAvailableKey,
   markKeyUsed, unblockExpiredKeys, isRateLimitError, isInvalidKeyError,
 } from '@/lib/apiKeyManager';
 import {
@@ -87,9 +87,14 @@ export default function Home() {
 
   // Scroll state
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const isAtBottomRef = useRef(true);
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-    if (scrollHeight - scrollTop - clientHeight > 150) {
+    const distanceToBottom = scrollHeight - scrollTop - clientHeight;
+    const atBottom = distanceToBottom <= 40;
+    isAtBottomRef.current = atBottom;
+
+    if (distanceToBottom > 150) {
       setShowScrollBottom(true);
     } else {
       setShowScrollBottom(false);
@@ -161,11 +166,11 @@ export default function Home() {
   useEffect(() => { localStorage.setItem('gemini_sidebar', sidebarOpen.toString()); }, [sidebarOpen]);
   useEffect(() => { localStorage.setItem('gemini_thinking_budget', thinkingBudget.toString()); }, [thinkingBudget]);
 
-  // Auto-scroll
+  // Auto-scroll (only when user is near bottom; avoid smooth on every streamed chunk)
   useEffect(() => {
-    if (isStreaming || messages.length > 0) {
-      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
+    if (messages.length === 0) return;
+    if (!isAtBottomRef.current) return;
+    chatEndRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
   }, [messages, isStreaming]);
 
   // Mark unsaved when messages change
@@ -243,7 +248,7 @@ export default function Home() {
     customAnalysis?: DeepThinkAnalysis, // Кастомный анализ после редактирования
   ) => {
     // Получить следующий доступный ключ
-    const keyResult = getNextAvailableKey(apiKeys, lastKeyIndexRef.current);
+    const keyResult = getNextAvailableKey(apiKeys, lastKeyIndexRef.current, model);
     if (!keyResult) {
       setError('Все API ключи временно заблокированы. Попробуйте позже.');
       setIsStreaming(false);
@@ -347,6 +352,7 @@ export default function Home() {
           temperature,
           apiKey: key,
           thinkingBudget,
+          includeThoughts: deepThinkState.enabled === true,
         }),
       });
 
@@ -360,6 +366,50 @@ export default function Home() {
       let buffer = '';
       let thinkingAccumulator = isAppending ? (history.find(m => m.id === targetMessageId)?.thinking || '') : '';
       let retryWithNextKey = false;
+      let pendingText = '';
+      let pendingThinking = '';
+      let flushScheduled = false;
+
+      const flush = () => {
+        flushScheduled = false;
+        if (!pendingText && !pendingThinking) return;
+
+        const textChunk = pendingText;
+        const thinkingChunk = pendingThinking;
+        pendingText = '';
+        pendingThinking = '';
+
+        if (thinkingChunk) {
+          thinkingAccumulator += thinkingChunk;
+          setMessages(prev => prev.map(m =>
+            m.id !== targetMessageId ? m : { ...m, thinking: thinkingAccumulator, isStreaming: true }
+          ));
+        }
+
+        if (textChunk) {
+          setMessages(prev => prev.map(m => {
+            if (m.id !== targetMessageId) return m;
+            const hasTextPart = m.parts.some(p => 'text' in p);
+            if (hasTextPart) {
+              return {
+                ...m,
+                parts: m.parts.map(p =>
+                  'text' in p ? { text: (p as { text: string }).text + textChunk } : p
+                ),
+                isStreaming: true,
+              };
+            }
+            return { ...m, parts: [...m.parts, { text: textChunk }], isStreaming: true };
+          }));
+        }
+      };
+
+      const scheduleFlush = () => {
+        if (flushScheduled) return;
+        flushScheduled = true;
+        // Batch frequent stream chunks into a single React update per frame.
+        requestAnimationFrame(flush);
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -378,18 +428,38 @@ export default function Home() {
           try {
             const parsed = JSON.parse(jsonStr);
 
-            // Ошибка
+            // Ошибка (Gemini / сеть / quota / invalid key ...)
             if (parsed.error) {
-              const errMsg = parsed.error;
-              if (isRateLimitError(errMsg) || (parsed.isRateLimit)) {
-                // Блокируем ключ на 10 часов
-                const blockedKeys = markKeyBlocked(usedKeys, index);
-                setApiKeys(blockedKeys);
-                saveApiKeys(blockedKeys);
-                retryWithNextKey = true;
-                break;
-              }
-              setError(errMsg);
+              const errMsg = String(parsed.error || 'Gemini API error');
+              const isRl = Boolean(parsed.isRateLimit) || isRateLimitError(errMsg);
+              const errType = (parsed.errorType as Message['errorType']) || (isRl ? 'rate_limit' : 'unknown');
+              const errCode = typeof parsed.errorCode === 'number' ? parsed.errorCode : undefined;
+              const errStatus = typeof parsed.errorStatus === 'string' ? parsed.errorStatus : undefined;
+
+              // Playground UX: do NOT auto-block keys. Just inform the user.
+
+              // Attach error to the message bubble.
+              const retrySec = (errType === 'rate_limit' || errType === 'quota')
+                ? (typeof parsed.retryAfterSeconds === 'number' && parsed.retryAfterSeconds > 0
+                    ? parsed.retryAfterSeconds
+                    : (() => {
+                        const m = errMsg.match(/retry\s+in\s+([0-9]+(?:\.[0-9]+)?)s/i);
+                        const n = m ? Number(m[1]) : NaN;
+                        return Number.isFinite(n) && n > 0 ? n : null;
+                      })())
+                : null;
+
+              setMessages(prev => prev.map(m =>
+                m.id !== targetMessageId ? m : {
+                  ...m,
+                  error: errMsg,
+                  errorType: errType,
+                  errorCode: errCode,
+                  errorStatus: errStatus,
+                  errorRetryAfterMs: retrySec ? Date.now() + Math.ceil(retrySec * 1000) : undefined,
+                  isStreaming: false,
+                }
+              ));
               return;
             }
 
@@ -409,43 +479,23 @@ export default function Home() {
 
             // Размышления
             if (parsed.thinking) {
-              thinkingAccumulator += parsed.thinking;
-              setMessages(prev => prev.map(m =>
-                m.id !== targetMessageId ? m : {
-                  ...m,
-                  thinking: thinkingAccumulator,
-                  isStreaming: true,
-                }
-              ));
+              pendingThinking += parsed.thinking;
+              scheduleFlush();
             }
 
             // Текст ответа
             if (parsed.text) {
-              setMessages(prev => prev.map(m => {
-                if (m.id !== targetMessageId) return m;
-                const hasTextPart = m.parts.some(p => 'text' in p);
-                if (hasTextPart) {
-                  return {
-                    ...m,
-                    parts: m.parts.map(p =>
-                      'text' in p ? { text: (p as { text: string }).text + parsed.text } : p
-                    ),
-                    isStreaming: true,
-                  };
-                } else {
-                  return {
-                    ...m,
-                    parts: [...m.parts, { text: parsed.text }],
-                    isStreaming: true,
-                  };
-                }
-              }));
+              pendingText += parsed.text;
+              scheduleFlush();
             }
           } catch {}
         }
 
         if (retryWithNextKey) break;
       }
+
+      // Flush any buffered chunks before finishing.
+      flush();
 
       // Retry с другим ключом если rate limit
       if (retryWithNextKey) {
@@ -591,10 +641,30 @@ export default function Home() {
       streamGeneration(historyUpTo, assistantMsgId, false);
     } else {
       setMessages(prev => prev.map(m =>
-        m.id === id ? { ...m, parts: newParts, isBlocked: false } : m
+        m.id === id ? { ...m, parts: newParts, isBlocked: false, error: undefined, errorType: undefined, errorCode: undefined, errorStatus: undefined } : m
       ));
     }
   }, [messages, streamGeneration, model]);
+
+  const forceEditPreviousUserMessage = useCallback((modelMessageId: string) => {
+    setMessages(prev => {
+      const idx = prev.findIndex(m => m.id === modelMessageId);
+      if (idx <= 0) return prev;
+      // find previous user message
+      for (let i = idx - 1; i >= 0; i--) {
+        if (prev[i].role === 'user') {
+          const next = [...prev];
+          next[i] = { ...next[i], forceEdit: true };
+          return next;
+        }
+      }
+      return prev;
+    });
+  }, []);
+
+  const clearForceEdit = useCallback((userMessageId: string) => {
+    setMessages(prev => prev.map(m => m.id === userMessageId ? { ...m, forceEdit: false } : m));
+  }, []);
 
   // Удаляет строго одно сообщение по ID — никакого каскада
   const handleDelete = useCallback((id: string) => {
@@ -736,6 +806,18 @@ export default function Home() {
     !!lastMessage?.deepThinkAnalysis
   );
 
+  const desktopSidebarStyle = useMemo<React.CSSProperties>(() => {
+    // Keep layout stable; animate with transform instead of width (smoother)
+    const width = 280;
+    return {
+      width,
+      transform: sidebarOpen ? 'translateX(0)' : `translateX(-${width}px)`,
+      opacity: sidebarOpen ? 1 : 0,
+      pointerEvents: sidebarOpen ? 'auto' : 'none',
+      willChange: 'transform, opacity',
+    };
+  }, [sidebarOpen]);
+
   return (
     <div className="flex fixed inset-0 overflow-hidden bg-[var(--surface-0)]">
 
@@ -776,9 +858,8 @@ export default function Home() {
       {/* Desktop sidebar */}
       {!isMobile && (
         <div
-          className={`transition-all duration-300 ease-in-out flex-shrink-0 overflow-hidden ${
-            sidebarOpen ? 'w-[280px] opacity-100' : 'w-0 opacity-0 pointer-events-none'
-          }`}
+          className="flex-shrink-0 overflow-hidden transition-transform duration-300 ease-in-out"
+          style={desktopSidebarStyle}
         >
           <Sidebar
             apiKeys={apiKeys}
@@ -917,6 +998,8 @@ export default function Home() {
                   onDelete={handleDelete}
                   onRegenerate={handleRegenerate}
                   onContinue={handleContinue}
+                  onEditPreviousUserMessage={forceEditPreviousUserMessage}
+                  onClearForceEdit={clearForceEdit}
                   onEditDeepThinkAnalysis={handleEditDeepThinkAnalysis}
                 />
               ))}

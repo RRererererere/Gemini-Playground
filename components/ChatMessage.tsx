@@ -3,7 +3,8 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import rehypeHighlight from 'rehype-highlight';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import {
   User, Sparkles, Copy, Check, Edit2, Trash2, RefreshCw,
   ChevronDown, ChevronUp, FileText, Image as ImageIcon, Volume2, Braces,
@@ -21,6 +22,8 @@ interface ChatMessageProps {
   onDelete: (id: string) => void;
   onRegenerate: () => void;
   onContinue: () => void;
+  onEditPreviousUserMessage?: (modelMessageId: string) => void;
+  onClearForceEdit?: (userMessageId: string) => void;
   onEditDeepThinkAnalysis?: (id: string, analysis: DeepThinkAnalysis) => void;
 }
 
@@ -62,12 +65,12 @@ function FilePreview({ file }: { file: AttachedFile }) {
   );
 }
 
-function CodeBlock({ children, className }: { children: string; className?: string }) {
+function CodeBlock({ code, language }: { code: string; language?: string }) {
   const [copied, setCopied] = useState(false);
-  const lang = className?.replace('language-', '') || '';
+  const lang = language || '';
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(children).then(() => {
+    navigator.clipboard.writeText(code).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -86,9 +89,23 @@ function CodeBlock({ children, className }: { children: string; className?: stri
         </button>
       </div>
       <div className="overflow-x-auto">
-        <pre className="p-4 text-sm leading-relaxed m-0 bg-[#080808]">
-          <code className={className} style={{ fontFamily: 'var(--font-mono)' }}>{children}</code>
-        </pre>
+        <SyntaxHighlighter
+          language={lang || undefined}
+          style={vscDarkPlus as any}
+          showLineNumbers={false}
+          wrapLongLines={false}
+          customStyle={{
+            margin: 0,
+            padding: '14px 16px',
+            background: '#080808',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '13px',
+            lineHeight: 1.65,
+          }}
+          codeTagProps={{ style: { fontFamily: 'var(--font-mono)' } }}
+        >
+          {code}
+        </SyntaxHighlighter>
       </div>
     </div>
   );
@@ -132,17 +149,18 @@ function StreamingText({
     return (
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
         components={{
           code({ node, className, children, ...props }: any) {
             const isInline = !className;
             if (isInline) {
               return <code className={className} {...props}>{children}</code>;
             }
+            const lang = typeof className === 'string' ? className.replace('language-', '') : '';
             return (
-              <CodeBlock className={className}>
-                {String(children).replace(/\n$/, '')}
-              </CodeBlock>
+              <CodeBlock
+                language={lang}
+                code={String(children).replace(/\n$/, '')}
+              />
             );
           },
           pre({ children }: any) {
@@ -160,17 +178,18 @@ function StreamingText({
       {oldText && (
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeHighlight]}
           components={{
             code({ node, className, children, ...props }: any) {
               const isInline = !className;
               if (isInline) {
                 return <code className={className} {...props}>{children}</code>;
               }
+              const lang = typeof className === 'string' ? className.replace('language-', '') : '';
               return (
-                <CodeBlock className={className}>
-                  {String(children).replace(/\n$/, '')}
-                </CodeBlock>
+                <CodeBlock
+                  language={lang}
+                  code={String(children).replace(/\n$/, '')}
+                />
               );
             },
             pre({ children }: any) {
@@ -653,6 +672,96 @@ function DeepThinkErrorBlock({ error }: { error: string }) {
   );
 }
 
+// Gemini errors are displayed as a top notice (playground UX),
+// not as a large block inside each message bubble.
+
+// Inline error indicator shown in message header
+function MessageErrorIndicator({ errorType, errorRetryAfterMs, errorMessage, errorCode, errorStatus }: {
+  errorType?: Message['errorType'];
+  errorRetryAfterMs?: number;
+  errorMessage?: string;
+  errorCode?: number;
+  errorStatus?: string;
+}) {
+  const [remaining, setRemaining] = useState<number>(0);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!errorRetryAfterMs) return;
+    const tick = () => {
+      const r = Math.max(0, Math.ceil((errorRetryAfterMs - Date.now()) / 1000));
+      setRemaining(r);
+    };
+    tick();
+    const id = window.setInterval(tick, 250);
+    return () => window.clearInterval(id);
+  }, [errorRetryAfterMs]);
+
+  const isQuota = errorType === 'quota';
+  const isRateLimit = errorType === 'rate_limit';
+
+  let label = 'Ошибка';
+  if (isQuota) label = 'Квота исчерпана';
+  else if (isRateLimit) label = 'Лимит запросов';
+  else if (errorType === 'invalid_key') label = 'Неверный API ключ';
+  else if (errorType === 'permission') label = 'Нет доступа';
+  else if (errorType === 'bad_request') label = 'Неверный запрос';
+  else if (errorType === 'timeout') label = 'Таймаут';
+  else if (errorType === 'internal') label = 'Ошибка сервера';
+  else if (errorType === 'network') label = 'Ошибка сети';
+
+  const isWarn = isQuota || isRateLimit;
+  const badgeStyle = isWarn
+    ? { color: '#f59e0b', background: 'rgba(245,158,11,0.1)', borderColor: 'rgba(245,158,11,0.3)' }
+    : { color: '#f87171', background: 'rgba(239,68,68,0.1)', borderColor: 'rgba(239,68,68,0.3)' };
+  const expandedStyle = isWarn
+    ? { borderColor: 'rgba(245,158,11,0.25)', background: 'rgba(245,158,11,0.06)' }
+    : { borderColor: 'rgba(239,68,68,0.25)', background: 'rgba(239,68,68,0.06)' };
+
+  return (
+    <span className="relative inline-flex flex-col">
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="inline-flex items-center gap-1 px-2 py-0.5 border rounded text-[10px] font-medium cursor-pointer"
+        style={badgeStyle}
+        title="Нажми для деталей"
+      >
+        <AlertCircle size={10} className="flex-shrink-0" />
+        ! {label}
+        {remaining > 0 && <span className="font-mono ml-0.5">{remaining}s</span>}
+      </button>
+
+      {expanded && (
+        <span
+          className="absolute top-full left-0 mt-1 z-50 flex flex-col gap-1 p-3 rounded-xl border text-[11px] min-w-[260px] max-w-[420px] shadow-lg animate-fade-in"
+          style={expandedStyle}
+        >
+          <span className="flex items-center gap-1.5 font-semibold" style={{ color: isWarn ? '#f59e0b' : '#f87171' }}>
+            <AlertCircle size={11} />
+            {label}
+            {errorType && <span className="font-mono opacity-60 font-normal">({errorType})</span>}
+          </span>
+          {(errorCode || errorStatus) && (
+            <span className="font-mono text-[10px] opacity-60">
+              {errorCode && `code ${errorCode}`}{errorCode && errorStatus && ' · '}{errorStatus}
+            </span>
+          )}
+          {errorMessage && (
+            <span className="text-[var(--text-primary)] opacity-80 leading-relaxed break-words whitespace-pre-wrap">
+              {errorMessage}
+            </span>
+          )}
+          {remaining > 0 && (
+            <span className="opacity-60 mt-0.5">
+              Повторить через <span className="font-mono" style={{ color: isWarn ? '#f59e0b' : '#f87171' }}>{remaining}s</span>
+            </span>
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function BlockedIndicator({ reason }: { reason?: string }) {
   const reasonLabels: Record<string, string> = {
     SAFETY: 'Фильтр безопасности',
@@ -677,7 +786,7 @@ function BlockedIndicator({ reason }: { reason?: string }) {
 
 export default function ChatMessage({
   message, index, isLast, isStreaming,
-  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onEditDeepThinkAnalysis
+  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -696,6 +805,10 @@ export default function ChatMessage({
   const deepThinking = message.deepThinking;
   const deepThinkAnalysis = message.deepThinkAnalysis;
   const deepThinkError = message.deepThinkError;
+  const geminiError = message.error;
+  const geminiErrorType = message.errorType;
+  const geminiErrorCode = message.errorCode;
+  const geminiErrorStatus = message.errorStatus;
   const modelName = message.modelName;
 
   // Форматируем название модели для отображения
@@ -719,6 +832,17 @@ export default function ChatMessage({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Force-open editor (used by "Edit prompt" from error blocks)
+  useEffect(() => {
+    if (isUser && message.forceEdit) {
+      setEditText(messageText);
+      setIsEditing(true);
+      // Clear the flag so it doesn't re-trigger (without triggering regeneration).
+      onClearForceEdit?.(message.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [message.forceEdit]);
 
   useEffect(() => {
     if (isEditing && editRef.current) {
@@ -792,6 +916,15 @@ export default function ChatMessage({
         </span>
         {isBlocked && !isUser && (
           <BlockedIndicator reason={message.blockReason || message.finishReason} />
+        )}
+        {geminiError && !isUser && (
+          <MessageErrorIndicator
+            errorType={geminiErrorType}
+            errorRetryAfterMs={message.errorRetryAfterMs}
+            errorMessage={geminiError}
+            errorCode={geminiErrorCode}
+            errorStatus={geminiErrorStatus}
+          />
         )}
         {isStreaming && isLast && !isUser && (
           <span className="text-[10px] text-[var(--gem-green)] flex items-center gap-1">
@@ -870,6 +1003,8 @@ export default function ChatMessage({
             {!isUser && deepThinkError && (
               <DeepThinkErrorBlock error={deepThinkError} />
             )}
+
+            {/* Gemini errors are shown via a top banner; keep bubble clean */}
 
             {/* Thinking block (обычный) */}
             {!isUser && thinking && (

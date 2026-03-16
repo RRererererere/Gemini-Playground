@@ -3,6 +3,14 @@ import type { ApiKeyEntry } from '@/types';
 const STORAGE_KEY = 'gemini_api_keys';
 const BLOCK_DURATION_MS = 10 * 60 * 60 * 1000; // 10 часов
 
+function isBlockedForModel(entry: ApiKeyEntry, model: string | undefined, now: number): boolean {
+  // Legacy global block
+  if (entry.blockedUntil && entry.blockedUntil > now) return true;
+  if (!model) return false;
+  const until = entry.blockedByModel?.[model];
+  return typeof until === 'number' && until > now;
+}
+
 // Загрузить ключи из localStorage
 export function loadApiKeys(): ApiKeyEntry[] {
   if (typeof window === 'undefined') return [];
@@ -44,7 +52,8 @@ export function removeApiKey(keys: ApiKeyEntry[], key: string): ApiKeyEntry[] {
 // Возвращает ключ или null если все заблокированы
 export function getNextAvailableKey(
   keys: ApiKeyEntry[],
-  lastUsedIndex: number
+  lastUsedIndex: number,
+  model?: string
 ): { key: string; index: number } | null {
   if (keys.length === 0) return null;
 
@@ -57,7 +66,7 @@ export function getNextAvailableKey(
     const entry = keys[idx];
 
     // Если ключ заблокирован, проверяем истёк ли срок
-    if (entry.blockedUntil && entry.blockedUntil > now) {
+    if (isBlockedForModel(entry, model, now)) {
       continue; // ещё заблокирован
     }
 
@@ -68,13 +77,16 @@ export function getNextAvailableKey(
 }
 
 // Пометить ключ как заблокированный (rate limit / 429)
-export function markKeyBlocked(keys: ApiKeyEntry[], index: number): ApiKeyEntry[] {
+export function markKeyBlocked(keys: ApiKeyEntry[], index: number, model?: string): ApiKeyEntry[] {
   const now = Date.now();
   return keys.map((k, i) => {
     if (i !== index) return k;
+    // Per-model blocking by default (keeps other models available)
+    const blockedByModel = { ...(k.blockedByModel || {}) };
+    if (model) blockedByModel[model] = now + BLOCK_DURATION_MS;
     return {
       ...k,
-      blockedUntil: now + BLOCK_DURATION_MS,
+      blockedByModel: model ? blockedByModel : k.blockedByModel,
       errorCount: k.errorCount + 1,
     };
   });
@@ -92,31 +104,69 @@ export function markKeyUsed(keys: ApiKeyEntry[], index: number): ApiKeyEntry[] {
 export function unblockExpiredKeys(keys: ApiKeyEntry[]): ApiKeyEntry[] {
   const now = Date.now();
   return keys.map(k => {
-    if (k.blockedUntil && k.blockedUntil <= now) {
-      return { ...k, blockedUntil: undefined };
+    let changed = false;
+    const next: ApiKeyEntry = { ...k };
+    if (next.blockedUntil && next.blockedUntil <= now) {
+      next.blockedUntil = undefined;
+      changed = true;
     }
-    return k;
+    if (next.blockedByModel) {
+      const cleaned: Record<string, number> = {};
+      for (const [m, until] of Object.entries(next.blockedByModel)) {
+        if (typeof until === 'number' && until > now) cleaned[m] = until;
+        else changed = true;
+      }
+      next.blockedByModel = Object.keys(cleaned).length ? cleaned : undefined;
+    }
+    return changed ? next : k;
   });
 }
 
 // Получить статус ключа
-export function getKeyStatus(entry: ApiKeyEntry): 'active' | 'blocked' | 'cooling' {
+export function getKeyStatus(entry: ApiKeyEntry, model?: string): 'active' | 'blocked' | 'cooling' {
   const now = Date.now();
-  if (!entry.blockedUntil || entry.blockedUntil <= now) return 'active';
+  if (!isBlockedForModel(entry, model, now)) return 'active';
+  const until = entry.blockedUntil && entry.blockedUntil > now
+    ? entry.blockedUntil
+    : (model ? entry.blockedByModel?.[model] : undefined);
+  if (!until) return 'active';
   // cooling — заблокирован, но осталось < 1 часа
-  if (entry.blockedUntil - now < 60 * 60 * 1000) return 'cooling';
+  if (until - now < 60 * 60 * 1000) return 'cooling';
   return 'blocked';
 }
 
 // Время до разблокировки в читаемом формате
-export function timeUntilUnblock(entry: ApiKeyEntry): string {
-  if (!entry.blockedUntil) return '';
-  const ms = entry.blockedUntil - Date.now();
+export function timeUntilUnblock(entry: ApiKeyEntry, model?: string): string {
+  const now = Date.now();
+  const until = entry.blockedUntil && entry.blockedUntil > now
+    ? entry.blockedUntil
+    : (model ? entry.blockedByModel?.[model] : undefined);
+  if (!until) return '';
+  const ms = until - now;
   if (ms <= 0) return '';
   const hours = Math.floor(ms / 3600000);
   const minutes = Math.floor((ms % 3600000) / 60000);
   if (hours > 0) return `${hours}ч ${minutes}м`;
   return `${minutes}м`;
+}
+
+export function unblockKey(keys: ApiKeyEntry[], index: number, model?: string): ApiKeyEntry[] {
+  return keys.map((k, i) => {
+    if (i !== index) return k;
+    const next: ApiKeyEntry = { ...k };
+    if (!model) {
+      next.blockedUntil = undefined;
+      next.blockedByModel = undefined;
+      return next;
+    }
+    if (next.blockedByModel && model in next.blockedByModel) {
+      const copy = { ...next.blockedByModel };
+      delete copy[model];
+      next.blockedByModel = Object.keys(copy).length ? copy : undefined;
+    }
+    // also allow clearing legacy global block from UI by passing model="__global__" if needed
+    return next;
+  });
 }
 
 // Проверить — является ли ошибка rate limit / key block
