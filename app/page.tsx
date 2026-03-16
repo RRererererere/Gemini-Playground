@@ -1,11 +1,12 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import Sidebar from '@/components/Sidebar';
+import { ChatSidebar, SettingsSidebar } from '@/components/Sidebar';
 import ChatMessage from '@/components/ChatMessage';
 import ChatInput from '@/components/ChatInput';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
+  SlidersHorizontal,
   Save, X, FileDown, ArrowDown
 } from 'lucide-react';
 import { useDeepThink } from '@/lib/useDeepThink';
@@ -69,7 +70,8 @@ export default function Home() {
   const [thinkingBudget, setThinkingBudget] = useState<number>(-1); // -1=авто
 
   // UI state
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [chatSidebarOpen, setChatSidebarOpen] = useState(true);
+  const [settingsSidebarOpen, setSettingsSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
 
   // Chat state
@@ -118,7 +120,10 @@ export default function Home() {
     const check = () => {
       const mobile = window.innerWidth < 768;
       setIsMobile(mobile);
-      if (mobile) setSidebarOpen(false);
+      if (mobile) {
+        setChatSidebarOpen(false);
+        setSettingsSidebarOpen(false);
+      }
     };
     check();
     window.addEventListener('resize', check);
@@ -134,13 +139,17 @@ export default function Home() {
       const savedModel = localStorage.getItem('gemini_model');
       const savedSysPrompt = localStorage.getItem('gemini_sys_prompt');
       const savedTemp = localStorage.getItem('gemini_temperature');
-      const savedSidebar = localStorage.getItem('gemini_sidebar');
+      const savedLegacySidebar = localStorage.getItem('gemini_sidebar');
+      const savedChatSidebar = localStorage.getItem('gemini_chats_sidebar');
+      const savedSettingsSidebar = localStorage.getItem('gemini_settings_sidebar');
       const savedThinking = localStorage.getItem('gemini_thinking_budget');
 
       if (savedModel) setModel(savedModel);
       if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
       if (savedTemp) setTemperature(parseFloat(savedTemp));
-      if (savedSidebar !== null) setSidebarOpen(savedSidebar === 'true');
+      if (savedChatSidebar !== null) setChatSidebarOpen(savedChatSidebar === 'true');
+      else if (savedLegacySidebar !== null) setChatSidebarOpen(savedLegacySidebar === 'true');
+      if (savedSettingsSidebar !== null) setSettingsSidebarOpen(savedSettingsSidebar === 'true');
       if (savedThinking !== null) setThinkingBudget(parseInt(savedThinking));
 
       const chats = await loadSavedChats();
@@ -166,7 +175,8 @@ export default function Home() {
   useEffect(() => { if (model) localStorage.setItem('gemini_model', model); }, [model]);
   useEffect(() => { localStorage.setItem('gemini_sys_prompt', systemPrompt); }, [systemPrompt]);
   useEffect(() => { localStorage.setItem('gemini_temperature', temperature.toString()); }, [temperature]);
-  useEffect(() => { localStorage.setItem('gemini_sidebar', sidebarOpen.toString()); }, [sidebarOpen]);
+  useEffect(() => { localStorage.setItem('gemini_chats_sidebar', chatSidebarOpen.toString()); }, [chatSidebarOpen]);
+  useEffect(() => { localStorage.setItem('gemini_settings_sidebar', settingsSidebarOpen.toString()); }, [settingsSidebarOpen]);
   useEffect(() => { localStorage.setItem('gemini_thinking_budget', thinkingBudget.toString()); }, [thinkingBudget]);
 
   // Auto-scroll (only when user is near bottom; avoid smooth on every streamed chunk)
@@ -811,97 +821,133 @@ export default function Home() {
     !!lastMessage?.deepThinkAnalysis
   );
 
-  const desktopSidebarStyle = useMemo<React.CSSProperties>(() => {
-    // Keep layout stable; animate with transform instead of width (smoother)
-    const width = 280;
+  const toggleChatSidebar = useCallback(() => {
+    if (isMobile) {
+      setSettingsSidebarOpen(false);
+      setChatSidebarOpen(prev => !prev);
+      return;
+    }
+    setChatSidebarOpen(prev => !prev);
+  }, [isMobile]);
+
+  const toggleSettingsSidebar = useCallback(() => {
+    if (isMobile) {
+      setChatSidebarOpen(false);
+      setSettingsSidebarOpen(prev => !prev);
+      return;
+    }
+    setSettingsSidebarOpen(prev => !prev);
+  }, [isMobile]);
+
+  const chatSidebarStyle = useMemo<React.CSSProperties>(() => {
+    const width = 320;
     return {
-      width,
-      transform: sidebarOpen ? 'translateX(0)' : `translateX(-${width}px)`,
-      opacity: sidebarOpen ? 1 : 0,
-      pointerEvents: sidebarOpen ? 'auto' : 'none',
-      willChange: 'transform, opacity',
+      width: chatSidebarOpen ? width : 0,
+      opacity: chatSidebarOpen ? 1 : 0,
     };
-  }, [sidebarOpen]);
+  }, [chatSidebarOpen]);
+
+  const settingsSidebarStyle = useMemo<React.CSSProperties>(() => {
+    const width = 360;
+    return {
+      width: settingsSidebarOpen ? width : 0,
+      opacity: settingsSidebarOpen ? 1 : 0,
+    };
+  }, [settingsSidebarOpen]);
+
+  const scrollBottomButtonStyle = useMemo<React.CSSProperties>(() => {
+    if (isMobile) {
+      return { right: '1.5rem' };
+    }
+
+    return {
+      right: settingsSidebarOpen ? 'calc(360px + 1.5rem)' : '1.5rem',
+    };
+  }, [isMobile, settingsSidebarOpen]);
+
+  const settingsSidebarProps = {
+    apiKeys,
+    onApiKeysChange: handleApiKeysChange,
+    activeKeyIndex,
+    onActiveKeyIndexChange: setActiveKeyIndex,
+    model,
+    onModelChange: setModel,
+    models,
+    onModelsLoad: setModels,
+    systemPrompt,
+    onSystemPromptChange: setSystemPrompt,
+    temperature,
+    onTemperatureChange: setTemperature,
+    thinkingBudget,
+    onThinkingBudgetChange: setThinkingBudget,
+    tokenCount,
+    isStreaming,
+    savedChats,
+    onSavedChatsChange: handleSavedChatsChange,
+    currentChatId,
+    onLoadChat: handleLoadChat,
+    onNewChat: handleNewChat,
+    onDeleteChat: handleDeleteSavedChat,
+  };
 
   return (
-    <div className="flex fixed inset-0 overflow-hidden bg-[var(--surface-0)]">
+    <div className="fixed inset-0 flex overflow-hidden bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06),transparent_24%),var(--surface-0)]">
 
-      {/* Mobile overlay sidebar */}
-      {isMobile && sidebarOpen && (
-        <div className="sidebar-mobile-overlay" onClick={(e) => { if (e.target === e.currentTarget) setSidebarOpen(false); }}>
+      {isMobile && chatSidebarOpen && (
+        <div className="sidebar-mobile-overlay" onClick={(e) => { if (e.target === e.currentTarget) setChatSidebarOpen(false); }}>
           <div className="sidebar-backdrop" />
           <div className="sidebar-panel">
-            <Sidebar
-              apiKeys={apiKeys}
-              onApiKeysChange={handleApiKeysChange}
-              activeKeyIndex={activeKeyIndex}
-              onActiveKeyIndexChange={setActiveKeyIndex}
-              model={model}
-              onModelChange={setModel}
-              models={models}
-              onModelsLoad={setModels}
-              systemPrompt={systemPrompt}
-              onSystemPromptChange={setSystemPrompt}
-              temperature={temperature}
-              onTemperatureChange={setTemperature}
-              thinkingBudget={thinkingBudget}
-              onThinkingBudgetChange={setThinkingBudget}
-              tokenCount={tokenCount}
-              isStreaming={isStreaming}
+            <ChatSidebar
               savedChats={savedChats}
-              onSavedChatsChange={handleSavedChatsChange}
               currentChatId={currentChatId}
               onLoadChat={handleLoadChat}
               onNewChat={handleNewChat}
               onDeleteChat={handleDeleteSavedChat}
-              onClose={() => setSidebarOpen(false)}
+              onClose={() => setChatSidebarOpen(false)}
             />
           </div>
         </div>
       )}
 
-      {/* Desktop sidebar */}
+      {isMobile && settingsSidebarOpen && (
+        <div className="sidebar-mobile-overlay sidebar-mobile-overlay-right" onClick={(e) => { if (e.target === e.currentTarget) setSettingsSidebarOpen(false); }}>
+          <div className="sidebar-backdrop" />
+          <div className="sidebar-panel">
+            <SettingsSidebar
+              {...settingsSidebarProps}
+              onClose={() => setSettingsSidebarOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+
       {!isMobile && (
-        <div
-          className="flex-shrink-0 overflow-hidden transition-transform duration-300 ease-in-out"
-          style={desktopSidebarStyle}
-        >
-          <Sidebar
-            apiKeys={apiKeys}
-            onApiKeysChange={handleApiKeysChange}
-            activeKeyIndex={activeKeyIndex}
-            onActiveKeyIndexChange={setActiveKeyIndex}
-            model={model}
-            onModelChange={setModel}
-            models={models}
-            onModelsLoad={setModels}
-            systemPrompt={systemPrompt}
-            onSystemPromptChange={setSystemPrompt}
-            temperature={temperature}
-            onTemperatureChange={setTemperature}
-            thinkingBudget={thinkingBudget}
-            onThinkingBudgetChange={setThinkingBudget}
-            tokenCount={tokenCount}
-            isStreaming={isStreaming}
-            savedChats={savedChats}
-            onSavedChatsChange={handleSavedChatsChange}
-            currentChatId={currentChatId}
-            onLoadChat={handleLoadChat}
-            onNewChat={handleNewChat}
-            onDeleteChat={handleDeleteSavedChat}
-          />
+        <div className="flex-shrink-0 overflow-hidden border-r border-[var(--border-subtle)] transition-[width,opacity] duration-300 ease-out" style={chatSidebarStyle}>
+          <div className="h-full w-[320px]">
+            <ChatSidebar
+              savedChats={savedChats}
+              currentChatId={currentChatId}
+              onLoadChat={handleLoadChat}
+              onNewChat={handleNewChat}
+              onDeleteChat={handleDeleteSavedChat}
+            />
+          </div>
         </div>
       )}
 
       {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div className="flex-1 flex min-w-0 flex-col overflow-hidden">
 
         {/* Top bar */}
-        <div className="flex items-center justify-between px-3 py-2.5 border-b border-[var(--border)] bg-[var(--surface-1)] flex-shrink-0">
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-[var(--border-subtle)] bg-[rgba(10,10,10,0.86)] px-3 py-2.5 backdrop-blur-xl">
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="w-8 h-8 flex items-center justify-center text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-lg transition-all"
+              onClick={toggleChatSidebar}
+              className={`flex h-8 w-8 items-center justify-center rounded-lg transition-all ${
+                chatSidebarOpen
+                  ? 'bg-[var(--surface-3)] text-[var(--text-primary)]'
+                  : 'text-[var(--text-dim)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
+              }`}
             >
               <PanelLeft size={15} />
             </button>
@@ -932,6 +978,18 @@ export default function Home() {
           </div>
 
           <div className="flex items-center gap-1">
+            <button
+              onClick={toggleSettingsSidebar}
+              className={`flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-all ${
+                settingsSidebarOpen
+                  ? 'border-[var(--border-strong)] bg-[var(--surface-3)] text-[var(--text-primary)]'
+                  : 'border-transparent text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
+              }`}
+              title="Настройки"
+            >
+              <SlidersHorizontal size={13} />
+              <span className="hidden md:block">Настройки</span>
+            </button>
             {messages.length > 0 && (
               <button
                 onClick={handleExportMarkdown}
@@ -1016,7 +1074,8 @@ export default function Home() {
           {showScrollBottom && messages.length > 0 && (
             <button
               onClick={scrollToBottom}
-              className="fixed bottom-24 right-6 md:right-10 p-2.5 bg-[var(--surface-3)] text-[var(--text-primary)] border border-[var(--border)] rounded-full shadow-glow-sm hover:bg-[var(--surface-4)] transition-all animate-fade-in z-20"
+              className="fixed bottom-24 p-2.5 bg-[var(--surface-3)] text-[var(--text-primary)] border border-[var(--border)] rounded-full shadow-glow-sm hover:bg-[var(--surface-4)] transition-all animate-fade-in z-20"
+              style={scrollBottomButtonStyle}
               title="Вниз"
             >
               <ArrowDown size={18} />
@@ -1045,6 +1104,14 @@ export default function Home() {
           />
         </div>
       </div>
+
+      {!isMobile && (
+        <div className="flex-shrink-0 overflow-hidden border-l border-[var(--border-subtle)] transition-[width,opacity] duration-300 ease-out" style={settingsSidebarStyle}>
+          <div className="h-full w-[360px]">
+            <SettingsSidebar {...settingsSidebarProps} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

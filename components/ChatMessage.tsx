@@ -1221,7 +1221,7 @@ export default function ChatMessage({
                 if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveEdit();
                 if (e.key === 'Escape') cancelEdit();
               }}
-              className="w-full bg-[var(--surface-2)] border border-white/20 rounded-xl px-4 py-3 text-sm text-[var(--text-primary)] focus:outline-none resize-none leading-relaxed"
+              className="w-full bg-[var(--surface-2)] border border-[var(--border-strong)] rounded-xl px-4 py-3 text-sm text-[var(--text-primary)] focus:outline-none resize-none leading-relaxed"
               style={{ minHeight: '80px', maxHeight: '400px', resize: 'vertical' }}
             />
             <div className="flex items-center gap-2 mt-2">

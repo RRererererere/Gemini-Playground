@@ -46,6 +46,15 @@ export interface Message {
 
 export interface DeepThinkAnalysis {
   enhancedSystemPrompt: string;
+  characterDetails?: string;
+  userStyle?: string;
+  mood?: string;
+  realIntent?: string;
+  revealNow?: string;
+  revealLater?: string;
+  answerStrategy?: string;
+  toneAdvice?: string;
+  futureStrategy?: string;
 }
 
 export interface GeminiModel {

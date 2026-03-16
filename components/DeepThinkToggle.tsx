@@ -15,13 +15,13 @@ export default function DeepThinkToggle({ state, onToggle }: DeepThinkToggleProp
     <div className="flex items-center gap-2">
       <button
         onClick={onToggle}
-        title={enabled ? 'Disable DeepThink' : 'Enable DeepThink — analyzes conversation before responding'}
+        title={enabled ? 'Disable DeepThink' : 'Enable DeepThink - analyzes conversation before responding'}
         className={`
           flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium
           transition-all duration-200 border
           ${enabled
             ? 'bg-purple-500/15 border-purple-500/40 text-purple-400 hover:bg-purple-500/25'
-            : 'bg-transparent border-white/10 text-white/40 hover:border-white/25 hover:text-white/60'
+            : 'bg-transparent border-[var(--border)] text-white/40 hover:border-[var(--border-strong)] hover:text-white/60'
           }
           ${isAnalyzing ? 'ring-2 ring-purple-500/50 animate-pulse' : ''}
         `}
@@ -34,18 +34,17 @@ export default function DeepThinkToggle({ state, onToggle }: DeepThinkToggleProp
         DeepThink
       </button>
 
-      {/* Show analysis badge when last analysis is available */}
       {enabled && lastAnalysis && !isAnalyzing && (
         <span
-          title={`Mood: ${lastAnalysis.mood} · Style: ${lastAnalysis.userStyle}\nIntent: ${lastAnalysis.realIntent}`}
-          className="text-xs text-white/30 cursor-help"
+          title={`Mood: ${lastAnalysis.mood || 'unknown'} | Style: ${lastAnalysis.userStyle || 'unknown'}\nIntent: ${lastAnalysis.realIntent || 'unknown'}`}
+          className="cursor-help text-xs text-white/30"
         >
-          {moodEmoji(lastAnalysis.mood)} {lastAnalysis.userStyle}
+          {moodEmoji(lastAnalysis.mood)} {lastAnalysis.userStyle || 'DeepThink'}
         </span>
       )}
 
       {isAnalyzing && (
-        <span className="text-xs text-purple-400/70 animate-pulse font-medium">
+        <span className="animate-pulse text-xs font-medium text-purple-400/70">
           Analyzing conversation...
         </span>
       )}
@@ -53,14 +52,14 @@ export default function DeepThinkToggle({ state, onToggle }: DeepThinkToggleProp
   );
 }
 
-function moodEmoji(mood: string): string {
+function moodEmoji(mood?: string): string {
   const map: Record<string, string> = {
-    curious: '🤔',
-    frustrated: '😤',
-    excited: '⚡',
-    confused: '😵',
-    satisfied: '✓',
-    neutral: '◦',
+    curious: '[?]',
+    frustrated: '[!]',
+    excited: '[+]',
+    confused: '[~]',
+    satisfied: '[ok]',
+    neutral: '[.]',
   };
-  return map[mood] ?? '◦';
+  return map[mood || ''] ?? '[.]';
 }

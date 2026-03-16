@@ -90,7 +90,6 @@ body {
 /* Smooth focus */
 input:focus-visible, textarea:focus-visible, select:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
 }
 
 /* Textarea auto-resize */
@@ -394,6 +393,8 @@ input[type='range']::-moz-range-thumb {
     inset: 0;
     z-index: 40;
     display: flex;
+    align-items: stretch;
+    animation: fadeIn 0.2s ease-out;
   }
   .sidebar-mobile-overlay .sidebar-backdrop {
     position: absolute;
@@ -404,10 +405,36 @@ input[type='range']::-moz-range-thumb {
   .sidebar-mobile-overlay .sidebar-panel {
     position: relative;
     z-index: 41;
-    width: 85%;
-    max-width: 320px;
+    width: min(88vw, 360px);
     height: 100%;
     overflow-y: auto;
+    animation: slideIn 0.25s ease-out;
+  }
+
+  @keyframes slideIn {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+
+  .sidebar-mobile-overlay-right .sidebar-panel {
+    animation: slideInRight 0.25s ease-out;
+  }
+
+  @keyframes slideInRight {
+    from {
+      transform: translateX(100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+
+  .sidebar-mobile-overlay-right {
+    justify-content: flex-end;
   }
 
   /* Сообщения на мобилке — полная ширина */
