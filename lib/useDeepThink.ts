@@ -45,7 +45,7 @@ export function useDeepThink() {
       const decoder = new TextDecoder();
       let buffer = '';
       let thinkingAccumulator = '';
-      let finalAnalysis: DeepThinkAnalysis | null = null;
+      let enhancedPrompt = '';
 
       while (true) {
         const { done, value } = await reader.read();
@@ -75,26 +75,25 @@ export function useDeepThink() {
               }
             }
 
-            if (parsed.analysis) {
-              finalAnalysis = parsed.analysis;
+            if (parsed.enhancedPrompt) {
+              enhancedPrompt = parsed.enhancedPrompt;
             }
           } catch {}
         }
       }
 
-      if (!finalAnalysis) {
-        setState(prev => ({ ...prev, isAnalyzing: false, error: 'No analysis received' }));
-        return { enhancedPrompt: systemInstruction, analysis: null, error: 'No analysis received' };
+      if (!enhancedPrompt) {
+        setState(prev => ({ ...prev, isAnalyzing: false, error: 'No prompt received' }));
+        return { enhancedPrompt: systemInstruction, analysis: null, error: 'No prompt received' };
       }
 
       setState(prev => ({
         ...prev,
         isAnalyzing: false,
-        lastAnalysis: finalAnalysis,
+        lastAnalysis: null,
       }));
 
-      const enhanced = buildEnhancedPrompt(finalAnalysis);
-      return { enhancedPrompt: enhanced, analysis: finalAnalysis, error: null };
+      return { enhancedPrompt, analysis: null, error: null };
 
     } catch (err: any) {
       setState(prev => ({ ...prev, isAnalyzing: false, error: err.message }));
@@ -103,26 +102,4 @@ export function useDeepThink() {
   }, []);
 
   return { state, toggle, analyze };
-}
-
-function buildEnhancedPrompt(analysis: DeepThinkAnalysis): string {
-  return `${analysis.enhancedSystemPrompt}
-
----
-[DeepThink — Внутренний план для идеального ответа]
-
-${analysis.characterDetails ? `Персонаж: ${analysis.characterDetails}\n` : ''}
-Стиль пользователя: ${analysis.userStyle}
-Настроение: ${analysis.mood}
-Реальное намерение: ${analysis.realIntent}
-
-Что сказать СЕЙЧАС: ${analysis.revealNow || analysis.answerStrategy}
-Что приберечь ПОТОМ: ${analysis.revealLater || 'продолжать развивать разговор'}
-
-Стратегия ответа: ${analysis.answerStrategy}
-Тон и стиль: ${analysis.toneAdvice}
-${analysis.futureStrategy ? `\nПлан на будущее: ${analysis.futureStrategy}` : ''}
-
-ВАЖНО: Используй этот план для ответа. Не упоминай анализ явно — просто воплоти его.
----`;
 }
