@@ -4,15 +4,6 @@ export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
 
-// Increase body size limit for audio/image uploads
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: '50mb',
-    },
-  },
-};
-
 // Проверить — это ли rate-limit ошибка
 function isRateLimitError(status: number, message: string): boolean {
   return (
