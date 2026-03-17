@@ -7,7 +7,7 @@ import ChatInput from '@/components/ChatInput';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,
-  Save, X, FileDown, ArrowDown
+  Save, X, ArrowDown
 } from 'lucide-react';
 import { useDeepThink } from '@/lib/useDeepThink';
 import DeepThinkToggle from '@/components/DeepThinkToggle';
@@ -115,19 +115,29 @@ export default function Home() {
 
   const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze } = useDeepThink();
 
-  // Detect mobile
+  // Detect mobile only when crossing breakpoint.
+  // Keyboard open/close on mobile fires resize, so we avoid closing panels on every resize event.
   useEffect(() => {
-    const check = () => {
-      const mobile = window.innerWidth < 768;
-      setIsMobile(mobile);
-      if (mobile) {
-        setChatSidebarOpen(false);
-        setSettingsSidebarOpen(false);
-      }
+    const query = window.matchMedia('(max-width: 767px)');
+
+    const applyViewportMode = (mobile: boolean) => {
+      setIsMobile(prev => {
+        if (prev !== mobile && mobile) {
+          setChatSidebarOpen(false);
+          setSettingsSidebarOpen(false);
+        }
+        return mobile;
+      });
     };
-    check();
-    window.addEventListener('resize', check);
-    return () => window.removeEventListener('resize', check);
+
+    applyViewportMode(query.matches);
+
+    const onMediaChange = (event: MediaQueryListEvent) => {
+      applyViewportMode(event.matches);
+    };
+
+    query.addEventListener('change', onMediaChange);
+    return () => query.removeEventListener('change', onMediaChange);
   }, []);
 
   // Load from localStorage
@@ -143,13 +153,16 @@ export default function Home() {
       const savedChatSidebar = localStorage.getItem('gemini_chats_sidebar');
       const savedSettingsSidebar = localStorage.getItem('gemini_settings_sidebar');
       const savedThinking = localStorage.getItem('gemini_thinking_budget');
+      const mobileViewport = window.matchMedia('(max-width: 767px)').matches;
 
       if (savedModel) setModel(savedModel);
       if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
       if (savedTemp) setTemperature(parseFloat(savedTemp));
-      if (savedChatSidebar !== null) setChatSidebarOpen(savedChatSidebar === 'true');
-      else if (savedLegacySidebar !== null) setChatSidebarOpen(savedLegacySidebar === 'true');
-      if (savedSettingsSidebar !== null) setSettingsSidebarOpen(savedSettingsSidebar === 'true');
+      if (!mobileViewport) {
+        if (savedChatSidebar !== null) setChatSidebarOpen(savedChatSidebar === 'true');
+        else if (savedLegacySidebar !== null) setChatSidebarOpen(savedLegacySidebar === 'true');
+        if (savedSettingsSidebar !== null) setSettingsSidebarOpen(savedSettingsSidebar === 'true');
+      }
       if (savedThinking !== null) setThinkingBudget(parseInt(savedThinking));
 
       const chats = await loadSavedChats();
@@ -731,38 +744,6 @@ export default function Home() {
     handleClearChat();
   }, [isStreaming, messages, saveCurrentChat, handleClearChat]);
 
-  const handleExportMarkdown = useCallback(() => {
-    if (messages.length === 0) return;
-    
-    let md = `# ${chatTitle || generateChatTitle(messages)}\n\n`;
-    messages.forEach(m => {
-      const text = (m.parts.find(p => 'text' in p) as any)?.text || '';
-      if (!text) return;
-      
-      if (m.role === 'user') {
-        md += `## 🧑 Вы\n\n${text}\n\n`;
-      } else {
-        md += `## ✨ Gemini${model ? ` (${model.replace('models/', '')})` : ''}\n\n`;
-        if (m.thinking) {
-          md += `> **Размышления:**\n> ${m.thinking.split('\n').join('\n> ')}\n\n`;
-        }
-        if (m.isBlocked) {
-          md += `> 🛑 **Контент заблокирован (${m.blockReason || m.finishReason})**\n\n`;
-        }
-        md += `${text}\n\n`;
-      }
-      md += `---\n\n`;
-    });
-
-    const blob = new Blob([md], { type: 'text/markdown' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${(chatTitle || 'chat').replace(/[^a-z0-9а-яё]/gi, '_').slice(0, 50)}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [messages, chatTitle, model]);
-
   const handleLoadChat = useCallback((chat: SavedChat) => {
     if (isStreaming) return;
     if (messages.length > 0 && unsaved) {
@@ -990,17 +971,6 @@ export default function Home() {
               <SlidersHorizontal size={13} />
               <span className="hidden md:block">Настройки</span>
             </button>
-            {messages.length > 0 && (
-              <button
-                onClick={handleExportMarkdown}
-                disabled={isStreaming}
-                className="flex items-center gap-1 h-7 px-2 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] border border-transparent rounded-lg transition-all"
-                title="Скачать чат в формате Markdown (.md)"
-              >
-                <FileDown size={13} />
-                <span className="hidden md:block">MD</span>
-              </button>
-            )}
             <div className="w-[1px] h-4 bg-[var(--border)] mx-1 hidden sm:block" />
             
             {messages.length > 0 && (
