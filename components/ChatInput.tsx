@@ -24,6 +24,7 @@ const ACCEPTED_TYPES = {
   'image/jpeg': ['.jpg', '.jpeg'],
   'image/webp': ['.webp'],
   'image/gif': ['.gif'],
+  'application/pdf': ['.pdf'],
   'audio/mpeg': ['.mp3'],
   'audio/wav': ['.wav'],
   'audio/ogg': ['.ogg'],
@@ -49,9 +50,41 @@ function fileToBase64(file: File): Promise<string> {
 function FileChip({ file, onRemove }: { file: AttachedFile; onRemove: () => void }) {
   const isImage = file.mimeType.startsWith('image/');
   const isAudio = file.mimeType.startsWith('audio/');
+  const isPdf = file.mimeType === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
   const isJson = file.mimeType === 'application/json' || file.name.endsWith('.json');
   const Icon = isImage ? ImageIcon : isAudio ? Volume2 : isJson ? Braces : FileText;
-  const color = isImage ? '#4ade80' : isAudio ? '#f59e0b' : isJson ? '#60a5fa' : '#94a3b8';
+  const color = isImage ? '#4ade80' : isAudio ? '#f59e0b' : isPdf ? '#f87171' : isJson ? '#60a5fa' : '#94a3b8';
+
+  if (isPdf && file.previewUrl) {
+    return (
+      <div className="flex items-stretch gap-2 bg-[var(--surface-3)] border border-[var(--border)] rounded-xl p-2 w-[190px] group">
+        <div className="relative w-12 h-14 rounded-lg overflow-hidden border border-[var(--border)] bg-white flex-shrink-0">
+          <iframe
+            src={`${file.previewUrl}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
+            title={file.name}
+            className="w-full h-full pointer-events-none"
+          />
+          <div className="absolute inset-x-0 bottom-0 bg-red-500 text-white text-[9px] font-semibold tracking-[0.2em] text-center py-0.5">
+            PDF
+          </div>
+        </div>
+
+        <div className="min-w-0 flex-1 flex flex-col justify-between py-0.5">
+          <div>
+            <p className="text-[12px] text-[var(--text-primary)] font-500 truncate leading-tight">{file.name}</p>
+            <p className="text-[10px] text-[var(--text-dim)] mt-1">PDF preview ready</p>
+          </div>
+          <button
+            onClick={onRemove}
+            className="self-end text-[var(--text-dim)] hover:text-red-400 transition-colors flex-shrink-0 p-0.5 rounded"
+            title="Remove file"
+          >
+            <X size={11} />
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-1.5 bg-[var(--surface-3)] border border-[var(--border)] rounded-lg pl-2 pr-1.5 py-1.5 max-w-[160px] group">
@@ -82,22 +115,26 @@ export default function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const processFile = useCallback(async (file: File): Promise<AttachedFile | null> => {
+    const lowerName = file.name.toLowerCase();
     const mimeType = file.type || 'text/plain';
     const accepted = Object.keys(ACCEPTED_TYPES);
 
-    if (!accepted.includes(mimeType) && !file.name.endsWith('.txt') && !file.name.endsWith('.json')) {
+    if (!accepted.includes(mimeType) && !lowerName.endsWith('.txt') && !lowerName.endsWith('.json') && !lowerName.endsWith('.pdf')) {
       return null;
     }
 
     // Fix MIME type for common cases
     let finalMimeType = mimeType;
-    if (file.name.endsWith('.txt')) finalMimeType = 'text/plain';
-    if (file.name.endsWith('.json')) finalMimeType = 'application/json';
-    if (file.name.endsWith('.m4a')) finalMimeType = 'audio/mp4';
+    if (lowerName.endsWith('.txt')) finalMimeType = 'text/plain';
+    if (lowerName.endsWith('.json')) finalMimeType = 'application/json';
+    if (lowerName.endsWith('.pdf')) finalMimeType = 'application/pdf';
+    if (lowerName.endsWith('.m4a')) finalMimeType = 'audio/mp4';
 
     try {
       const data = await fileToBase64(file);
-      const previewUrl = finalMimeType.startsWith('image/') ? URL.createObjectURL(file) : undefined;
+      const previewUrl = finalMimeType.startsWith('image/') || finalMimeType === 'application/pdf'
+        ? URL.createObjectURL(file)
+        : undefined;
 
       return {
         id: Math.random().toString(36).slice(2),
@@ -151,7 +188,7 @@ export default function ChatInput({
           <div className="bg-[var(--surface-2)] border-2 border-dashed border-[var(--accent)] rounded-2xl p-12 text-center">
             <Paperclip size={32} className="text-[var(--accent)] mx-auto mb-3" />
             <p className="text-lg font-500 text-white">Drop files here</p>
-            <p className="text-sm text-[var(--text-muted)] mt-1">Images, audio, text, JSON</p>
+            <p className="text-sm text-[var(--text-muted)] mt-1">Images, PDF, audio, text, JSON</p>
           </div>
         </div>
       )}
@@ -200,7 +237,7 @@ export default function ChatInput({
               onClick={() => fileInputRef.current?.click()}
               disabled={disabled || isStreaming}
               className="flex items-center justify-center w-10 h-10 sm:w-8 sm:h-8 text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Attach file (image, audio, txt, json)"
+              title="Attach file (image, PDF, audio, txt, json)"
             >
               <Paperclip size={18} className="sm:w-[15px] sm:h-[15px]" />
             </button>
@@ -208,7 +245,7 @@ export default function ChatInput({
               ref={fileInputRef}
               type="file"
               multiple
-              accept=".png,.jpg,.jpeg,.webp,.gif,.mp3,.wav,.ogg,.m4a,.weba,.txt,.json"
+              accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.mp3,.wav,.ogg,.m4a,.weba,.txt,.json"
               className="hidden"
               onChange={e => e.target.files && handleFiles(e.target.files)}
             />

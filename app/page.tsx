@@ -13,8 +13,7 @@ import { useDeepThink } from '@/lib/useDeepThink';
 import DeepThinkToggle from '@/components/DeepThinkToggle';
 import type { Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis } from '@/types';
 import {
-  loadApiKeys, saveApiKeys, getNextAvailableKey,
-  markKeyUsed, unblockExpiredKeys, isRateLimitError, isInvalidKeyError,
+  loadApiKeys, saveApiKeys, isRateLimitError,
 } from '@/lib/apiKeyManager';
 import {
   loadSavedChats, saveChatToStorage, deleteChatFromStorage,
@@ -23,6 +22,20 @@ import {
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+const ACTIVE_API_KEY_INDEX_STORAGE_KEY = 'gemini_active_key_index';
+
+function getApiKeySuffix(key?: string | null): string {
+  return key ? key.slice(-4) : '';
+}
+
+function sanitizeApiKeys(keys: ApiKeyEntry[]): ApiKeyEntry[] {
+  return keys.map(({ blockedUntil: _blockedUntil, blockedByModel: _blockedByModel, ...entry }) => ({
+    ...entry,
+    blockedUntil: undefined,
+    blockedByModel: undefined,
+  }));
 }
 
 function generateChatTitle(messages: Message[]): string {
@@ -136,9 +149,11 @@ export default function Home() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const tokenDebounceRef = useRef<NodeJS.Timeout | null>(null);
-  const lastKeyIndexRef = useRef(-1);
 
   const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze } = useDeepThink();
+  const selectedApiKeyEntry = apiKeys[activeKeyIndex] || null;
+  const selectedApiKey = selectedApiKeyEntry?.key || '';
+  const selectedApiKeySuffix = getApiKeySuffix(selectedApiKeyEntry?.key);
 
   // Detect mobile only when crossing breakpoint.
   // Keyboard open/close on mobile fires resize, so we avoid closing panels on every resize event.
@@ -168,8 +183,13 @@ export default function Home() {
   // Load from localStorage
   useEffect(() => {
     const loadData = async () => {
-      const keys = unblockExpiredKeys(loadApiKeys());
+      const keys = sanitizeApiKeys(loadApiKeys());
       setApiKeys(keys);
+      saveApiKeys(keys);
+      const savedActiveKeyIndex = parseInt(localStorage.getItem(ACTIVE_API_KEY_INDEX_STORAGE_KEY) || '0', 10);
+      if (keys.length > 0 && Number.isFinite(savedActiveKeyIndex)) {
+        setActiveKeyIndex(Math.min(Math.max(savedActiveKeyIndex, 0), keys.length - 1));
+      }
 
       const savedModel = localStorage.getItem('gemini_model');
       const savedSysPrompt = localStorage.getItem('gemini_sys_prompt');
@@ -213,9 +233,21 @@ export default function Home() {
   useEffect(() => { if (model) localStorage.setItem('gemini_model', model); }, [model]);
   useEffect(() => { localStorage.setItem('gemini_sys_prompt', systemPrompt); }, [systemPrompt]);
   useEffect(() => { localStorage.setItem('gemini_temperature', temperature.toString()); }, [temperature]);
+  useEffect(() => { localStorage.setItem(ACTIVE_API_KEY_INDEX_STORAGE_KEY, activeKeyIndex.toString()); }, [activeKeyIndex]);
   useEffect(() => { localStorage.setItem('gemini_chats_sidebar', chatSidebarOpen.toString()); }, [chatSidebarOpen]);
   useEffect(() => { localStorage.setItem('gemini_settings_sidebar', settingsSidebarOpen.toString()); }, [settingsSidebarOpen]);
   useEffect(() => { localStorage.setItem('gemini_thinking_budget', thinkingBudget.toString()); }, [thinkingBudget]);
+
+  useEffect(() => {
+    if (apiKeys.length === 0) {
+      if (activeKeyIndex !== 0) setActiveKeyIndex(0);
+      return;
+    }
+
+    if (activeKeyIndex >= apiKeys.length) {
+      setActiveKeyIndex(apiKeys.length - 1);
+    }
+  }, [apiKeys.length, activeKeyIndex]);
 
   // Auto-scroll (only when user is near bottom; avoid smooth on every streamed chunk)
   useEffect(() => {
@@ -230,9 +262,8 @@ export default function Home() {
   }, [messages]);
 
   // Token counting
-  const countTokens = useCallback(async (msgs: Message[], sys: string, mod: string, keys: ApiKeyEntry[]) => {
-    const activeKey = keys.find(k => !k.blockedUntil || k.blockedUntil <= Date.now());
-    if (!activeKey || !mod || msgs.length === 0) { setTokenCount(0); return; }
+  const countTokens = useCallback(async (msgs: Message[], sys: string, mod: string, apiKey: string) => {
+    if (!apiKey || !mod || msgs.length === 0) { setTokenCount(0); return; }
     try {
       const res = await fetch('/api/tokens', {
         method: 'POST',
@@ -242,12 +273,12 @@ export default function Home() {
             role: m.role,
             parts: m.parts.map(p => {
               if ('text' in p) return { text: p.text };
-              return { inlineData: { mimeType: (p as any).inlineData.mimeType, data: (p as any).inlineData.data.slice(0, 100) } };
+              return { inlineData: { mimeType: (p as any).inlineData.mimeType, data: (p as any).inlineData.data } };
             }),
           })),
           model: mod,
           systemInstruction: sys,
-          apiKey: activeKey.key,
+          apiKey,
         }),
       });
       const data = await res.json();
@@ -257,11 +288,12 @@ export default function Home() {
 
   useEffect(() => {
     if (tokenDebounceRef.current) clearTimeout(tokenDebounceRef.current);
+    if (isStreaming) return;
     tokenDebounceRef.current = setTimeout(() => {
-      countTokens(messages, systemPrompt, model, apiKeys);
-    }, 1000);
+      countTokens(messages, systemPrompt, model, selectedApiKey);
+    }, 400);
     return () => { if (tokenDebounceRef.current) clearTimeout(tokenDebounceRef.current); };
-  }, [messages, systemPrompt, model, apiKeys, countTokens]);
+  }, [messages, systemPrompt, model, selectedApiKey, countTokens, isStreaming]);
 
   // ============ SAVE CHAT ============
   const saveCurrentChat = useCallback(async (msgs: Message[], title?: string) => {
@@ -299,26 +331,25 @@ export default function Home() {
     customAnalysis?: DeepThinkAnalysis, // Кастомный анализ после редактирования
   ) => {
     // Получить следующий доступный ключ
-    const keyResult = getNextAvailableKey(apiKeys, lastKeyIndexRef.current, model);
-    if (!keyResult) {
-      setError('Все API ключи временно заблокированы. Попробуйте позже.');
+    const key = selectedApiKeyEntry?.key;
+    const keySuffix = getApiKeySuffix(key);
+    if (!key) {
+      setError('Выберите API ключ в настройках.');
       setIsStreaming(false);
       setStreamingId(null);
       return;
     }
 
-    const { key, index } = keyResult;
-    lastKeyIndexRef.current = index;
 
     // Отметить ключ как используемый
-    const usedKeys = markKeyUsed(apiKeys, index);
-    setApiKeys(usedKeys);
-    saveApiKeys(usedKeys);
 
     abortControllerRef.current = new AbortController();
     setIsStreaming(true);
     setStreamingId(targetMessageId);
     setError('');
+    setMessages(prev => prev.map(m =>
+      m.id !== targetMessageId ? m : { ...m, apiKeySuffix: keySuffix || undefined, modelName: model }
+    ));
 
     // DeepThink Pass 1 — если включён, анализируем сначала
     let effectiveSystemPrompt = systemPrompt;
@@ -416,7 +447,6 @@ export default function Home() {
       const decoder = new TextDecoder();
       let buffer = '';
       let thinkingAccumulator = isAppending ? (history.find(m => m.id === targetMessageId)?.thinking || '') : '';
-      let retryWithNextKey = false;
       let pendingText = '';
       let pendingThinking = '';
       let flushScheduled = false;
@@ -542,29 +572,14 @@ export default function Home() {
           } catch {}
         }
 
-        if (retryWithNextKey) break;
       }
 
       // Flush any buffered chunks before finishing.
       flush();
 
       // Retry с другим ключом если rate limit
-      if (retryWithNextKey) {
         // Сбросить накопленный текст только если это не продолжение
-        if (!isAppending) {
-          setMessages(prev => prev.map(m =>
-            m.id !== targetMessageId ? m : {
-              ...m,
-              parts: [{ text: '' }],
-              thinking: undefined,
-              isStreaming: true,
-            }
-          ));
-        }
         // Рекурсивный вызов с обновлёнными ключами
-        await streamGeneration(history, targetMessageId, isAppending);
-        return;
-      }
 
     } catch (e: any) {
       if (e.name !== 'AbortError') {
@@ -578,11 +593,11 @@ export default function Home() {
         m.id === targetMessageId ? { ...m, isStreaming: false } : m
       ));
     }
-  }, [apiKeys, model, systemPrompt, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze]);
+  }, [selectedApiKeyEntry, model, systemPrompt, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze]);
 
   // ============ HANDLERS ============
   const handleSend = useCallback(async (text: string, files: AttachedFile[]) => {
-    if (apiKeys.length === 0 || !model || isStreaming) return;
+    if (!selectedApiKey || !model || isStreaming) return;
 
     setError('');
     const userParts: Part[] = [];
@@ -603,6 +618,7 @@ export default function Home() {
       parts: [{ text: '' }],
       isStreaming: true,
       modelName: model,
+      apiKeySuffix: selectedApiKeySuffix || undefined,
     };
 
     const newMessages = [...messages, userMsg, assistantMsg];
@@ -610,7 +626,7 @@ export default function Home() {
 
     const historyToSend = [...messages, userMsg];
     await streamGeneration(historyToSend, assistantMsgId, false);
-  }, [apiKeys, model, isStreaming, messages, streamGeneration]);
+  }, [selectedApiKey, model, isStreaming, messages, streamGeneration, selectedApiKeySuffix]);
 
   const handleRegenerate = useCallback(async () => {
     if (isStreaming || messages.length === 0) return;
@@ -626,6 +642,7 @@ export default function Home() {
         parts: [{ text: '' }],
         isStreaming: true,
         modelName: model,
+        apiKeySuffix: selectedApiKeySuffix || undefined,
       };
       setMessages([...messages, assistantMsg]);
       await streamGeneration(messages, newMsgId, false);
@@ -639,11 +656,11 @@ export default function Home() {
     const newMsgId = generateId();
     const newMessages = [
       ...messages.slice(0, actualIdx),
-      { id: newMsgId, role: 'model' as const, parts: [{ text: '' }], isStreaming: true, modelName: model },
+      { id: newMsgId, role: 'model' as const, parts: [{ text: '' }], isStreaming: true, modelName: model, apiKeySuffix: selectedApiKeySuffix || undefined },
     ];
     setMessages(newMessages);
     await streamGeneration(messages.slice(0, actualIdx), newMsgId, false);
-  }, [isStreaming, messages, streamGeneration, model]);
+  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
 
   const handleContinue = useCallback(async () => {
     if (isStreaming) return;
@@ -662,6 +679,7 @@ export default function Home() {
         parts: [{ text: '' }],
         isStreaming: true,
         modelName: model,
+        apiKeySuffix: selectedApiKeySuffix || undefined,
       };
       // История: всё до DeepThink-сообщения включительно, кроме него
       const historyUpTo = messages.slice(0, messages.length - 1);
@@ -671,31 +689,22 @@ export default function Home() {
     }
 
     await streamGeneration(messages, lastMsg.id, true);
-  }, [isStreaming, messages, streamGeneration, model]);
+  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
 
   const handleEdit = useCallback((id: string, newParts: Part[]) => {
     const msgIdx = messages.findIndex(m => m.id === id);
     if (msgIdx === -1) return;
     const msg = messages[msgIdx];
     if (msg.role === 'user') {
-      const updatedUser = { ...msg, parts: newParts };
-      const historyUpTo = [...messages.slice(0, msgIdx), updatedUser];
-      const assistantMsgId = generateId();
-      const assistantMsg: Message = {
-        id: assistantMsgId,
-        role: 'model',
-        parts: [{ text: '' }],
-        isStreaming: true,
-        modelName: model,
-      };
-      setMessages([...historyUpTo, assistantMsg]);
-      streamGeneration(historyUpTo, assistantMsgId, false);
+      setMessages(prev => prev.map(m =>
+        m.id === id ? { ...m, parts: newParts, forceEdit: false } : m
+      ));
     } else {
       setMessages(prev => prev.map(m =>
         m.id === id ? { ...m, parts: newParts, isBlocked: false, error: undefined, errorType: undefined, errorCode: undefined, errorStatus: undefined } : m
       ));
     }
-  }, [messages, streamGeneration, model]);
+  }, [messages]);
 
   const forceEditPreviousUserMessage = useCallback((modelMessageId: string) => {
     setMessages(prev => {
@@ -767,6 +776,7 @@ export default function Home() {
       saveCurrentChat(messages);
     }
     handleClearChat();
+    setSystemPrompt('');
   }, [isStreaming, messages, saveCurrentChat, handleClearChat]);
 
   const handleLoadChat = useCallback((chat: SavedChat) => {
@@ -802,8 +812,9 @@ export default function Home() {
   }, []);
 
   const handleApiKeysChange = useCallback((keys: ApiKeyEntry[]) => {
-    setApiKeys(keys);
-    saveApiKeys(keys);
+    const sanitized = sanitizeApiKeys(keys);
+    setApiKeys(sanitized);
+    saveApiKeys(sanitized);
   }, []);
 
   // Auto-save when streaming stops
@@ -818,7 +829,7 @@ export default function Home() {
     }
   }, [isStreaming]);
 
-  const hasKeys = apiKeys.some(k => !k.blockedUntil || k.blockedUntil <= Date.now());
+  const hasKeys = !!selectedApiKeyEntry;
   const hasApiAndModel = hasKeys && !!model;
   const lastMessage = messages[messages.length - 1];
   const lastIsModel = lastMessage?.role === 'model';
@@ -968,6 +979,7 @@ export default function Home() {
               {model && (
                 <span className="hidden md:block text-[11px] text-[var(--text-dim)] bg-[var(--surface-3)] border border-[var(--border)] px-2 py-0.5 rounded-full font-mono flex-shrink-0">
                   {model.replace('models/', '')}
+                  {selectedApiKeySuffix ? ` • ••••${selectedApiKeySuffix}` : ''}
                 </span>
               )}
               {unsaved && messages.length > 0 && (

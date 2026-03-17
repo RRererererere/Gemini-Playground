@@ -17,7 +17,7 @@ export interface AttachedFile {
   mimeType: string;
   size: number;
   data: string; // base64
-  previewUrl?: string; // object URL for images
+  previewUrl?: string; // object URL for browser previews (images, PDFs, etc.)
 }
 
 export interface Message {
@@ -25,6 +25,7 @@ export interface Message {
   role: 'user' | 'model';
   parts: Part[];
   files?: AttachedFile[];
+  apiKeySuffix?: string;   // last 4 chars of the API key used for generation
   isStreaming?: boolean;
   thinking?: string;       // размышления модели (обычные)
   deepThinking?: string;   // размышления DeepThink (фиолетовые)

@@ -31,7 +31,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { GeminiModel, ApiKeyEntry, SavedChat, SavedSystemPrompt } from '@/types';
-import { saveApiKeys, addApiKey, removeApiKey, getKeyStatus, timeUntilUnblock, unblockKey } from '@/lib/apiKeyManager';
+import { addApiKey, removeApiKey, getKeyStatus, timeUntilUnblock, unblockKey } from '@/lib/apiKeyManager';
 import {
   exportAllSettings,
   exportChats,
@@ -308,6 +308,8 @@ export function SettingsSidebar({
   const [promptDropdownOpen, setPromptDropdownOpen] = useState(false);
   const [newPromptName, setNewPromptName] = useState('');
   const [showSavePromptDialog, setShowSavePromptDialog] = useState(false);
+  const activeKeyEntry = apiKeys[activeKeyIndex];
+  const activeKeySuffix = activeKeyEntry?.key ? activeKeyEntry.key.slice(-4) : '';
 
   const importRef = useRef<HTMLInputElement>(null);
   const importGsRef = useRef<HTMLInputElement>(null);
@@ -352,15 +354,14 @@ export function SettingsSidebar({
   }, []);
 
   useEffect(() => {
-    const activeKeys = apiKeys.filter(item => !item.blockedUntil || item.blockedUntil <= Date.now());
-    if (activeKeys.length === 0 || models.length > 0) return;
+    if (!activeKeyEntry?.key) return;
 
     const timer = setTimeout(() => {
-      loadModels(activeKeys[0].key);
-    }, 800);
+      loadModels(activeKeyEntry.key);
+    }, 250);
 
     return () => clearTimeout(timer);
-  }, [apiKeys, models.length, loadModels]);
+  }, [activeKeyEntry?.key, loadModels]);
 
   const savePrompts = (prompts: SavedSystemPrompt[]) => {
     setSavedPrompts(prompts);
@@ -382,7 +383,6 @@ export function SettingsSidebar({
 
     const updated = addApiKey(apiKeys, trimmed);
     onApiKeysChange(updated);
-    saveApiKeys(updated);
     onActiveKeyIndexChange(updated.length - 1);
     setNewKeyInput('');
     setShowNewKey(false);
@@ -391,8 +391,14 @@ export function SettingsSidebar({
   const deleteKey = (key: string) => {
     const updated = removeApiKey(apiKeys, key);
     onApiKeysChange(updated);
-    saveApiKeys(updated);
     if (activeKeyIndex >= updated.length) onActiveKeyIndexChange(Math.max(updated.length - 1, 0));
+  };
+
+  const selectKey = (idx: number) => {
+    onActiveKeyIndexChange(idx);
+    if (apiKeys[idx]?.key) {
+      loadModels(apiKeys[idx].key);
+    }
   };
 
   const formatTokenCount = (value: number) => {
@@ -509,13 +515,15 @@ export function SettingsSidebar({
                     return (
                       <button
                         key={`${entry.key}-${idx}`}
-                        onClick={() => onActiveKeyIndexChange(idx)}
+                        onClick={() => selectKey(idx)}
                         className={`group flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all ${
-                          isActive ? 'border-[var(--border-strong)] bg-white/[0.06]' : 'border-[var(--border)] bg-[var(--surface-2)] hover:border-[var(--border-strong)]'
+                          isActive
+                            ? 'border-emerald-400/25 bg-emerald-400/10'
+                            : 'border-[var(--border)] bg-[var(--surface-2)] hover:border-[var(--border-strong)]'
                         }`}
                       >
                         <div className={`h-2.5 w-2.5 flex-shrink-0 rounded-full ${
-                          status === 'active' ? 'bg-[var(--gem-green)]' : status === 'cooling' ? 'bg-[var(--gem-yellow)] animate-pulse' : 'bg-[var(--gem-red)]'
+                          isActive ? 'bg-emerald-300' : 'bg-[var(--surface-4)]'
                         }`} />
 
                         <div className="min-w-0 flex-1">
@@ -529,6 +537,9 @@ export function SettingsSidebar({
                               Разблокируется через {timeUntilUnblock(entry, model)}
                             </p>
                           )}
+                          <p className={`mt-1 text-[10px] ${isActive ? 'text-emerald-200/85' : 'text-[var(--text-muted)]'}`}>
+                            {isActive ? 'Используется сейчас' : `Нажмите, чтобы использовать ••••${entry.key.slice(-4)}`}
+                          </p>
                         </div>
 
                         <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
@@ -538,7 +549,6 @@ export function SettingsSidebar({
                                 event.stopPropagation();
                                 const updated = unblockKey(apiKeys, idx, model);
                                 onApiKeysChange(updated);
-                                saveApiKeys(updated);
                               }}
                               className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:text-[var(--text-primary)]"
                               title="Разблокировать ключ"
@@ -623,6 +633,12 @@ export function SettingsSidebar({
                     </p>
                   )}
 
+                  {apiKeys.length > 0 && activeKeySuffix && (
+                    <p className="text-[11px] text-[var(--text-dim)]">
+                      Активный ключ: <span className="font-mono text-emerald-200/90">••••{activeKeySuffix}</span>
+                    </p>
+                  )}
+
                   {modelError && (
                     <p className="flex items-center gap-2 text-xs text-[var(--gem-red)]">
                       <AlertCircle size={12} />
@@ -643,8 +659,7 @@ export function SettingsSidebar({
                       {apiKeys.length > 0 && (
                         <button
                           onClick={() => {
-                            const active = apiKeys.find(item => !item.blockedUntil || item.blockedUntil <= Date.now());
-                            if (active) loadModels(active.key);
+                            if (activeKeyEntry?.key) loadModels(activeKeyEntry.key);
                           }}
                           disabled={loadingModels}
                           className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-dim)] transition-colors hover:bg-white/5 hover:text-[var(--text-primary)]"

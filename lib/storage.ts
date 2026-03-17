@@ -65,9 +65,13 @@ async function restoreFileData(messages: Message[]): Promise<Message[]> {
   });
 }
 
-// Restore previewUrl (object URL) for images from base64 data
+// Restore previewUrl (object URL) for previewable files from base64 data
 function restoreFilePreviewUrl(file: AttachedFile): AttachedFile {
-  if (file.mimeType.startsWith('image/') && file.data && !file.previewUrl) {
+  const canPreviewInline =
+    file.mimeType.startsWith('image/') ||
+    file.mimeType === 'application/pdf';
+
+  if (canPreviewInline && file.data && !file.previewUrl) {
     try {
       const blob = base64ToBlob(file.data, file.mimeType);
       return { ...file, previewUrl: URL.createObjectURL(blob) };

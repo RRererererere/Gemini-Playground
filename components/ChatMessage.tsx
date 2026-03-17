@@ -32,7 +32,9 @@ function FilePreview({ file }: { file: AttachedFile }) {
   const [isHovered, setIsHovered] = useState(false);
   const isImage = file.mimeType.startsWith('image/');
   const isAudio = file.mimeType.startsWith('audio/');
+  const isPdf = file.mimeType === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
   const isJson = file.mimeType === 'application/json' || file.name.endsWith('.json');
+  const previewSource = file.previewUrl || (file.data ? `data:${file.mimeType};base64,${file.data}` : '');
 
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes}B`;
@@ -65,8 +67,50 @@ function FilePreview({ file }: { file: AttachedFile }) {
     return <AudioPlayer file={file} />;
   }
 
+  if (isPdf && previewSource) {
+    return (
+      <>
+        <div className="w-full max-w-md overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-3)] shadow-sm">
+          <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-3 py-2">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-[var(--text-primary)]">{file.name}</p>
+              <p className="text-[11px] text-[var(--text-dim)]">{formatSize(file.size)}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowModal(true)}
+              className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-[11px] text-[var(--text-dim)] transition-colors hover:text-[var(--text-primary)] hover:bg-[var(--surface-4)]"
+            >
+              Preview
+            </button>
+          </div>
+
+          <div
+            className="cursor-pointer bg-white"
+            onClick={() => setShowModal(true)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setShowModal(true);
+              }
+            }}
+          >
+            <iframe
+              src={`${previewSource}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`}
+              title={file.name}
+              className="h-[260px] w-full pointer-events-none"
+            />
+          </div>
+        </div>
+        {showModal && <PdfModal file={file} src={previewSource} onClose={() => setShowModal(false)} />}
+      </>
+    );
+  }
+
   const Icon = isJson ? Braces : FileText;
-  const color = isJson ? '#60a5fa' : '#888';
+  const color = isJson ? '#60a5fa' : isPdf ? '#f87171' : '#888';
 
   return (
     <div className="flex items-center gap-2 bg-[var(--surface-3)] border border-[var(--border)] rounded-lg px-3 py-2 max-w-xs">
@@ -74,6 +118,55 @@ function FilePreview({ file }: { file: AttachedFile }) {
       <div className="min-w-0">
         <p className="text-sm text-[var(--text-primary)] truncate font-medium">{file.name}</p>
         <p className="text-[11px] text-[var(--text-dim)]">{formatSize(file.size)}</p>
+      </div>
+    </div>
+  );
+}
+
+function PdfModal({ file, src, onClose }: { file: AttachedFile; src: string; onClose: () => void }) {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4" onClick={onClose}>
+      <div
+        className="relative flex h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[var(--surface-2)] shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-white">{file.name}</p>
+            <p className="text-[11px] text-white/50">PDF preview</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <a
+              href={src}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-white/70 transition-colors hover:bg-white/5 hover:text-white"
+            >
+              Open separately
+            </a>
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-white/5 text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+
+        <iframe
+          src={src}
+          title={file.name}
+          className="min-h-0 flex-1 bg-white"
+        />
       </div>
     </div>
   );
@@ -951,6 +1044,7 @@ function MessageErrorIndicator({ errorType, errorRetryAfterMs, errorMessage, err
 }) {
   const [remaining, setRemaining] = useState<number>(0);
   const [expanded, setExpanded] = useState(false);
+  const rootRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     if (!errorRetryAfterMs) return;
@@ -962,6 +1056,20 @@ function MessageErrorIndicator({ errorType, errorRetryAfterMs, errorMessage, err
     const id = window.setInterval(tick, 250);
     return () => window.clearInterval(id);
   }, [errorRetryAfterMs]);
+
+  useEffect(() => {
+    if (!expanded) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (rootRef.current?.contains(target)) return;
+      setExpanded(false);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [expanded]);
 
   const isQuota = errorType === 'quota';
   const isRateLimit = errorType === 'rate_limit';
@@ -985,7 +1093,7 @@ function MessageErrorIndicator({ errorType, errorRetryAfterMs, errorMessage, err
     : { borderColor: 'rgba(239,68,68,0.25)', background: 'rgba(239,68,68,0.06)' };
 
   return (
-    <span className="relative inline-flex flex-col">
+    <span ref={rootRef} className="relative inline-flex flex-col">
       <button
         onClick={() => setExpanded(v => !v)}
         className="inline-flex items-center gap-1 px-2 py-0.5 border rounded text-[10px] font-medium cursor-pointer"
@@ -993,7 +1101,7 @@ function MessageErrorIndicator({ errorType, errorRetryAfterMs, errorMessage, err
         title="Нажми для деталей"
       >
         <AlertCircle size={10} className="flex-shrink-0" />
-        ! {label}
+        {label}
         {remaining > 0 && <span className="font-mono ml-0.5">{remaining}s</span>}
       </button>
 
@@ -1076,6 +1184,7 @@ export default function ChatMessage({
   const geminiErrorCode = message.errorCode;
   const geminiErrorStatus = message.errorStatus;
   const modelName = message.modelName;
+  const apiKeySuffix = message.apiKeySuffix;
 
   // Форматируем название модели для отображения
   const displayModelName = modelName 
@@ -1180,6 +1289,11 @@ export default function ChatMessage({
         <span className="text-[10px] font-medium text-[var(--text-dim)] uppercase tracking-widest">
           {isUser ? 'Вы' : displayModelName}
         </span>
+        {!isUser && apiKeySuffix && (
+          <span className="text-[10px] font-mono text-[var(--text-dim)]">
+            ••••{apiKeySuffix}
+          </span>
+        )}
         {isBlocked && !isUser && (
           <BlockedIndicator reason={message.blockReason || message.finishReason} />
         )}

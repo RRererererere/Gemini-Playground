@@ -1,12 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+function estimateTokensFromText(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) return 0;
+  return Math.max(1, Math.ceil(trimmed.length / 4));
+}
+
+function estimateTokensFromInlineData(data: string): number {
+  if (!data) return 0;
+  const approxBytes = Math.floor((data.length * 3) / 4);
+  return Math.max(1, Math.ceil(approxBytes / 4));
+}
+
+function estimateTotalTokens(messages: any[], systemInstruction?: string): number {
+  let total = estimateTokensFromText(systemInstruction || '');
+
+  for (const message of messages || []) {
+    for (const part of message.parts || []) {
+      if ('text' in part) {
+        total += estimateTokensFromText(part.text || '');
+      } else if ('inlineData' in part) {
+        total += estimateTokensFromInlineData(part.inlineData?.data || '');
+      }
+    }
+    total += 4;
+  }
+
+  return total;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { messages, model, systemInstruction, apiKey } = body;
+    const estimatedTokens = estimateTotalTokens(messages, systemInstruction);
 
     if (!apiKey || !model) {
-      return NextResponse.json({ totalTokens: 0 });
+      return NextResponse.json({ totalTokens: estimatedTokens, estimated: true });
     }
 
     const modelId = model.startsWith('models/') ? model.slice(7) : model;
@@ -33,7 +63,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (requestBody.contents.length === 0) {
-      return NextResponse.json({ totalTokens: 0 });
+      return NextResponse.json({ totalTokens: estimatedTokens, estimated: true });
     }
 
     const response = await fetch(
@@ -46,12 +76,12 @@ export async function POST(request: NextRequest) {
     );
 
     if (!response.ok) {
-      return NextResponse.json({ totalTokens: 0 });
+      return NextResponse.json({ totalTokens: estimatedTokens, estimated: true });
     }
 
     const data = await response.json();
-    return NextResponse.json({ totalTokens: data.totalTokens || 0 });
+    return NextResponse.json({ totalTokens: data.totalTokens || estimatedTokens, estimated: !data.totalTokens });
   } catch {
-    return NextResponse.json({ totalTokens: 0 });
+    return NextResponse.json({ totalTokens: 0, estimated: true });
   }
 }
