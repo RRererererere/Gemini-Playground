@@ -45,6 +45,50 @@ ${history}
 
 Помни: нейронка которая получит этот промпт ничего не знает о твоём анализе. Всё важное должно быть прямо в промпте.`;
 
+const DEEPTHINK_MEMORY_MARKER = '[DeepThink context from previous assistant turn]';
+
+const DEEPTHINK_PROMPT_WITH_MULTIMODAL_CONTEXT = (originalSystem: string) => `
+Original system prompt for the main chat:
+"""
+${originalSystem || 'not set - default assistant behavior'}
+"""
+
+Analyze the full conversation history above.
+
+Important:
+- Treat inlineData parts as first-class context.
+- Some previous assistant turns may contain a text part that starts with "${DEEPTHINK_MEMORY_MARKER}". These are your own previous DeepThink notes from earlier turns.
+- Use those notes as memory so you do not repeat the same reasoning every turn.
+- Build on them, refine them, and only restate what is still useful for the current turn.
+- Keep your visible reasoning rich and readable for the sandbox UI.
+
+Then write the final system prompt for the answering model.
+Put all important guidance inside that final prompt, because the answering model will not see your current reasoning block directly.
+`;
+
+function buildDeepThinkContents(messages: any[]) {
+  return messages
+    .map(message => {
+      const parts = (message.parts || []).filter((part: any) => {
+        if ('text' in part) return true;
+        if ('inlineData' in part) return Boolean(part.inlineData?.data);
+        return false;
+      });
+
+      if (message.role === 'model' && typeof message.deepThinking === 'string' && message.deepThinking.trim()) {
+        parts.push({
+          text: `${DEEPTHINK_MEMORY_MARKER}\n${message.deepThinking.trim()}`,
+        });
+      }
+
+      return {
+        role: message.role === 'model' ? 'model' : 'user',
+        parts,
+      };
+    })
+    .filter(message => message.parts.length > 0);
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -54,16 +98,7 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: 'API key required' }, { status: 400 });
     }
 
-    // Format conversation history as plain text
-    const history = messages
-      .map((m: any) => {
-        const text = m.parts
-          .filter((p: any) => 'text' in p)
-          .map((p: any) => p.text)
-          .join('');
-        return `[${m.role === 'user' ? 'USER' : 'ASSISTANT'}]: ${text}`;
-      })
-      .join('\n\n');
+    const historyContents = buildDeepThinkContents(Array.isArray(messages) ? messages : []);
 
     const modelId = (model || 'gemini-2.0-flash').replace('models/', '');
     // Поддерживают ли модели режим размышлений (thinkingConfig)
@@ -71,9 +106,10 @@ export async function POST(request: NextRequest) {
 
     const requestBody: any = {
       contents: [
+        ...historyContents,
         {
           role: 'user',
-          parts: [{ text: DEEPTHINK_PROMPT(history, systemInstruction || '') }],
+          parts: [{ text: DEEPTHINK_PROMPT_WITH_MULTIMODAL_CONTEXT(systemInstruction || '') }],
         },
       ],
       systemInstruction: {

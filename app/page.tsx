@@ -55,6 +55,31 @@ ${analysis.futureStrategy ? `План на будущее: ${analysis.futureStra
 ---`;
 }
 
+const DEEPTHINK_MEMORY_MARKER = '[DeepThink context from previous assistant turn]';
+
+function buildChatRequestMessages(history: Message[]) {
+  return history
+    .map(message => {
+      const parts: Part[] = message.parts.filter(part => {
+        if ('text' in part) return true;
+        if ('inlineData' in part) return Boolean(part.inlineData?.data);
+        return false;
+      });
+
+      if (message.role === 'model' && message.deepThinking?.trim()) {
+        parts.push({
+          text: `${DEEPTHINK_MEMORY_MARKER}\n${message.deepThinking.trim()}`,
+        });
+      }
+
+      return {
+        role: message.role,
+        parts,
+      };
+    })
+    .filter(message => message.parts.length > 0);
+}
+
 export default function Home() {
   // API Keys (multiple)
   const [apiKeys, setApiKeys] = useState<ApiKeyEntry[]>([]);
@@ -372,7 +397,7 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         signal: abortControllerRef.current.signal,
         body: JSON.stringify({
-          messages: history.map(m => ({ role: m.role, parts: m.parts })),
+          messages: buildChatRequestMessages(history),
           model,
           systemInstruction: effectiveSystemPrompt,
           temperature,
