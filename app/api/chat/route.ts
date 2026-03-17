@@ -1,4 +1,6 @@
 import { NextRequest } from 'next/server';
+import type { ChatTool } from '@/types';
+import { toolToDeclaration } from '@/lib/gemini';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -61,6 +63,7 @@ export async function POST(request: NextRequest) {
       systemInstruction,
       temperature,
       apiKey,
+      tools,
       thinkingBudget, // -1 = авто, 0 = выкл, N = конкретное
       includeThoughts, // request model thoughts (Gemini 2.x/3.x)
     } = body;
@@ -104,6 +107,16 @@ export async function POST(request: NextRequest) {
       requestBody.systemInstruction = {
         parts: [{ text: systemInstruction }],
       };
+    }
+
+    if (Array.isArray(tools) && tools.length > 0) {
+      requestBody.tools = [
+        {
+          functionDeclarations: tools
+            .map((tool: ChatTool) => toolToDeclaration(tool))
+            .filter((tool: { name: string; description: string }) => tool.name && tool.description),
+        },
+      ];
     }
 
     // Режим размышлений (актуально в основном для Gemini 2.x/3.x).
@@ -240,6 +253,10 @@ export async function POST(request: NextRequest) {
                   await writer.write(
                     encoder.encode(`data: ${JSON.stringify({ thinking: part.text, finishReason })}\n\n`)
                   );
+                } else if (part.functionCall) {
+                  await writer.write(
+                    encoder.encode(`data: ${JSON.stringify({ functionCall: part.functionCall, finishReason })}\n\n`)
+                  );
                 } else if (part.text !== undefined) {
                   // Обычный текст
                   await writer.write(
@@ -289,3 +306,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+

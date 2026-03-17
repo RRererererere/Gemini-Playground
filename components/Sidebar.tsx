@@ -27,10 +27,11 @@ import {
   Trash2,
   Unlock,
   Upload,
+  Wrench,
   X,
   type LucideIcon,
 } from 'lucide-react';
-import type { GeminiModel, ApiKeyEntry, SavedChat, SavedSystemPrompt } from '@/types';
+import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, SavedSystemPrompt } from '@/types';
 import { addApiKey, removeApiKey, getKeyStatus, timeUntilUnblock, unblockKey } from '@/lib/apiKeyManager';
 import {
   exportAllSettings,
@@ -39,11 +40,15 @@ import {
   importAllSettings,
   importChatsFromFile,
   importFromGoogleStudio,
+  loadDeepThinkSystemPrompt,
   loadSystemPrompts,
+  saveDeepThinkSystemPrompt,
   saveSystemPrompts,
   createSystemPrompt,
   cloneSystemPrompt,
 } from '@/lib/storage';
+import { DEFAULT_DEEPTHINK_SYSTEM_PROMPT, formatToolPayload } from '@/lib/gemini';
+import { ToolBuilderModal } from '@/components/ToolBuilder';
 
 export interface SidebarSharedProps {
   apiKeys: ApiKeyEntry[];
@@ -56,6 +61,13 @@ export interface SidebarSharedProps {
   onModelsLoad: (models: GeminiModel[]) => void;
   systemPrompt: string;
   onSystemPromptChange: (prompt: string) => void;
+  tools: ChatTool[];
+  onToolsChange: (tools: ChatTool[]) => void;
+  onOpenToolBuilder?: (tool?: ChatTool) => void;
+  onOpenSavePromptDialog?: () => void;
+  onOpenDeepThinkDialog?: () => void;
+  deepThinkSystemPrompt: string;
+  onDeepThinkSystemPromptChange: (prompt: string) => void;
   temperature: number;
   onTemperatureChange: (temp: number) => void;
   thinkingBudget: number;
@@ -71,7 +83,7 @@ export interface SidebarSharedProps {
   onClose?: () => void;
 }
 
-type SettingsSectionId = 'keys' | 'model' | 'system' | 'manage';
+type SettingsSectionId = 'keys' | 'model' | 'system' | 'tools' | 'manage';
 
 function AppBadge() {
   return (
@@ -284,6 +296,13 @@ export function SettingsSidebar({
   onModelsLoad,
   systemPrompt,
   onSystemPromptChange,
+  tools,
+  onToolsChange,
+  onOpenToolBuilder,
+  onOpenSavePromptDialog,
+  onOpenDeepThinkDialog,
+  deepThinkSystemPrompt,
+  onDeepThinkSystemPromptChange,
   temperature,
   onTemperatureChange,
   thinkingBudget,
@@ -298,7 +317,7 @@ export function SettingsSidebar({
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelError, setModelError] = useState('');
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
-  const [openSections, setOpenSections] = useState<Set<SettingsSectionId>>(new Set<SettingsSectionId>(['keys', 'model', 'system', 'manage']));
+  const [openSections, setOpenSections] = useState<Set<SettingsSectionId>>(new Set<SettingsSectionId>(['keys', 'model', 'system', 'tools', 'manage']));
 
   const [newKeyInput, setNewKeyInput] = useState('');
   const [showNewKey, setShowNewKey] = useState(false);
@@ -306,8 +325,6 @@ export function SettingsSidebar({
 
   const [savedPrompts, setSavedPrompts] = useState<SavedSystemPrompt[]>([]);
   const [promptDropdownOpen, setPromptDropdownOpen] = useState(false);
-  const [newPromptName, setNewPromptName] = useState('');
-  const [showSavePromptDialog, setShowSavePromptDialog] = useState(false);
   const activeKeyEntry = apiKeys[activeKeyIndex];
   const activeKeySuffix = activeKeyEntry?.key ? activeKeyEntry.key.slice(-4) : '';
 
@@ -366,6 +383,10 @@ export function SettingsSidebar({
   const savePrompts = (prompts: SavedSystemPrompt[]) => {
     setSavedPrompts(prompts);
     saveSystemPrompts(prompts);
+  };
+
+  const deleteTool = (toolId: string) => {
+    onToolsChange(tools.filter(tool => tool.id !== toolId));
   };
 
   const toggleSection = (sectionId: SettingsSectionId) => {
@@ -439,6 +460,7 @@ export function SettingsSidebar({
         messages: result.messages!,
         model: result.model || model,
         systemPrompt: result.systemPrompt || '',
+        tools: [],
         temperature: result.temperature ?? temperature,
         createdAt: result.createdAt!,
         updatedAt: result.updatedAt!,
@@ -773,6 +795,71 @@ export function SettingsSidebar({
             </section>
 
             <section className="overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--surface-1)]">
+              <SettingsSectionHeader id="tools" label="Инструменты" icon={Wrench} openSections={openSections} onToggle={toggleSection} />
+              {openSections.has('tools') && (
+                <div className="space-y-3 px-4 pb-4">
+                  {tools.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-5 py-6 text-center">
+                      <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--surface-3)] text-[var(--text-muted)]">
+                        <Wrench size={16} />
+                      </div>
+                      <p className="text-sm font-medium text-[var(--text-primary)]">Нет инструментов</p>
+                      <p className="mt-1 text-xs leading-relaxed text-[var(--text-muted)]">
+                        Создайте функции, которые модель сможет вызывать
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {tools.map(tool => (
+                        <div
+                          key={tool.id}
+                          className="group flex items-start gap-3 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 transition-all hover:border-[var(--border-strong)]"
+                        >
+                          <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--surface-3)]">
+                            <Wrench size={12} className="text-[var(--text-muted)]" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium text-[var(--text-primary)]">{tool.name || 'Без имени'}</p>
+                            <p className="mt-0.5 line-clamp-2 text-xs text-[var(--text-dim)]">
+                              {tool.description || 'Нет описания'}
+                            </p>
+                            <p className="mt-1 text-[10px] text-[var(--text-muted)]">
+                              {tool.parameters.length} параметр{tool.parameters.length === 1 ? '' : tool.parameters.length < 5 ? 'а' : 'ов'}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                            <button
+                              onClick={() => onOpenToolBuilder?.(tool)}
+                              className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-dim)] transition-colors hover:text-[var(--text-primary)]"
+                              title="Редактировать"
+                            >
+                              <SlidersHorizontal size={11} />
+                            </button>
+                            <button
+                              onClick={() => deleteTool(tool.id)}
+                              className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-dim)] transition-colors hover:text-[var(--gem-red)]"
+                              title="Удалить"
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => onOpenToolBuilder?.()}
+                    className="flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-xs text-[var(--text-muted)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+                  >
+                    <Plus size={13} />
+                    Создать инструмент
+                  </button>
+                </div>
+              )}
+            </section>
+
+            <section className="overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--surface-1)]">
               <SettingsSectionHeader id="system" label="Система" icon={BookOpen} openSections={openSections} onToggle={toggleSection} />
               {openSections.has('system') && (
                 <div className="space-y-3 px-4 pb-4">
@@ -845,7 +932,7 @@ export function SettingsSidebar({
 
                   {systemPrompt.trim() && (
                     <button
-                      onClick={() => setShowSavePromptDialog(true)}
+                      onClick={() => onOpenSavePromptDialog?.()}
                       className="flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-xs text-[var(--text-dim)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
                     >
                       <Save size={12} />
@@ -853,52 +940,21 @@ export function SettingsSidebar({
                     </button>
                   )}
 
-                  {showSavePromptDialog && (
-                    <div className="space-y-2 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
-                      <input
-                        type="text"
-                        value={newPromptName}
-                        onChange={event => setNewPromptName(event.target.value)}
-                        onKeyDown={event => {
-                          if (event.key === 'Enter' && newPromptName.trim()) {
-                            savePrompts([...savedPrompts, createSystemPrompt(newPromptName, systemPrompt)]);
-                            setNewPromptName('');
-                            setShowSavePromptDialog(false);
-                          }
-                          if (event.key === 'Escape') {
-                            setShowSavePromptDialog(false);
-                            setNewPromptName('');
-                          }
-                        }}
-                        placeholder="Название промпта..."
-                        autoFocus
-                        className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-3)] px-3 py-2 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-dim)]"
-                      />
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => {
-                            if (!newPromptName.trim()) return;
-                            savePrompts([...savedPrompts, createSystemPrompt(newPromptName, systemPrompt)]);
-                            setNewPromptName('');
-                            setShowSavePromptDialog(false);
-                          }}
-                          disabled={!newPromptName.trim()}
-                          className="flex-1 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-black disabled:opacity-40"
-                        >
-                          Сохранить
-                        </button>
-                        <button
-                          onClick={() => {
-                            setShowSavePromptDialog(false);
-                            setNewPromptName('');
-                          }}
-                          className="rounded-xl border border-[var(--border)] bg-[var(--surface-3)] px-3 py-2 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
-                        >
-                          Отмена
-                        </button>
-                      </div>
+                  <div className="mt-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)]">DeepThink промпт</span>
+                      <button
+                        onClick={() => onOpenDeepThinkDialog?.()}
+                        className="flex h-7 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2 text-[10px] text-[var(--text-dim)] transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+                      >
+                        <SlidersHorizontal size={10} />
+                        Редактировать
+                      </button>
                     </div>
-                  )}
+                    <p className="text-xs leading-relaxed text-[var(--text-muted)]">
+                      Системный промпт для анализа DeepThink
+                    </p>
+                  </div>
                 </div>
               )}
             </section>
@@ -1010,6 +1066,7 @@ export function SettingsSidebar({
           </div>
         </div>
       </div>
+
     </SidebarShell>
   );
 }

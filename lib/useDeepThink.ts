@@ -25,6 +25,7 @@ export function useDeepThink() {
     systemInstruction: string,
     apiKey: string,
     model: string,
+    deepThinkSystemPrompt: string,
     onThinkingUpdate?: (thinking: string) => void,
   ): Promise<{ enhancedPrompt: string; analysis: DeepThinkAnalysis | null; error: string | null }> => {
     setState(prev => ({ ...prev, isAnalyzing: true, error: null }));
@@ -33,7 +34,7 @@ export function useDeepThink() {
       const response = await fetch('/api/deepthink', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, systemInstruction, apiKey, model }),
+        body: JSON.stringify({ messages, systemInstruction, apiKey, model, deepThinkSystemPrompt }),
       });
       if (!response.ok) {
         const data = await response.json();

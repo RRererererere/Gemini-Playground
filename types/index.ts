@@ -9,7 +9,48 @@ export interface InlineDataPart {
   };
 }
 
-export type Part = TextPart | InlineDataPart;
+export interface ThoughtPart {
+  text: string;
+  thought: true;
+  thoughtSignature?: string;
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  args: unknown;
+  status?: 'pending' | 'submitted';
+  result?: unknown;
+}
+
+export interface ToolResponse {
+  id: string;
+  toolCallId?: string;
+  name: string;
+  response: unknown;
+}
+
+export type ToolSchemaType = 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object';
+
+export interface ToolSchemaField {
+  id: string;
+  name: string;
+  type: ToolSchemaType;
+  description?: string;
+  required?: boolean;
+  enumValues?: string[];
+  properties?: ToolSchemaField[];
+  items?: ToolSchemaField | null;
+}
+
+export interface ChatTool {
+  id: string;
+  name: string;
+  description: string;
+  parameters: ToolSchemaField[];
+}
+
+export type Part = TextPart | ThoughtPart | InlineDataPart;
 
 export interface AttachedFile {
   id: string;
@@ -25,6 +66,8 @@ export interface Message {
   role: 'user' | 'model';
   parts: Part[];
   files?: AttachedFile[];
+  toolCalls?: ToolCall[];
+  toolResponses?: ToolResponse[];
   apiKeySuffix?: string;   // last 4 chars of the API key used for generation
   isStreaming?: boolean;
   thinking?: string;       // размышления модели (обычные)
@@ -79,6 +122,8 @@ export interface SavedChat {
   messages: Message[];
   model: string;
   systemPrompt: string;
+  deepThinkSystemPrompt?: string;
+  tools?: ChatTool[];
   temperature: number;
   createdAt: number;
   updatedAt: number;

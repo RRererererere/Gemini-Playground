@@ -4,27 +4,44 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { ChatSidebar, SettingsSidebar } from '@/components/Sidebar';
 import ChatMessage from '@/components/ChatMessage';
 import ChatInput from '@/components/ChatInput';
+import { ToolBuilderModal } from '@/components/ToolBuilder';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,
-  Save, X, ArrowDown
+  Save, X, ArrowDown, RefreshCw
 } from 'lucide-react';
 import { useDeepThink } from '@/lib/useDeepThink';
 import DeepThinkToggle from '@/components/DeepThinkToggle';
-import type { Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis } from '@/types';
+import type { ChatTool, Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis, ToolResponse, SavedSystemPrompt } from '@/types';
 import {
   loadApiKeys, saveApiKeys, isRateLimitError,
 } from '@/lib/apiKeyManager';
 import {
   loadSavedChats, saveChatToStorage, deleteChatFromStorage,
   getActiveChatId, setActiveChatId,
+  loadDeepThinkSystemPrompt,
+  saveDeepThinkSystemPrompt,
+  loadSystemPrompts,
+  saveSystemPrompts,
+  createSystemPrompt,
 } from '@/lib/storage';
+import {
+  DEFAULT_DEEPTHINK_SYSTEM_PROMPT,
+  buildChatRequestMessages,
+  getVisibleMessageText,
+  isThoughtPart,
+  normalizeToolResponseInput,
+} from '@/lib/gemini';
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
 const ACTIVE_API_KEY_INDEX_STORAGE_KEY = 'gemini_active_key_index';
+
+function generateToolCallId(name: string, args: unknown) {
+  return `${name}:${JSON.stringify(args)}:${generateId()}`;
+}
 
 function getApiKeySuffix(key?: string | null): string {
   return key ? key.slice(-4) : '';
@@ -41,7 +58,7 @@ function sanitizeApiKeys(keys: ApiKeyEntry[]): ApiKeyEntry[] {
 function generateChatTitle(messages: Message[]): string {
   const firstUser = messages.find(m => m.role === 'user');
   if (!firstUser) return 'Новый чат';
-  const text = (firstUser.parts.find(p => 'text' in p) as any)?.text || '';
+  const text = getVisibleMessageText(firstUser.parts);
   if (!text) return 'Новый чат';
   return text.slice(0, 50).trim() + (text.length > 50 ? '…' : '');
 }
@@ -70,29 +87,6 @@ ${analysis.futureStrategy ? `План на будущее: ${analysis.futureStra
 
 const DEEPTHINK_MEMORY_MARKER = '[DeepThink context from previous assistant turn]';
 
-function buildChatRequestMessages(history: Message[]) {
-  return history
-    .map(message => {
-      const parts: Part[] = message.parts.filter(part => {
-        if ('text' in part) return true;
-        if ('inlineData' in part) return Boolean(part.inlineData?.data);
-        return false;
-      });
-
-      if (message.role === 'model' && message.deepThinking?.trim()) {
-        parts.push({
-          text: `${DEEPTHINK_MEMORY_MARKER}\n${message.deepThinking.trim()}`,
-        });
-      }
-
-      return {
-        role: message.role,
-        parts,
-      };
-    })
-    .filter(message => message.parts.length > 0);
-}
-
 export default function Home() {
   // API Keys (multiple)
   const [apiKeys, setApiKeys] = useState<ApiKeyEntry[]>([]);
@@ -104,6 +98,15 @@ export default function Home() {
 
   // Settings
   const [systemPrompt, setSystemPrompt] = useState<string>('');
+  const [tools, setTools] = useState<ChatTool[]>([]);
+  const [showToolBuilder, setShowToolBuilder] = useState(false);
+  const [editingTool, setEditingTool] = useState<ChatTool | null>(null);
+  const [showSavePromptDialog, setShowSavePromptDialog] = useState(false);
+  const [newPromptName, setNewPromptName] = useState('');
+  const [savedPrompts, setSavedPrompts] = useState<SavedSystemPrompt[]>([]);
+  const [showDeepThinkDialog, setShowDeepThinkDialog] = useState(false);
+  const [deepThinkDraft, setDeepThinkDraft] = useState('');
+  const [deepThinkSystemPrompt, setDeepThinkSystemPrompt] = useState<string>(DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
   const [temperature, setTemperature] = useState<number>(1.0);
   const [thinkingBudget, setThinkingBudget] = useState<number>(-1); // -1=авто
 
@@ -198,11 +201,13 @@ export default function Home() {
       const savedChatSidebar = localStorage.getItem('gemini_chats_sidebar');
       const savedSettingsSidebar = localStorage.getItem('gemini_settings_sidebar');
       const savedThinking = localStorage.getItem('gemini_thinking_budget');
+      const savedDeepThinkPrompt = loadDeepThinkSystemPrompt();
       const mobileViewport = window.matchMedia('(max-width: 767px)').matches;
 
       if (savedModel) setModel(savedModel);
       if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
       if (savedTemp) setTemperature(parseFloat(savedTemp));
+      setDeepThinkSystemPrompt(savedDeepThinkPrompt || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
       if (!mobileViewport) {
         if (savedChatSidebar !== null) setChatSidebarOpen(savedChatSidebar === 'true');
         else if (savedLegacySidebar !== null) setChatSidebarOpen(savedLegacySidebar === 'true');
@@ -222,12 +227,25 @@ export default function Home() {
           setChatTitle(chat.title);
           setModel(chat.model || savedModel || '');
           setSystemPrompt(chat.systemPrompt || savedSysPrompt || '');
+          setDeepThinkSystemPrompt(chat.deepThinkSystemPrompt || savedDeepThinkPrompt || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
+          setTools(chat.tools || []);
           setTemperature(chat.temperature ?? parseFloat(savedTemp || '1'));
         }
       }
     };
     loadData();
   }, []);
+
+  // Load saved prompts
+  useEffect(() => {
+    setSavedPrompts(loadSystemPrompts());
+  }, []);
+
+  // Update deepThinkDraft when dialog opens
+  useEffect(() => {
+    if (!showDeepThinkDialog) return;
+    setDeepThinkDraft(deepThinkSystemPrompt || loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
+  }, [showDeepThinkDialog, deepThinkSystemPrompt]);
 
   // Persist simple settings
   useEffect(() => { if (model) localStorage.setItem('gemini_model', model); }, [model]);
@@ -269,13 +287,7 @@ export default function Home() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: msgs.map(m => ({
-            role: m.role,
-            parts: m.parts.map(p => {
-              if ('text' in p) return { text: p.text };
-              return { inlineData: { mimeType: (p as any).inlineData.mimeType, data: (p as any).inlineData.data } };
-            }),
-          })),
+          messages: buildChatRequestMessages(msgs),
           model: mod,
           systemInstruction: sys,
           apiKey,
@@ -305,6 +317,8 @@ export default function Home() {
       messages: msgs,
       model,
       systemPrompt,
+      deepThinkSystemPrompt,
+      tools,
       temperature,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -321,7 +335,7 @@ export default function Home() {
     setChatTitle(chatObj.title);
     setUnsaved(false);
     return chatObj;
-  }, [currentChatId, chatTitle, model, systemPrompt, temperature, savedChats]);
+  }, [currentChatId, chatTitle, model, systemPrompt, deepThinkSystemPrompt, tools, temperature, savedChats]);
 
   // ============ STREAMING ============
   const streamGeneration = useCallback(async (
@@ -371,6 +385,7 @@ export default function Home() {
         systemPrompt,
         key,
         model,
+        deepThinkSystemPrompt,
         (thinking: string) => {
           setMessages(prev => prev.map(m =>
             m.id !== targetMessageId ? m : {
@@ -431,6 +446,7 @@ export default function Home() {
           messages: buildChatRequestMessages(history),
           model,
           systemInstruction: effectiveSystemPrompt,
+          tools,
           temperature,
           apiKey: key,
           thinkingBudget,
@@ -564,6 +580,32 @@ export default function Home() {
               scheduleFlush();
             }
 
+            // Вызов функции
+            if (parsed.functionCall) {
+              const { name, args } = parsed.functionCall;
+              const callId = generateToolCallId(name, args);
+              
+              setMessages(prev => prev.map(m => {
+                if (m.id !== targetMessageId) return m;
+                const existingCalls = m.toolCalls || [];
+                // Проверяем, не добавлен ли уже этот вызов
+                if (existingCalls.some(c => c.id === callId)) return m;
+                
+                return {
+                  ...m,
+                  toolCalls: [
+                    ...existingCalls,
+                    {
+                      id: callId,
+                      name,
+                      args,
+                      status: 'pending' as const,
+                    },
+                  ],
+                };
+              }));
+            }
+
             // Текст ответа
             if (parsed.text) {
               pendingText += parsed.text;
@@ -593,7 +635,7 @@ export default function Home() {
         m.id === targetMessageId ? { ...m, isStreaming: false } : m
       ));
     }
-  }, [selectedApiKeyEntry, model, systemPrompt, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze]);
+  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt]);
 
   // ============ HANDLERS ============
   const handleSend = useCallback(async (text: string, files: AttachedFile[]) => {
@@ -691,6 +733,64 @@ export default function Home() {
     await streamGeneration(messages, lastMsg.id, true);
   }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
 
+  const handleSubmitToolResults = useCallback(async (
+    modelMessageId: string,
+    responses: Array<{ toolCallId: string; rawResponse: string }>
+  ) => {
+    if (isStreaming || responses.length === 0) return;
+
+    const modelMessage = messages.find(message => message.id === modelMessageId);
+    if (!modelMessage) return;
+
+    const toolResponses: ToolResponse[] = responses.map(item => {
+      const toolCall = modelMessage.toolCalls?.find(call => call.id === item.toolCallId);
+      return {
+        id: generateId(),
+        toolCallId: item.toolCallId,
+        name: toolCall?.name || 'tool',
+        response: normalizeToolResponseInput(item.rawResponse),
+      };
+    });
+
+    const updatedMessages = messages.map(message => {
+      if (message.id !== modelMessageId) return message;
+
+      return {
+        ...message,
+        toolCalls: (message.toolCalls || []).map(call => {
+          const response = toolResponses.find(item => item.toolCallId === call.id);
+          if (!response) return call;
+          return {
+            ...call,
+            status: 'submitted' as const,
+            result: response.response,
+          };
+        }),
+      };
+    });
+
+    const userToolMessage: Message = {
+      id: generateId(),
+      role: 'user',
+      parts: [],
+      toolResponses,
+    };
+
+    const assistantMsgId = generateId();
+    const assistantMsg: Message = {
+      id: assistantMsgId,
+      role: 'model',
+      parts: [{ text: '' }],
+      isStreaming: true,
+      modelName: model,
+      apiKeySuffix: selectedApiKeySuffix || undefined,
+    };
+
+    const nextMessages = [...updatedMessages, userToolMessage, assistantMsg];
+    setMessages(nextMessages);
+    await streamGeneration([...updatedMessages, userToolMessage], assistantMsgId, false);
+  }, [isStreaming, messages, model, selectedApiKeySuffix, streamGeneration]);
+
   const handleEdit = useCallback((id: string, newParts: Part[]) => {
     const msgIdx = messages.findIndex(m => m.id === id);
     if (msgIdx === -1) return;
@@ -777,6 +877,8 @@ export default function Home() {
     }
     handleClearChat();
     setSystemPrompt('');
+    setDeepThinkSystemPrompt(loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
+    setTools([]);
   }, [isStreaming, messages, saveCurrentChat, handleClearChat]);
 
   const handleLoadChat = useCallback((chat: SavedChat) => {
@@ -789,6 +891,8 @@ export default function Home() {
     setChatTitle(chat.title);
     setModel(chat.model);
     setSystemPrompt(chat.systemPrompt || '');
+    setDeepThinkSystemPrompt(chat.deepThinkSystemPrompt || loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
+    setTools(chat.tools || []);
     setTemperature(chat.temperature ?? 1.0);
     setActiveChatId(chat.id);
     setUnsaved(false);
@@ -822,8 +926,8 @@ export default function Home() {
     if (!isStreaming && messages.length > 0 && unsaved) {
       const lastMsg = messages[messages.length - 1];
       // Сохраняем только если получили реальный ответ
-      const lastText = (lastMsg.parts.find(p => 'text' in p) as any)?.text;
-      if (lastMsg.role === 'model' && (lastText || lastMsg.isBlocked)) {
+      const lastText = getVisibleMessageText(lastMsg.parts);
+      if (lastMsg.role === 'model' && (lastText || lastMsg.isBlocked || (lastMsg.toolCalls?.length || 0) > 0)) {
         saveCurrentChat(messages);
       }
     }
@@ -834,7 +938,7 @@ export default function Home() {
   const lastMessage = messages[messages.length - 1];
   const lastIsModel = lastMessage?.role === 'model';
   const canContinue = lastIsModel && !isStreaming && (
-    (!!lastMessage?.parts[0] && 'text' in lastMessage.parts[0] && (lastMessage.parts[0] as any).text.length > 0) ||
+    getVisibleMessageText(lastMessage?.parts || []).length > 0 ||
     !!lastMessage?.deepThinkAnalysis
   );
 
@@ -893,6 +997,21 @@ export default function Home() {
     onModelsLoad: setModels,
     systemPrompt,
     onSystemPromptChange: setSystemPrompt,
+    tools,
+    onToolsChange: setTools,
+    onOpenToolBuilder: (tool?: ChatTool) => {
+      setEditingTool(tool || null);
+      setShowToolBuilder(true);
+    },
+    onOpenSavePromptDialog: () => {
+      setNewPromptName('');
+      setShowSavePromptDialog(true);
+    },
+    onOpenDeepThinkDialog: () => {
+      setShowDeepThinkDialog(true);
+    },
+    deepThinkSystemPrompt,
+    onDeepThinkSystemPromptChange: setDeepThinkSystemPrompt,
     temperature,
     onTemperatureChange: setTemperature,
     thinkingBudget,
@@ -1068,6 +1187,7 @@ export default function Home() {
                   onDelete={handleDelete}
                   onRegenerate={handleRegenerate}
                   onContinue={handleContinue}
+                  onSubmitToolResults={handleSubmitToolResults}
                   onEditPreviousUserMessage={forceEditPreviousUserMessage}
                   onClearForceEdit={clearForceEdit}
                   onEditDeepThinkAnalysis={handleEditDeepThinkAnalysis}
@@ -1116,6 +1236,167 @@ export default function Home() {
         <div className="flex-shrink-0 overflow-hidden border-l border-[var(--border-subtle)] transition-[width,opacity] duration-300 ease-out" style={settingsSidebarStyle}>
           <div className="h-full w-[360px]">
             <SettingsSidebar {...settingsSidebarProps} />
+          </div>
+        </div>
+      )}
+
+      {/* Tool Builder Modal - Global */}
+      <ToolBuilderModal
+        open={showToolBuilder}
+        initialTool={editingTool}
+        onSave={(tool) => {
+          const next = editingTool
+            ? tools.map(item => item.id === tool.id ? tool : item)
+            : [...tools, tool];
+          setTools(next);
+          setShowToolBuilder(false);
+          setEditingTool(null);
+        }}
+        onClose={() => {
+          setShowToolBuilder(false);
+          setEditingTool(null);
+        }}
+      />
+
+      {/* Save Prompt Dialog */}
+      {showSavePromptDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-3xl border border-[var(--border-strong)] bg-[var(--surface-1)] shadow-2xl">
+            <div className="border-b border-[var(--border)] px-6 py-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-[var(--text-primary)]">Сохранить промпт</h3>
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">
+                    Введите название для системного промпта
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowSavePromptDialog(false);
+                    setNewPromptName('');
+                  }}
+                  className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6">
+              <input
+                type="text"
+                value={newPromptName}
+                onChange={e => setNewPromptName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && newPromptName.trim()) {
+                    const updated = [...savedPrompts, createSystemPrompt(newPromptName, systemPrompt)];
+                    setSavedPrompts(updated);
+                    saveSystemPrompts(updated);
+                    setNewPromptName('');
+                    setShowSavePromptDialog(false);
+                  }
+                  if (e.key === 'Escape') {
+                    setShowSavePromptDialog(false);
+                    setNewPromptName('');
+                  }
+                }}
+                placeholder="Название промпта..."
+                autoFocus
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
+              />
+
+              <div className="mt-4 flex gap-2">
+                <button
+                  onClick={() => {
+                    setShowSavePromptDialog(false);
+                    setNewPromptName('');
+                  }}
+                  className="flex-1 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2 text-sm text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+                >
+                  Отмена
+                </button>
+                <button
+                  onClick={() => {
+                    if (!newPromptName.trim()) return;
+                    const updated = [...savedPrompts, createSystemPrompt(newPromptName, systemPrompt)];
+                    setSavedPrompts(updated);
+                    saveSystemPrompts(updated);
+                    setNewPromptName('');
+                    setShowSavePromptDialog(false);
+                  }}
+                  disabled={!newPromptName.trim()}
+                  className="flex-1 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+                >
+                  Сохранить
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DeepThink Dialog */}
+      {showDeepThinkDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="w-full max-w-2xl rounded-3xl border border-[var(--border-strong)] bg-[var(--surface-1)] shadow-2xl">
+            <div className="border-b border-[var(--border)] px-6 py-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-[var(--text-primary)]">DeepThink системный промпт</h3>
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">
+                    Промпт для анализа контекста перед генерацией ответа
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowDeepThinkDialog(false)}
+                  className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6">
+              <textarea
+                value={deepThinkDraft}
+                onChange={e => setDeepThinkDraft(e.target.value)}
+                placeholder="Введите системный промпт для DeepThink..."
+                rows={12}
+                className="w-full rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm leading-relaxed text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
+                style={{ minHeight: '300px', maxHeight: '500px', resize: 'vertical' }}
+              />
+
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <button
+                  onClick={() => {
+                    setDeepThinkDraft(DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
+                  }}
+                  className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+                >
+                  <RefreshCw size={12} />
+                  Сбросить
+                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setShowDeepThinkDialog(false)}
+                    className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2 text-sm text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    onClick={() => {
+                      const nextValue = deepThinkDraft.trim() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT;
+                      setDeepThinkSystemPrompt(nextValue);
+                      saveDeepThinkSystemPrompt(nextValue);
+                      setShowDeepThinkDialog(false);
+                    }}
+                    className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90"
+                  >
+                    Сохранить
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1174,3 +1455,9 @@ function EmptyState({ hasApiKey, hasModel, apiKeysCount, onSuggestionClick }: { 
     </div>
   );
 }
+
+
+
+
+
+

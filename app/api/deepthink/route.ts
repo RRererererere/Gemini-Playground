@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server';
 export const maxDuration = 30;
 export const dynamic = 'force-dynamic';
 
-const DEEPTHINK_SYSTEM = `Ты — внутренний наблюдатель и стратег. Ты читаешь переписку и пишешь системный промпт для другой нейронки, которая будет отвечать.
+const DEFAULT_DEEPTHINK_SYSTEM = `Ты — внутренний наблюдатель и стратег. Ты читаешь переписку и пишешь системный промпт для другой нейронки, которая будет отвечать.
 
 Твой выход — это ТОЛЬКО готовый системный промпт. Никаких заголовков, никакого "вот промпт:", никаких объяснений. Просто сам промпт. Живым текстом.
 
@@ -92,7 +92,7 @@ function buildDeepThinkContents(messages: any[]) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { messages, systemInstruction, apiKey, model } = body;
+    const { messages, systemInstruction, apiKey, model, deepThinkSystemPrompt } = body;
 
     if (!apiKey) {
       return Response.json({ error: 'API key required' }, { status: 400 });
@@ -113,7 +113,7 @@ export async function POST(request: NextRequest) {
         },
       ],
       systemInstruction: {
-        parts: [{ text: DEEPTHINK_SYSTEM }],
+        parts: [{ text: deepThinkSystemPrompt || DEFAULT_DEEPTHINK_SYSTEM }],
       },
       generationConfig: {
         temperature: 0.7,
@@ -266,3 +266,4 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+

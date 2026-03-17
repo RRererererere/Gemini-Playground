@@ -8,7 +8,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import {
   User, Sparkles, Copy, Check, Edit2, Trash2, RefreshCw,
   ChevronDown, ChevronUp, FileText, Image as ImageIcon, Volume2, Braces,
-  Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square
+  Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square, Wrench
 } from 'lucide-react';
 import type { Message, AttachedFile, Part, DeepThinkAnalysis } from '@/types';
 
@@ -22,6 +22,7 @@ interface ChatMessageProps {
   onDelete: (id: string) => void;
   onRegenerate: () => void;
   onContinue: () => void;
+  onSubmitToolResults?: (messageId: string, responses: Array<{ toolCallId: string; rawResponse: string }>) => void;
   onEditPreviousUserMessage?: (modelMessageId: string) => void;
   onClearForceEdit?: (userMessageId: string) => void;
   onEditDeepThinkAnalysis?: (id: string, analysis: DeepThinkAnalysis) => void;
@@ -1158,9 +1159,113 @@ function BlockedIndicator({ reason }: { reason?: string }) {
   );
 }
 
+function ToolCallsBlock({
+  toolCalls,
+  messageId,
+  onSubmitToolResults,
+}: {
+  toolCalls: import('@/types').ToolCall[];
+  messageId: string;
+  onSubmitToolResults?: (messageId: string, responses: Array<{ toolCallId: string; rawResponse: string }>) => void;
+}) {
+  const [responses, setResponses] = useState<Record<string, string>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const allSubmitted = toolCalls.every(call => call.status === 'submitted');
+  const canSubmit = toolCalls.every(call => responses[call.id]?.trim());
+
+  const handleSubmit = () => {
+    if (!onSubmitToolResults || !canSubmit) return;
+    const results = toolCalls.map(call => ({
+      toolCallId: call.id,
+      rawResponse: responses[call.id] || '',
+    }));
+    onSubmitToolResults(messageId, results);
+  };
+
+  return (
+    <div className="mb-3 space-y-2">
+      {toolCalls.map(call => {
+        const isExpanded = expanded[call.id] ?? false;
+        const argsStr = JSON.stringify(call.args, null, 2);
+        const resultStr = call.result ? JSON.stringify(call.result, null, 2) : '';
+
+        return (
+          <div
+            key={call.id}
+            className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-[var(--surface-3)]">
+                  <Wrench size={12} className="text-[var(--text-muted)]" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-[var(--text-primary)]">{call.name}</p>
+                  <p className="text-[10px] text-[var(--text-dim)]">
+                    {call.status === 'submitted' ? 'Отправлено' : 'Ожидает ответа'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setExpanded(prev => ({ ...prev, [call.id]: !prev[call.id] }))}
+                className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]"
+              >
+                {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              </button>
+            </div>
+
+            {isExpanded && (
+              <div className="mt-3 space-y-2">
+                <div>
+                  <p className="mb-1 text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Аргументы</p>
+                  <pre className="overflow-x-auto rounded-lg bg-[var(--surface-3)] p-2 text-xs text-[var(--text-muted)]">
+                    {argsStr}
+                  </pre>
+                </div>
+
+                {call.status === 'submitted' && resultStr ? (
+                  <div>
+                    <p className="mb-1 text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Результат</p>
+                    <pre className="overflow-x-auto rounded-lg bg-[var(--surface-3)] p-2 text-xs text-[var(--text-muted)]">
+                      {resultStr}
+                    </pre>
+                  </div>
+                ) : call.status === 'pending' ? (
+                  <div>
+                    <p className="mb-1 text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Ваш ответ</p>
+                    <textarea
+                      value={responses[call.id] || ''}
+                      onChange={e => setResponses(prev => ({ ...prev, [call.id]: e.target.value }))}
+                      placeholder="Введите результат выполнения функции (JSON или текст)..."
+                      rows={4}
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-3)] px-3 py-2 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
+                    />
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {!allSubmitted && onSubmitToolResults && (
+        <button
+          onClick={handleSubmit}
+          disabled={!canSubmit}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+        >
+          <Check size={14} />
+          Отправить результаты
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function ChatMessage({
   message, index, isLast, isStreaming,
-  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit
+  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -1391,6 +1496,15 @@ export default function ChatMessage({
               <ThinkingBlock
                 thinking={thinking}
                 isStreaming={isStreaming && isLast && !messageText}
+              />
+            )}
+
+            {/* Tool Calls */}
+            {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+              <ToolCallsBlock
+                toolCalls={message.toolCalls}
+                messageId={message.id}
+                onSubmitToolResults={onSubmitToolResults}
               />
             )}
 

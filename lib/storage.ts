@@ -1,4 +1,4 @@
-import type { SavedChat, SavedSystemPrompt, AttachedFile, Message } from '@/types';
+import type { SavedChat, SavedSystemPrompt, AttachedFile, InlineDataPart, Message, Part } from '@/types';
 import { saveFiles, loadFiles } from './fileStorage';
 
 // ====================== FILE HELPERS ======================
@@ -30,8 +30,10 @@ async function stripFileData(messages: Message[]): Promise<Message[]> {
       // Keep metadata, remove data
       return { ...file, data: '', previewUrl: undefined };
     });
-    
-    return { ...msg, files: strippedFiles };
+
+    const strippedParts = msg.parts.filter(part => !('inlineData' in part));
+
+    return { ...msg, files: strippedFiles, parts: strippedParts };
   });
   
   // Save file data to IndexedDB
@@ -60,8 +62,23 @@ async function restoreFileData(messages: Message[]): Promise<Message[]> {
       const data = fileDataMap.get(file.id) || '';
       return restoreFilePreviewUrl({ ...file, data });
     });
-    
-    return { ...msg, files: restoredFiles };
+
+    const inlineParts: InlineDataPart[] = restoredFiles
+      .filter(file => file.data)
+      .map(file => ({
+        inlineData: {
+          mimeType: file.mimeType,
+          data: file.data,
+        },
+      }));
+
+    const textAndOtherParts = msg.parts.filter(part => !('inlineData' in part));
+
+    return {
+      ...msg,
+      files: restoredFiles,
+      parts: [...textAndOtherParts, ...inlineParts] as Part[],
+    };
   });
 }
 
@@ -355,6 +372,7 @@ export function importFromGoogleStudio(file: File): Promise<Partial<SavedChat>> 
 // ====================== СИСТЕМНЫЕ ПРОМПТЫ ======================
 
 const SYSTEM_PROMPTS_KEY = 'gemini_system_prompts';
+const DEEPTHINK_SYSTEM_PROMPT_KEY = 'gemini_deepthink_system_prompt';
 
 export function loadSystemPrompts(): SavedSystemPrompt[] {
   if (typeof window === 'undefined') return [];
@@ -390,6 +408,16 @@ export function cloneSystemPrompt(prompt: SavedSystemPrompt): SavedSystemPrompt 
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
+}
+
+export function loadDeepThinkSystemPrompt(): string {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem(DEEPTHINK_SYSTEM_PROMPT_KEY) || '';
+}
+
+export function saveDeepThinkSystemPrompt(prompt: string): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(DEEPTHINK_SYSTEM_PROMPT_KEY, prompt);
 }
 
 // ====================== ПОЛНЫЙ ЭКСПОРТ/ИМПОРТ НАСТРОЕК ======================
