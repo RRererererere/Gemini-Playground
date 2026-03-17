@@ -19,7 +19,7 @@ export function isThoughtPart(part: Part): part is ThoughtPart {
 export function getVisibleMessageText(parts: Part[]): string {
   return parts
     .filter(part => 'text' in part && !isThoughtPart(part))
-    .map(part => part.text)
+    .map(part => (part as { text: string }).text)
     .join('');
 }
 
