@@ -172,7 +172,7 @@ export function formatToolPayload(value: unknown): string {
 export function buildChatRequestMessages(messages: Message[]) {
   return messages
     .map(message => {
-      const parts = message.parts
+      const parts: any[] = message.parts
         .filter(part => {
           if ('text' in part) return isThoughtPart(part) || Boolean(part.text);
           if ('inlineData' in part) return Boolean(part.inlineData?.data);
