@@ -8,7 +8,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import {
   User, Sparkles, Copy, Check, Edit2, Trash2, RefreshCw,
   ChevronDown, ChevronUp, FileText, Image as ImageIcon, Volume2, Braces,
-  Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square, Wrench
+  Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square, Wrench, Video
 } from 'lucide-react';
 import type { Message, AttachedFile, Part, DeepThinkAnalysis } from '@/types';
 
@@ -33,6 +33,7 @@ function FilePreview({ file }: { file: AttachedFile }) {
   const [isHovered, setIsHovered] = useState(false);
   const isImage = file.mimeType.startsWith('image/');
   const isAudio = file.mimeType.startsWith('audio/');
+  const isVideo = file.mimeType.startsWith('video/');
   const isPdf = file.mimeType === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
   const isJson = file.mimeType === 'application/json' || file.name.endsWith('.json');
   const previewSource = file.previewUrl || (file.data ? `data:${file.mimeType};base64,${file.data}` : '');
@@ -62,6 +63,10 @@ function FilePreview({ file }: { file: AttachedFile }) {
         {showModal && <ImageModal file={file} onClose={() => setShowModal(false)} />}
       </>
     );
+  }
+
+  if (isVideo) {
+    return <VideoPlayer file={file} />;
   }
 
   if (isAudio) {
@@ -421,6 +426,40 @@ function AudioPlayer({ file }: { file: AttachedFile }) {
           </span>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Video player
+function VideoPlayer({ file }: { file: AttachedFile }) {
+  const videoSource = file.previewUrl || `data:${file.mimeType};base64,${file.data}`;
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  };
+
+  return (
+    <div className="w-full max-w-md overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-3)] shadow-sm">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-3 py-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <Video size={14} className="text-purple-400 flex-shrink-0" />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-[var(--text-primary)]">{file.name}</p>
+            <p className="text-[11px] text-[var(--text-dim)]">{formatSize(file.size)}</p>
+          </div>
+        </div>
+      </div>
+      <video
+        controls
+        className="w-full bg-black"
+        style={{ maxHeight: '400px' }}
+        preload="metadata"
+      >
+        <source src={videoSource} type={file.mimeType} />
+        Ваш браузер не поддерживает воспроизведение видео.
+      </video>
     </div>
   );
 }
@@ -1304,9 +1343,9 @@ export default function ChatMessage({
     }
   }, [messageText, isStreaming, isLast]);
 
-  // Авто-открытие редактора для пустых сообщений
+  // Авто-открытие редактора для пустых сообщений (но не для tool responses)
   useEffect(() => {
-    if (messageText === '' && isUser && !isEditing) {
+    if (messageText === '' && isUser && !isEditing && !message.toolResponses?.length) {
       setEditText('');
       setIsEditing(true);
     }
@@ -1506,6 +1545,40 @@ export default function ChatMessage({
                 messageId={message.id}
                 onSubmitToolResults={onSubmitToolResults}
               />
+            )}
+
+            {/* Tool Responses (в user сообщениях) */}
+            {isUser && message.toolResponses && message.toolResponses.length > 0 && (
+              <div className="mb-3 space-y-2">
+                {message.toolResponses.map(response => {
+                  const resultStr = typeof response.response === 'string' 
+                    ? response.response 
+                    : JSON.stringify(response.response, null, 2);
+                  
+                  return (
+                    <div
+                      key={response.id}
+                      className="rounded-xl border border-green-500/30 bg-green-500/5 p-3"
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-green-500/20">
+                          <Check size={12} className="text-green-400" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-[var(--text-primary)]">{response.name}</p>
+                          <p className="text-[10px] text-green-400">Результат отправлен</p>
+                        </div>
+                      </div>
+                      <div>
+                        <p className="mb-1 text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Результат</p>
+                        <pre className="overflow-x-auto rounded-lg bg-[var(--surface-3)] p-2 text-xs text-[var(--text-muted)] max-h-32">
+                          {resultStr}
+                        </pre>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
 
             {/* Обычный контент */}

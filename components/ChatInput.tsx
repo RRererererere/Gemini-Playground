@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback } from 'react';
 import {
   Send, Square, Paperclip, X, FileText, Image as ImageIcon,
-  Volume2, Braces, Plus, ArrowRight
+  Volume2, Braces, Plus, ArrowRight, Video
 } from 'lucide-react';
 import type { AttachedFile } from '@/types';
 
@@ -30,6 +30,15 @@ const ACCEPTED_TYPES = {
   'audio/ogg': ['.ogg'],
   'audio/mp4': ['.m4a'],
   'audio/webm': ['.weba'],
+  'video/mp4': ['.mp4'],
+  'video/mpeg': ['.mpeg', '.mpg'],
+  'video/quicktime': ['.mov'],
+  'video/x-msvideo': ['.avi'],
+  'video/x-flv': ['.flv'],
+  'video/x-matroska': ['.mkv'],
+  'video/webm': ['.webm'],
+  'video/3gpp': ['.3gp'],
+  'video/3gpp2': ['.3g2'],
   'text/plain': ['.txt'],
   'application/json': ['.json'],
 };
@@ -50,10 +59,11 @@ function fileToBase64(file: File): Promise<string> {
 function FileChip({ file, onRemove }: { file: AttachedFile; onRemove: () => void }) {
   const isImage = file.mimeType.startsWith('image/');
   const isAudio = file.mimeType.startsWith('audio/');
+  const isVideo = file.mimeType.startsWith('video/');
   const isPdf = file.mimeType === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
   const isJson = file.mimeType === 'application/json' || file.name.endsWith('.json');
-  const Icon = isImage ? ImageIcon : isAudio ? Volume2 : isJson ? Braces : FileText;
-  const color = isImage ? '#4ade80' : isAudio ? '#f59e0b' : isPdf ? '#f87171' : isJson ? '#60a5fa' : '#94a3b8';
+  const Icon = isImage ? ImageIcon : isVideo ? Video : isAudio ? Volume2 : isJson ? Braces : FileText;
+  const color = isImage ? '#4ade80' : isVideo ? '#a78bfa' : isAudio ? '#f59e0b' : isPdf ? '#f87171' : isJson ? '#60a5fa' : '#94a3b8';
 
   if (isPdf && file.previewUrl) {
     return (
@@ -129,6 +139,13 @@ export default function ChatInput({
     if (lowerName.endsWith('.json')) finalMimeType = 'application/json';
     if (lowerName.endsWith('.pdf')) finalMimeType = 'application/pdf';
     if (lowerName.endsWith('.m4a')) finalMimeType = 'audio/mp4';
+    if (lowerName.endsWith('.mp4') && !mimeType.startsWith('video/')) finalMimeType = 'video/mp4';
+    if (lowerName.endsWith('.mov')) finalMimeType = 'video/quicktime';
+    if (lowerName.endsWith('.avi')) finalMimeType = 'video/x-msvideo';
+    if (lowerName.endsWith('.mkv')) finalMimeType = 'video/x-matroska';
+    if (lowerName.endsWith('.webm') && !mimeType.startsWith('video/')) finalMimeType = 'video/webm';
+    if (lowerName.endsWith('.3gp')) finalMimeType = 'video/3gpp';
+    if (lowerName.endsWith('.3g2')) finalMimeType = 'video/3gpp2';
 
     try {
       const data = await fileToBase64(file);
@@ -188,7 +205,7 @@ export default function ChatInput({
           <div className="bg-[var(--surface-2)] border-2 border-dashed border-[var(--accent)] rounded-2xl p-12 text-center">
             <Paperclip size={32} className="text-[var(--accent)] mx-auto mb-3" />
             <p className="text-lg font-500 text-white">Drop files here</p>
-            <p className="text-sm text-[var(--text-muted)] mt-1">Images, PDF, audio, text, JSON</p>
+            <p className="text-sm text-[var(--text-muted)] mt-1">Images, video, PDF, audio, text, JSON</p>
           </div>
         </div>
       )}
@@ -237,7 +254,7 @@ export default function ChatInput({
               onClick={() => fileInputRef.current?.click()}
               disabled={disabled || isStreaming}
               className="flex items-center justify-center w-10 h-10 sm:w-8 sm:h-8 text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Attach file (image, PDF, audio, txt, json)"
+              title="Attach file (image, video, PDF, audio, txt, json)"
             >
               <Paperclip size={18} className="sm:w-[15px] sm:h-[15px]" />
             </button>
@@ -245,7 +262,7 @@ export default function ChatInput({
               ref={fileInputRef}
               type="file"
               multiple
-              accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.mp3,.wav,.ogg,.m4a,.weba,.txt,.json"
+              accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.mp3,.wav,.ogg,.m4a,.weba,.mp4,.mpeg,.mpg,.mov,.avi,.flv,.mkv,.webm,.3gp,.3g2,.txt,.json"
               className="hidden"
               onChange={e => e.target.files && handleFiles(e.target.files)}
             />

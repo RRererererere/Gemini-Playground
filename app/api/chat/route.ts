@@ -79,19 +79,49 @@ export async function POST(request: NextRequest) {
 
     // Построить contents
     const contents = messages
-      .map((m: any) => ({
-        role: m.role,
-        parts: m.parts
-          .filter((p: any) => {
-            if ('text' in p) return true;
-            if ('inlineData' in p) return p.inlineData?.data;
-            return false;
-          })
-          .map((p: any) => {
-            if ('text' in p) return { text: p.text || '' };
-            return p;
-          }),
-      }))
+      .map((m: any) => {
+        const parts: any[] = [];
+        
+        // Обработка обычных parts (text, inlineData)
+        if (m.parts && Array.isArray(m.parts)) {
+          m.parts.forEach((p: any) => {
+            if ('text' in p && p.text) {
+              parts.push({ text: p.text });
+            } else if ('inlineData' in p && p.inlineData?.data) {
+              parts.push(p);
+            }
+          });
+        }
+        
+        // Добавление functionCall (из toolCalls)
+        if (m.toolCalls && Array.isArray(m.toolCalls)) {
+          m.toolCalls.forEach((call: any) => {
+            parts.push({
+              functionCall: {
+                name: call.name,
+                args: call.args || {},
+              },
+            });
+          });
+        }
+        
+        // Добавление functionResponse (из toolResponses)
+        if (m.toolResponses && Array.isArray(m.toolResponses)) {
+          m.toolResponses.forEach((response: any) => {
+            parts.push({
+              functionResponse: {
+                name: response.name,
+                response: response.response,
+              },
+            });
+          });
+        }
+        
+        return {
+          role: m.role,
+          parts,
+        };
+      })
       .filter((m: any) => m.parts.length > 0);
 
     const requestBody: any = {

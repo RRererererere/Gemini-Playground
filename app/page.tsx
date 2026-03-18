@@ -308,7 +308,7 @@ export default function Home() {
   }, [messages, systemPrompt, model, selectedApiKey, countTokens, isStreaming]);
 
   // ============ SAVE CHAT ============
-  const saveCurrentChat = useCallback(async (msgs: Message[], title?: string) => {
+  const saveCurrentChat = useCallback(async (msgs: Message[], title?: string, updateCurrentId: boolean = true) => {
     if (msgs.length === 0) return;
     const chatId = currentChatId || generateId();
     const chatObj: SavedChat = {
@@ -330,9 +330,14 @@ export default function Home() {
     await saveChatToStorage(chatObj);
     const updated = await loadSavedChats();
     setSavedChats(updated);
-    setCurrentChatId(chatId);
-    setActiveChatId(chatId);
-    setChatTitle(chatObj.title);
+    
+    // Обновляем currentChatId только если это не создание нового чата
+    if (updateCurrentId) {
+      setCurrentChatId(chatId);
+      setActiveChatId(chatId);
+      setChatTitle(chatObj.title);
+    }
+    
     setUnsaved(false);
     return chatObj;
   }, [currentChatId, chatTitle, model, systemPrompt, deepThinkSystemPrompt, tools, temperature, savedChats]);
@@ -871,10 +876,11 @@ export default function Home() {
 
   const handleNewChat = useCallback(() => {
     if (isStreaming) return;
-    // Автосохранение текущего чата
+    // Автосохранение текущего чата (без обновления currentChatId)
     if (messages.length > 0) {
-      saveCurrentChat(messages);
+      saveCurrentChat(messages, undefined, false).catch(console.error);
     }
+    // Сразу очищаем чат
     handleClearChat();
     setSystemPrompt('');
     setDeepThinkSystemPrompt(loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
