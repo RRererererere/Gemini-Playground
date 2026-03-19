@@ -417,7 +417,7 @@ export default function Home() {
 
       const dtResult = await deepThinkAnalyze(
         history,
-        systemPrompt,
+        effectiveSystemPrompt, // Передаём с памятью!
         key,
         model,
         deepThinkSystemPrompt,

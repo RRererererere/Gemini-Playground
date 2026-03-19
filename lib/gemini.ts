@@ -182,6 +182,9 @@ export function buildChatRequestMessages(messages: Message[]) {
         .map(part => partToGeminiPart(part));
 
       for (const toolCall of message.toolCalls || []) {
+        // Пропускаем скрытые tool calls (memory tools)
+        if (toolCall.hidden) continue;
+        
         parts.push({
           functionCall: {
             id: toolCall.id,
@@ -194,6 +197,9 @@ export function buildChatRequestMessages(messages: Message[]) {
       }
 
       for (const toolResponse of message.toolResponses || []) {
+        // Пропускаем скрытые responses (они без парного functionCall)
+        if ((toolResponse as any).hidden) continue;
+        
         parts.push(buildToolResponsePart(toolResponse));
       }
 

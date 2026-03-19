@@ -50,12 +50,23 @@ export function buildMemoryPrompt(
   parts.push('- forget_memory → когда факт устарел или пользователь просит забыть');
   parts.push('- Связывай новые воспоминания с существующими через related_to — это строит граф знаний');
   parts.push('');
-  parts.push('### КРИТИЧЕСКИ ВАЖНО:');
-  parts.push('- Инструменты памяти выполняются АВТОМАТИЧЕСКИ и МОЛЧА в фоне');
-  parts.push('- Ты ДОЛЖЕН продолжить свой текстовый ответ СРАЗУ после вызова memory tool');
-  parts.push('- Пример: save_memory(fact="Зовут Дима") → "Приятно познакомиться, Дима!"');
-  parts.push('- НЕ жди подтверждения, НЕ останавливайся - просто продолжай говорить');
-  parts.push('- НЕ упоминай явно что ты что-то сохранил - используй память естественно');
+  parts.push('### КРИТИЧЕСКИ ВАЖНО - КАК РАБОТАЮТ ИНСТРУМЕНТЫ ПАМЯТИ:');
+  parts.push('');
+  parts.push('Memory tools (save_memory, update_memory, forget_memory) работают по принципу "fire-and-forget":');
+  parts.push('1. Ты вызываешь функцию → она выполняется МГНОВЕННО и МОЛЧА на клиенте');
+  parts.push('2. Ты НЕ получишь functionResponse - его вообще нет');
+  parts.push('3. Ты ДОЛЖЕН продолжить генерацию текста В ТОМ ЖЕ turn');
+  parts.push('4. Считай что функция ВСЕГДА выполняется успешно');
+  parts.push('');
+  parts.push('ПРАВИЛЬНО:');
+  parts.push('  Один turn: functionCall(save_memory) + text("Приятно познакомиться, Дима!")');
+  parts.push('');
+  parts.push('НЕПРАВИЛЬНО:');
+  parts.push('  Turn 1: functionCall(save_memory) [стоп]');
+  parts.push('  Turn 2: text("Приятно...") ❌');
+  parts.push('');
+  parts.push('Gemini API поддерживает несколько parts в одном candidate - используй это!');
+  parts.push('НЕ упоминай явно что ты что-то сохранил - просто используй память естественно.');
 
   const usedMemoryIds = relevant.map(m => m.id);
 
