@@ -24,6 +24,7 @@ export interface ToolCall {
   status?: 'pending' | 'submitted';
   result?: unknown;
   hidden?: boolean; // скрытый tool call (не показывается в UI, но отправляется в API)
+  isMemoryTool?: boolean; // memory tool (не показывается в UI, но отправляется в API)
 }
 
 export interface ToolResponse {
@@ -32,6 +33,7 @@ export interface ToolResponse {
   name: string;
   response: unknown;
   hidden?: boolean; // скрытый response (не показывается в UI, но отправляется в API)
+  isMemoryTool?: boolean; // memory tool response (не показывается в UI, но отправляется в API)
 }
 
 export type ToolSchemaType = 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object';

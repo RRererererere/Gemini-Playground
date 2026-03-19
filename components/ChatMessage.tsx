@@ -1208,8 +1208,8 @@ function ToolCallsBlock({
   messageId: string;
   onSubmitToolResults?: (messageId: string, responses: Array<{ toolCallId: string; rawResponse: string }>) => void;
 }) {
-  // Фильтруем скрытые tool calls (memory tools)
-  const visibleToolCalls = toolCalls.filter(call => !call.hidden);
+  // Фильтруем memory tool calls - они не показываются в UI
+  const visibleToolCalls = toolCalls.filter(call => !(call as any).isMemoryTool);
   
   const [responses, setResponses] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {

@@ -473,80 +473,128 @@ export default function Home() {
     }
 
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: abortControllerRef.current.signal,
-        body: JSON.stringify({
-          messages: buildChatRequestMessages(history),
-          model,
-          systemInstruction: effectiveSystemPrompt,
-          tools: tools, // Только пользовательские tools
-          memoryTools: memoryEnabled ? MEMORY_TOOLS : [], // Инструменты памяти отдельно
-          temperature,
-          apiKey: key,
-          thinkingBudget,
-          includeThoughts: deepThinkState.enabled === true,
-        }),
-      });
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      // Tool loop — поддерживает несколько раундов memory tool calls
+      // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+      
+      // Накапливаем toolCalls/toolResponses между раундами
+      let accumulatedToolCalls: any[] = [];
+      let accumulatedToolResponses: any[] = [];
+      let memoryCallsThisTurn = 0;
+      const MAX_MEMORY_CALLS = 3;
+      let shouldContinueLoop = true;
+      
+      while (shouldContinueLoop) {
+        shouldContinueLoop = false; // по умолчанию — выходим после одного прохода
+        
+        // Строим историю с накопленными tool calls/responses от предыдущих раундов
+        const messagesForRequest = buildChatRequestMessages(history);
+        
+        // Если есть накопленные tool responses — добавляем их как отдельный turn
+        // (assistant turn с functionCall + user turn с functionResponse)
+        let contentsForRequest = messagesForRequest;
+        if (accumulatedToolCalls.length > 0 && accumulatedToolResponses.length > 0) {
+          // Добавляем assistant turn с functionCalls (включая thoughtSignature из оригинального вызова)
+          contentsForRequest = [
+            ...messagesForRequest,
+            {
+              role: 'model',
+              parts: accumulatedToolCalls.map(tc => ({
+                functionCall: { id: tc.id, name: tc.name, args: tc.args },
+                ...(tc.thoughtSignature ? { thoughtSignature: tc.thoughtSignature } : {}),
+              })),
+            },
+            {
+              role: 'user',
+              parts: accumulatedToolResponses.map(tr => ({
+                functionResponse: {
+                  id: tr.toolCallId,
+                  name: tr.name,
+                  response: tr.response,
+                },
+              })),
+            },
+          ];
+        }
+        
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: abortControllerRef.current!.signal,
+          body: JSON.stringify({
+            messages: contentsForRequest,
+            model,
+            systemInstruction: effectiveSystemPrompt,
+            tools: tools,
+            // После MAX_MEMORY_CALLS — отключаем memory tools чтобы не зациклиться
+            memoryTools: (memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS) ? MEMORY_TOOLS : [],
+            temperature,
+            apiKey: key,
+            thinkingBudget,
+            includeThoughts: deepThinkState.enabled === true,
+          }),
+        });
 
-      if (!response.ok) {
-        setError(`API error: ${response.status}`);
-        return;
-      }
-
-      const reader = response.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let thinkingAccumulator = isAppending ? (history.find(m => m.id === targetMessageId)?.thinking || '') : '';
-      let pendingText = '';
-      let pendingThinking = '';
-      let flushScheduled = false;
-
-      const flush = () => {
-        flushScheduled = false;
-        if (!pendingText && !pendingThinking) return;
-
-        const textChunk = pendingText;
-        const thinkingChunk = pendingThinking;
-        pendingText = '';
-        pendingThinking = '';
-
-        if (thinkingChunk) {
-          thinkingAccumulator += thinkingChunk;
-          setMessages(prev => prev.map(m =>
-            m.id !== targetMessageId ? m : { ...m, thinking: thinkingAccumulator, isStreaming: true }
-          ));
+        if (!response.ok) {
+          setError(`API error: ${response.status}`);
+          return;
         }
 
-        if (textChunk) {
-          setMessages(prev => prev.map(m => {
-            if (m.id !== targetMessageId) return m;
-            const hasTextPart = m.parts.some(p => 'text' in p);
-            if (hasTextPart) {
-              return {
-                ...m,
-                parts: m.parts.map(p =>
-                  'text' in p ? { text: (p as { text: string }).text + textChunk } : p
-                ),
-                isStreaming: true,
-              };
-            }
-            return { ...m, parts: [...m.parts, { text: textChunk }], isStreaming: true };
-          }));
-        }
-      };
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let thinkingAccumulator = isAppending ? (history.find(m => m.id === targetMessageId)?.thinking || '') : '';
+        let pendingText = '';
+        let pendingThinking = '';
+        let flushScheduled = false;
+        
+        // tool calls собранные в этом раунде
+        const roundToolCalls: any[] = [];
 
-      const scheduleFlush = () => {
-        if (flushScheduled) return;
-        flushScheduled = true;
-        // Batch frequent stream chunks into a single React update per frame.
-        requestAnimationFrame(flush);
-      };
+        const flush = () => {
+          flushScheduled = false;
+          if (!pendingText && !pendingThinking) return;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+          const textChunk = pendingText;
+          const thinkingChunk = pendingThinking;
+          pendingText = '';
+          pendingThinking = '';
+
+          if (thinkingChunk) {
+            thinkingAccumulator += thinkingChunk;
+            setMessages(prev => prev.map(m =>
+              m.id !== targetMessageId ? m : { ...m, thinking: thinkingAccumulator, isStreaming: true }
+            ));
+          }
+
+          if (textChunk) {
+            setMessages(prev => prev.map(m => {
+              if (m.id !== targetMessageId) return m;
+              const hasTextPart = m.parts.some(p => 'text' in p);
+              if (hasTextPart) {
+                return {
+                  ...m,
+                  parts: m.parts.map(p =>
+                    'text' in p ? { text: (p as { text: string }).text + textChunk } : p
+                  ),
+                  isStreaming: true,
+                };
+              }
+              return { ...m, parts: [...m.parts, { text: textChunk }], isStreaming: true };
+            }));
+          }
+        };
+
+        const scheduleFlush = () => {
+          if (flushScheduled) return;
+          flushScheduled = true;
+          // Batch frequent stream chunks into a single React update per frame.
+          requestAnimationFrame(flush);
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -627,6 +675,10 @@ export default function Home() {
               const isMemoryTool = memoryEnabled && (name === 'save_memory' || name === 'update_memory' || name === 'forget_memory');
               
               if (isMemoryTool) {
+                // Лимит вызовов за turn
+                if (memoryCallsThisTurn >= MAX_MEMORY_CALLS) continue;
+                memoryCallsThisTurn++;
+                
                 let memoryResult: { success: boolean; id?: string; error?: string } = { success: false };
                 
                 if (name === 'save_memory') {
@@ -645,149 +697,111 @@ export default function Home() {
                     
                     memoryResult = { success: true, id: memory.id };
                     
-                    // Добавляем операцию в сообщение для отображения
                     setMessages(prev => prev.map(m => {
                       if (m.id !== targetMessageId) return m;
-                      const ops = m.memoryOperations || [];
                       return {
                         ...m,
-                        memoryOperations: [
-                          ...ops,
-                          {
-                            type: 'save' as const,
-                            scope: args.scope,
-                            fact: args.fact,
-                            category: args.category,
-                            confidence: args.confidence,
-                            memoryId: memory.id,
-                          },
-                        ],
+                        memoryOperations: [...(m.memoryOperations || []), {
+                          type: 'save' as const,
+                          scope: args.scope,
+                          fact: args.fact,
+                          category: args.category,
+                          confidence: args.confidence,
+                          memoryId: memory.id,
+                        }],
                       };
                     }));
                   } catch (e) {
-                    console.error('Failed to save memory:', e);
                     memoryResult = { success: false, error: String(e) };
                   }
                 } else if (name === 'update_memory') {
                   try {
-                    const globalMems = getMemories('global');
-                    const localMems = currentChatId ? getMemories('local', currentChatId) : [];
-                    const allMems = [...globalMems, ...localMems];
+                    const allMems = [
+                      ...getMemories('global'),
+                      ...(currentChatId ? getMemories('local', currentChatId) : []),
+                    ];
                     const oldMemory = allMems.find(m => m.id === args.id);
-                    const oldFact = oldMemory?.fact;
-
                     updateMemory(
                       args.id,
                       oldMemory?.scope || 'global',
                       { fact: args.fact, confidence: args.confidence },
                       oldMemory?.scope === 'local' ? (currentChatId || undefined) : undefined
                     );
-
                     memoryResult = { success: true, id: args.id };
-
                     setMessages(prev => prev.map(m => {
                       if (m.id !== targetMessageId) return m;
-                      const ops = m.memoryOperations || [];
                       return {
                         ...m,
-                        memoryOperations: [
-                          ...ops,
-                          {
-                            type: 'update' as const,
-                            scope: oldMemory?.scope || 'global',
-                            fact: args.fact,
-                            oldFact,
-                            confidence: args.confidence,
-                            memoryId: args.id,
-                          },
-                        ],
+                        memoryOperations: [...(m.memoryOperations || []), {
+                          type: 'update' as const,
+                          scope: oldMemory?.scope || 'global',
+                          fact: args.fact,
+                          oldFact: oldMemory?.fact,
+                          confidence: args.confidence,
+                          memoryId: args.id,
+                        }],
                       };
                     }));
                   } catch (e) {
-                    console.error('Failed to update memory:', e);
                     memoryResult = { success: false, error: String(e) };
                   }
                 } else if (name === 'forget_memory') {
                   try {
-                    const globalMems = getMemories('global');
-                    const localMems = currentChatId ? getMemories('local', currentChatId) : [];
-                    const allMems = [...globalMems, ...localMems];
+                    const allMems = [
+                      ...getMemories('global'),
+                      ...(currentChatId ? getMemories('local', currentChatId) : []),
+                    ];
                     const memory = allMems.find(m => m.id === args.id);
-
                     if (memory) {
                       forgetMemory(
                         args.id,
                         memory.scope,
                         memory.scope === 'local' ? (currentChatId || undefined) : undefined
                       );
-
                       memoryResult = { success: true, id: args.id };
-
                       setMessages(prev => prev.map(m => {
                         if (m.id !== targetMessageId) return m;
-                        const ops = m.memoryOperations || [];
                         return {
                           ...m,
-                          memoryOperations: [
-                            ...ops,
-                            {
-                              type: 'forget' as const,
-                              scope: memory.scope,
-                              fact: memory.fact,
-                              reason: args.reason,
-                              memoryId: args.id,
-                            },
-                          ],
+                          memoryOperations: [...(m.memoryOperations || []), {
+                            type: 'forget' as const,
+                            scope: memory.scope,
+                            fact: memory.fact,
+                            reason: args.reason,
+                            memoryId: args.id,
+                          }],
                         };
                       }));
                     } else {
                       memoryResult = { success: false, error: 'Memory not found' };
                     }
                   } catch (e) {
-                    console.error('Failed to forget memory:', e);
                     memoryResult = { success: false, error: String(e) };
                   }
                 }
                 
-                // Добавляем скрытый toolCall + toolResponse для модели
-                // Это позволяет модели видеть результат и не зацикливаться
-                setMessages(prev => prev.map(m => {
-                  if (m.id !== targetMessageId) return m;
-                  
-                  const hiddenToolCall = {
-                    id: callId,
-                    name,
-                    args,
-                    status: 'submitted' as const,
-                    result: memoryResult,
-                    hidden: true, // Помечаем как скрытый для UI
-                  };
-                  
-                  const hiddenToolResponse = {
-                    id: generateId(),
-                    toolCallId: callId,
-                    name,
-                    response: memoryResult,
-                    hidden: true, // Помечаем как скрытый для UI
-                  };
-                  
-                  return {
-                    ...m,
-                    toolCalls: [...(m.toolCalls || []), hiddenToolCall],
-                    toolResponses: [...(m.toolResponses || []), hiddenToolResponse],
-                  };
-                }));
+                // Накапливаем для следующего раунда (сохраняем thoughtSignature!)
+                roundToolCalls.push({ 
+                  id: callId, 
+                  name, 
+                  args,
+                  thoughtSignature: parsed.thoughtSignature, // Сохраняем для отправки обратно
+                });
+                accumulatedToolResponses.push({
+                  toolCallId: callId,
+                  name,
+                  response: { success: memoryResult.success, id: memoryResult.id },
+                });
                 
-                // НЕ добавляем в видимые tool calls - пропускаем блок ниже
-              }
-              
-              // Обычные tool calls (не память) - добавляем только если это НЕ memory tool
-              if (!isMemoryTool) {
+                // После стрима сделаем ещё один раунд
+                shouldContinueLoop = true;
+                
+              } else {
+                // Обычные tool calls
                 setMessages(prev => prev.map(m => {
                   if (m.id !== targetMessageId) return m;
                   const existingCalls = m.toolCalls || [];
                   const existingIndex = existingCalls.findIndex(c => c.id === callId);
-                  // Проверяем, не добавлен ли уже этот вызов
                   if (existingIndex >= 0) {
                     const nextCalls = [...existingCalls];
                     nextCalls[existingIndex] = {
@@ -797,28 +811,23 @@ export default function Home() {
                       thought: parsed.thought === true,
                       thoughtSignature: parsed.thoughtSignature || nextCalls[existingIndex].thoughtSignature,
                     };
-
-                    return {
-                      ...m,
-                      toolCalls: nextCalls,
-                    };
+                    return { ...m, toolCalls: nextCalls };
                   }
-                  
-                return {
-                  ...m,
-                  toolCalls: [
-                    ...existingCalls,
-                    {
-                      id: callId,
-                      name,
-                      args,
-                      thought: parsed.thought === true,
-                      thoughtSignature: parsed.thoughtSignature,
-                      status: 'pending' as const,
-                    },
-                  ],
-                };
-              }));
+                  return {
+                    ...m,
+                    toolCalls: [
+                      ...existingCalls,
+                      {
+                        id: callId,
+                        name,
+                        args,
+                        thought: parsed.thought === true,
+                        thoughtSignature: parsed.thoughtSignature,
+                        status: 'pending' as const,
+                      },
+                    ],
+                  };
+                }));
               }
             }
 
@@ -830,14 +839,20 @@ export default function Home() {
           } catch {}
         }
 
+        }
+
+        // Flush any buffered chunks before finishing.
+        flush();
+
+        // Если были memory tool calls в этом раунде — накапливаем их для следующего
+        if (roundToolCalls.length > 0) {
+          accumulatedToolCalls = [...accumulatedToolCalls, ...roundToolCalls];
+          // Сбрасываем текст в сообщении чтобы модель дописала с чистого листа
+          setMessages(prev => prev.map(m =>
+            m.id !== targetMessageId ? m : { ...m, parts: [{ text: '' }], isStreaming: true }
+          ));
+        }
       }
-
-      // Flush any buffered chunks before finishing.
-      flush();
-
-      // Retry с другим ключом если rate limit
-        // Сбросить накопленный текст только если это не продолжение
-        // Рекурсивный вызов с обновлёнными ключами
 
     } catch (e: any) {
       if (e.name !== 'AbortError') {
