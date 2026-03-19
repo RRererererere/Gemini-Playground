@@ -21,6 +21,10 @@ function estimateTotalTokens(messages: any[], systemInstruction?: string): numbe
         total += estimateTokensFromText(part.text || '');
       } else if ('inlineData' in part) {
         total += estimateTokensFromInlineData(part.inlineData?.data || '');
+      } else if ('functionCall' in part) {
+        total += estimateTokensFromText(JSON.stringify(part.functionCall || {}));
+      } else if ('functionResponse' in part) {
+        total += estimateTokensFromText(JSON.stringify(part.functionResponse || {}));
       }
     }
     total += 4;
@@ -50,6 +54,8 @@ export async function POST(request: NextRequest) {
             // Only include non-empty parts
             if ('text' in p) return p.text && p.text.length > 0;
             if ('inlineData' in p) return p.inlineData?.data;
+            if ('functionCall' in p) return Boolean(p.functionCall?.name);
+            if ('functionResponse' in p) return Boolean(p.functionResponse?.name);
             return false;
           }),
         }))

@@ -19,6 +19,8 @@ export interface ToolCall {
   id: string;
   name: string;
   args: unknown;
+  thoughtSignature?: string;
+  thought?: boolean;
   status?: 'pending' | 'submitted';
   result?: unknown;
 }
@@ -64,6 +66,7 @@ export interface AttachedFile {
 export interface Message {
   id: string;
   role: 'user' | 'model';
+  kind?: 'tool_response';
   parts: Part[];
   files?: AttachedFile[];
   toolCalls?: ToolCall[];

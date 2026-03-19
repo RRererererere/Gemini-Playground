@@ -1208,7 +1208,14 @@ function ToolCallsBlock({
   onSubmitToolResults?: (messageId: string, responses: Array<{ toolCallId: string; rawResponse: string }>) => void;
 }) {
   const [responses, setResponses] = useState<Record<string, string>>({});
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
+    // По умолчанию все развернуты если pending
+    const initial: Record<string, boolean> = {};
+    toolCalls.forEach(call => {
+      initial[call.id] = call.status === 'pending';
+    });
+    return initial;
+  });
 
   const allSubmitted = toolCalls.every(call => call.status === 'submitted');
   const canSubmit = toolCalls.every(call => responses[call.id]?.trim());
@@ -1223,62 +1230,92 @@ function ToolCallsBlock({
   };
 
   return (
-    <div className="mb-3 space-y-2">
+    <div className="mb-4 space-y-3">
       {toolCalls.map(call => {
         const isExpanded = expanded[call.id] ?? false;
         const argsStr = JSON.stringify(call.args, null, 2);
         const resultStr = call.result ? JSON.stringify(call.result, null, 2) : '';
+        const isPending = call.status === 'pending';
 
         return (
           <div
             key={call.id}
-            className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3"
+            className={`rounded-2xl border overflow-hidden transition-all ${
+              isPending 
+                ? 'border-amber-500/40 bg-gradient-to-br from-amber-500/5 to-orange-500/5 shadow-lg shadow-amber-500/10' 
+                : 'border-green-500/30 bg-gradient-to-br from-green-500/5 to-emerald-500/5'
+            }`}
           >
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-[var(--surface-3)]">
-                  <Wrench size={12} className="text-[var(--text-muted)]" />
+            <div className="flex items-center justify-between gap-3 px-4 py-3 bg-black/20">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${
+                  isPending ? 'bg-amber-500/20' : 'bg-green-500/20'
+                }`}>
+                  <Wrench size={16} className={isPending ? 'text-amber-400' : 'text-green-400'} />
                 </div>
-                <div>
-                  <p className="text-sm font-medium text-[var(--text-primary)]">{call.name}</p>
-                  <p className="text-[10px] text-[var(--text-dim)]">
-                    {call.status === 'submitted' ? 'Отправлено' : 'Ожидает ответа'}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-[var(--text-primary)] truncate">{call.name}</p>
+                  <p className="text-xs flex items-center gap-1.5 mt-0.5">
+                    {isPending ? (
+                      <>
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                        <span className="text-amber-400 font-medium">Ожидает ответа</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check size={11} className="text-green-400" />
+                        <span className="text-green-400 font-medium">Результат получен</span>
+                      </>
+                    )}
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => setExpanded(prev => ({ ...prev, [call.id]: !prev[call.id] }))}
-                className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]"
+                className={`flex h-8 w-8 items-center justify-center rounded-lg transition-all ${
+                  isPending 
+                    ? 'text-amber-400/70 hover:bg-amber-500/10 hover:text-amber-400' 
+                    : 'text-green-400/70 hover:bg-green-500/10 hover:text-green-400'
+                }`}
               >
-                {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
               </button>
             </div>
 
             {isExpanded && (
-              <div className="mt-3 space-y-2">
+              <div className="px-4 py-4 space-y-3 border-t border-white/5">
                 <div>
-                  <p className="mb-1 text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Аргументы</p>
-                  <pre className="overflow-x-auto rounded-lg bg-[var(--surface-3)] p-2 text-xs text-[var(--text-muted)]">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-dim)] flex items-center gap-1.5">
+                    <Braces size={11} />
+                    Аргументы
+                  </p>
+                  <pre className="overflow-x-auto rounded-xl bg-black/40 border border-white/5 p-3 text-xs text-[var(--text-muted)] font-mono leading-relaxed">
                     {argsStr}
                   </pre>
                 </div>
 
                 {call.status === 'submitted' && resultStr ? (
                   <div>
-                    <p className="mb-1 text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Результат</p>
-                    <pre className="overflow-x-auto rounded-lg bg-[var(--surface-3)] p-2 text-xs text-[var(--text-muted)]">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-green-400/80 flex items-center gap-1.5">
+                      <Check size={11} />
+                      Результат
+                    </p>
+                    <pre className="overflow-x-auto rounded-xl bg-black/40 border border-green-500/20 p-3 text-xs text-green-300/80 font-mono leading-relaxed">
                       {resultStr}
                     </pre>
                   </div>
-                ) : call.status === 'pending' ? (
+                ) : isPending ? (
                   <div>
-                    <p className="mb-1 text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Ваш ответ</p>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-amber-400/80 flex items-center gap-1.5">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                      Ваш ответ
+                    </p>
                     <textarea
                       value={responses[call.id] || ''}
                       onChange={e => setResponses(prev => ({ ...prev, [call.id]: e.target.value }))}
                       placeholder="Введите результат выполнения функции (JSON или текст)..."
-                      rows={4}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-3)] px-3 py-2 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
+                      rows={5}
+                      className="w-full rounded-xl border border-amber-500/30 bg-black/40 px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-amber-500/60 focus:outline-none focus:ring-2 focus:ring-amber-500/20 font-mono leading-relaxed resize-none"
                     />
                   </div>
                 ) : null}
@@ -1292,9 +1329,9 @@ function ToolCallsBlock({
         <button
           onClick={handleSubmit}
           disabled={!canSubmit}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-semibold text-black transition-opacity hover:opacity-90 disabled:opacity-40"
+          className="flex w-full items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 px-5 py-3.5 text-sm font-bold text-white shadow-lg shadow-amber-500/25 transition-all hover:shadow-xl hover:shadow-amber-500/30 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100"
         >
-          <Check size={14} />
+          <Check size={16} />
           Отправить результаты
         </button>
       )}
@@ -1549,7 +1586,7 @@ export default function ChatMessage({
 
             {/* Tool Responses (в user сообщениях) */}
             {isUser && message.toolResponses && message.toolResponses.length > 0 && (
-              <div className="mb-3 space-y-2">
+              <div className="mb-4 space-y-3">
                 {message.toolResponses.map(response => {
                   const resultStr = typeof response.response === 'string' 
                     ? response.response 
@@ -1558,20 +1595,26 @@ export default function ChatMessage({
                   return (
                     <div
                       key={response.id}
-                      className="rounded-xl border border-green-500/30 bg-green-500/5 p-3"
+                      className="rounded-2xl border border-green-500/30 bg-gradient-to-br from-green-500/5 to-emerald-500/5 overflow-hidden"
                     >
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-green-500/20">
-                          <Check size={12} className="text-green-400" />
+                      <div className="flex items-center gap-3 px-4 py-3 bg-black/20">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-green-500/20">
+                          <Check size={16} className="text-green-400" />
                         </div>
-                        <div>
-                          <p className="text-sm font-medium text-[var(--text-primary)]">{response.name}</p>
-                          <p className="text-[10px] text-green-400">Результат отправлен</p>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-[var(--text-primary)]">{response.name}</p>
+                          <p className="text-xs text-green-400 font-medium flex items-center gap-1.5 mt-0.5">
+                            <Check size={11} />
+                            Результат отправлен модели
+                          </p>
                         </div>
                       </div>
-                      <div>
-                        <p className="mb-1 text-[10px] uppercase tracking-wider text-[var(--text-dim)]">Результат</p>
-                        <pre className="overflow-x-auto rounded-lg bg-[var(--surface-3)] p-2 text-xs text-[var(--text-muted)] max-h-32">
+                      <div className="px-4 py-4 border-t border-white/5">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-green-400/80 flex items-center gap-1.5">
+                          <Braces size={11} />
+                          Результат
+                        </p>
+                        <pre className="overflow-x-auto rounded-xl bg-black/40 border border-green-500/20 p-3 text-xs text-green-300/80 font-mono leading-relaxed max-h-48">
                           {resultStr}
                         </pre>
                       </div>

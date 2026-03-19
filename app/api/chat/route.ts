@@ -54,6 +54,91 @@ function extractRetryAfterSeconds(message: string): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+// Санитизация данных для Gemini API - конвертирует все значения в допустимые типы
+function sanitizeForGemini(obj: any): any {
+  if (obj === null || obj === undefined) {
+    return null;
+  }
+  
+  if (typeof obj === 'string') {
+    return obj;
+  }
+  
+  if (typeof obj === 'number') {
+    // Числа допустимы в объектах
+    return obj;
+  }
+  
+  if (typeof obj === 'boolean') {
+    // Булевы значения допустимы
+    return obj;
+  }
+  
+  if (Array.isArray(obj)) {
+    return obj.map(item => sanitizeForGemini(item));
+  }
+  
+  if (typeof obj === 'object') {
+    const sanitized: any = {};
+    for (const key in obj) {
+      if (obj.hasOwnProperty(key)) {
+        sanitized[key] = sanitizeForGemini(obj[key]);
+      }
+    }
+    return sanitized;
+  }
+  
+  return String(obj);
+}
+
+function normalizeIncomingPart(part: any) {
+  if (!part || typeof part !== 'object') return null;
+
+  if ('functionCall' in part && part.functionCall?.name) {
+    return {
+      functionCall: {
+        ...(part.functionCall.id ? { id: part.functionCall.id } : {}),
+        name: part.functionCall.name,
+        args: part.functionCall.args || {},
+      },
+      ...(part.thought === true ? { thought: true } : {}),
+      ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
+    };
+  }
+
+  if ('functionResponse' in part && part.functionResponse?.name) {
+    return {
+      functionResponse: {
+        ...(part.functionResponse.id ? { id: part.functionResponse.id } : {}),
+        name: part.functionResponse.name,
+        response: part.functionResponse.response,
+        ...(Array.isArray(part.functionResponse.parts) ? { parts: part.functionResponse.parts } : {}),
+      },
+    };
+  }
+
+  if ('text' in part) {
+    if (!part.text && part.thought !== true) return null;
+    return {
+      text: part.text || '',
+      ...(part.thought === true ? { thought: true } : {}),
+      ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
+    };
+  }
+
+  if ('inlineData' in part && part.inlineData?.data) {
+    return {
+      inlineData: {
+        mimeType: part.inlineData.mimeType,
+        data: part.inlineData.data,
+        ...(part.inlineData.displayName ? { displayName: part.inlineData.displayName } : {}),
+      },
+    };
+  }
+
+  return null;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -81,42 +166,73 @@ export async function POST(request: NextRequest) {
     const contents = messages
       .map((m: any) => {
         const parts: any[] = [];
-        
-        // Обработка обычных parts (text, inlineData)
+
         if (m.parts && Array.isArray(m.parts)) {
-          m.parts.forEach((p: any) => {
-            if ('text' in p && p.text) {
-              parts.push({ text: p.text });
-            } else if ('inlineData' in p && p.inlineData?.data) {
-              parts.push(p);
-            }
-          });
+          m.parts
+            .map((part: any) => normalizeIncomingPart(part))
+            .filter(Boolean)
+            .forEach((part: any) => parts.push(part));
         }
-        
-        // Добавление functionCall (из toolCalls)
+
         if (m.toolCalls && Array.isArray(m.toolCalls)) {
           m.toolCalls.forEach((call: any) => {
+            if (!call?.name) return;
             parts.push({
               functionCall: {
+                ...(call.id ? { id: call.id } : {}),
                 name: call.name,
                 args: call.args || {},
               },
+              ...(call.thought === true ? { thought: true } : {}),
+              ...(call.thoughtSignature ? { thoughtSignature: call.thoughtSignature } : {}),
             });
           });
         }
-        
-        // Добавление functionResponse (из toolResponses)
+
         if (m.toolResponses && Array.isArray(m.toolResponses)) {
           m.toolResponses.forEach((response: any) => {
+            if (!response?.name) return;
+            
+            // Нормализуем response - Gemini ожидает объект с правильными типами
+            let normalizedResponse = response.response;
+            
+            if (typeof normalizedResponse === 'string') {
+              try {
+                // Пытаемся распарсить JSON
+                const parsed = JSON.parse(normalizedResponse);
+                // Если это примитив (число, булево), оборачиваем в объект со строкой
+                if (typeof parsed === 'number' || typeof parsed === 'boolean') {
+                  normalizedResponse = { result: String(parsed) };
+                } else if (parsed === null) {
+                  normalizedResponse = { result: 'null' };
+                } else {
+                  normalizedResponse = sanitizeForGemini(parsed);
+                }
+              } catch {
+                // Если не JSON, оборачиваем в объект
+                normalizedResponse = { result: normalizedResponse };
+              }
+            } else if (typeof normalizedResponse === 'number' || typeof normalizedResponse === 'boolean') {
+              // Числа и булевы значения оборачиваем в объект со строкой
+              normalizedResponse = { result: String(normalizedResponse) };
+            } else if (normalizedResponse === null || normalizedResponse === undefined) {
+              normalizedResponse = { result: 'null' };
+            } else if (typeof normalizedResponse !== 'object') {
+              normalizedResponse = { result: String(normalizedResponse) };
+            } else {
+              // Если уже объект, санитизируем его
+              normalizedResponse = sanitizeForGemini(normalizedResponse);
+            }
+            
             parts.push({
               functionResponse: {
                 name: response.name,
-                response: response.response,
+                response: normalizedResponse,
               },
             });
           });
         }
-        
+
         return {
           role: m.role,
           parts,
@@ -164,6 +280,14 @@ export async function POST(request: NextRequest) {
     }
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}&alt=sse`;
+
+    // Логирование для отладки (только в dev режиме)
+    if (process.env.NODE_ENV === 'development') {
+      console.log('=== Gemini API Request ===');
+      console.log('Model:', modelId);
+      console.log('Contents:', JSON.stringify(contents, null, 2));
+      console.log('Tools:', requestBody.tools ? JSON.stringify(requestBody.tools, null, 2) : 'None');
+    }
 
     let geminiResponse: Response;
     try {
@@ -285,7 +409,12 @@ export async function POST(request: NextRequest) {
                   );
                 } else if (part.functionCall) {
                   await writer.write(
-                    encoder.encode(`data: ${JSON.stringify({ functionCall: part.functionCall, finishReason })}\n\n`)
+                    encoder.encode(`data: ${JSON.stringify({
+                      functionCall: part.functionCall,
+                      thoughtSignature: part.thoughtSignature,
+                      thought: part.thought === true,
+                      finishReason,
+                    })}\n\n`)
                   );
                 } else if (part.text !== undefined) {
                   // Обычный текст

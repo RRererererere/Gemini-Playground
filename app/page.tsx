@@ -40,7 +40,7 @@ function generateId() {
 const ACTIVE_API_KEY_INDEX_STORAGE_KEY = 'gemini_active_key_index';
 
 function generateToolCallId(name: string, args: unknown) {
-  return `${name}:${JSON.stringify(args)}:${generateId()}`;
+  return `${name}:${JSON.stringify(args)}`;
 }
 
 function getApiKeySuffix(key?: string | null): string {
@@ -588,13 +588,28 @@ export default function Home() {
             // Вызов функции
             if (parsed.functionCall) {
               const { name, args } = parsed.functionCall;
-              const callId = generateToolCallId(name, args);
+              const callId = parsed.functionCall.id || generateToolCallId(name, args);
               
               setMessages(prev => prev.map(m => {
                 if (m.id !== targetMessageId) return m;
                 const existingCalls = m.toolCalls || [];
+                const existingIndex = existingCalls.findIndex(c => c.id === callId);
                 // Проверяем, не добавлен ли уже этот вызов
-                if (existingCalls.some(c => c.id === callId)) return m;
+                if (existingIndex >= 0) {
+                  const nextCalls = [...existingCalls];
+                  nextCalls[existingIndex] = {
+                    ...nextCalls[existingIndex],
+                    name,
+                    args,
+                    thought: parsed.thought === true,
+                    thoughtSignature: parsed.thoughtSignature || nextCalls[existingIndex].thoughtSignature,
+                  };
+
+                  return {
+                    ...m,
+                    toolCalls: nextCalls,
+                  };
+                }
                 
                 return {
                   ...m,
@@ -604,6 +619,8 @@ export default function Home() {
                       id: callId,
                       name,
                       args,
+                      thought: parsed.thought === true,
+                      thoughtSignature: parsed.thoughtSignature,
                       status: 'pending' as const,
                     },
                   ],
@@ -777,6 +794,7 @@ export default function Home() {
     const userToolMessage: Message = {
       id: generateId(),
       role: 'user',
+      kind: 'tool_response',
       parts: [],
       toolResponses,
     };
@@ -943,6 +961,21 @@ export default function Home() {
   const hasApiAndModel = hasKeys && !!model;
   const lastMessage = messages[messages.length - 1];
   const lastIsModel = lastMessage?.role === 'model';
+  const visibleMessages = useMemo(
+    () => messages.filter(message => {
+      if (message.kind === 'tool_response') return false;
+      if (
+        message.role === 'user' &&
+        (message.toolResponses?.length || 0) > 0 &&
+        getVisibleMessageText(message.parts).length === 0 &&
+        (message.files?.length || 0) === 0
+      ) {
+        return false;
+      }
+      return true;
+    }),
+    [messages]
+  );
   const canContinue = lastIsModel && !isStreaming && (
     getVisibleMessageText(lastMessage?.parts || []).length > 0 ||
     !!lastMessage?.deepThinkAnalysis
@@ -1181,12 +1214,12 @@ export default function Home() {
             />
           ) : (
             <div className="max-w-3xl mx-auto space-y-5">
-              {messages.map((message, idx) => (
+              {visibleMessages.map((message, idx) => (
                 <ChatMessage
                   key={message.id}
                   message={message}
                   index={idx}
-                  isLast={idx === messages.length - 1}
+                  isLast={idx === visibleMessages.length - 1}
                   isStreaming={isStreaming && message.id === streamingId}
                   canRegenerate={hasApiAndModel && !isStreaming}
                   onEdit={handleEdit}

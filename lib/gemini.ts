@@ -49,6 +49,7 @@ export function buildToolResponsePart(response: ToolResponse) {
     functionResponse: {
       name: response.name,
       response: normalizeToolResponseInput(response.response),
+      ...(response.toolCallId ? { id: response.toolCallId } : {}),
     },
   };
 }
@@ -183,9 +184,12 @@ export function buildChatRequestMessages(messages: Message[]) {
       for (const toolCall of message.toolCalls || []) {
         parts.push({
           functionCall: {
+            id: toolCall.id,
             name: toolCall.name,
             args: toolCall.args,
           },
+          ...(toolCall.thought ? { thought: true } : {}),
+          ...(toolCall.thoughtSignature ? { thoughtSignature: toolCall.thoughtSignature } : {}),
         });
       }
 
