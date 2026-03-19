@@ -23,6 +23,7 @@ export interface ToolCall {
   thought?: boolean;
   status?: 'pending' | 'submitted';
   result?: unknown;
+  hidden?: boolean; // скрытый tool call (не показывается в UI, но отправляется в API)
 }
 
 export interface ToolResponse {
@@ -30,6 +31,7 @@ export interface ToolResponse {
   toolCallId?: string;
   name: string;
   response: unknown;
+  hidden?: boolean; // скрытый response (не показывается в UI, но отправляется в API)
 }
 
 export type ToolSchemaType = 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object';
@@ -71,6 +73,7 @@ export interface Message {
   files?: AttachedFile[];
   toolCalls?: ToolCall[];
   toolResponses?: ToolResponse[];
+  memoryOperations?: MemoryOperation[]; // операции с памятью для отображения
   apiKeySuffix?: string;   // last 4 chars of the API key used for generation
   isStreaming?: boolean;
   thinking?: string;       // размышления модели (обычные)
@@ -130,6 +133,18 @@ export interface SavedChat {
   temperature: number;
   createdAt: number;
   updatedAt: number;
+}
+
+// Операция с памятью для отображения в чате
+export interface MemoryOperation {
+  type: 'save' | 'update' | 'forget';
+  scope: 'local' | 'global';
+  fact?: string;
+  oldFact?: string;
+  category?: string;
+  confidence?: number;
+  reason?: string;
+  memoryId?: string;
 }
 
 // Сохранённый системный промпт

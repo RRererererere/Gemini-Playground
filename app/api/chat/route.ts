@@ -149,6 +149,7 @@ export async function POST(request: NextRequest) {
       temperature,
       apiKey,
       tools,
+      memoryTools, // Инструменты памяти (уже в формате Gemini API)
       thinkingBudget, // -1 = авто, 0 = выкл, N = конкретное
       includeThoughts, // request model thoughts (Gemini 2.x/3.x)
     } = body;
@@ -263,6 +264,15 @@ export async function POST(request: NextRequest) {
             .filter((tool: { name: string; description: string }) => tool.name && tool.description),
         },
       ];
+    }
+
+    // Добавляем инструменты памяти (они уже в правильном формате)
+    if (Array.isArray(memoryTools) && memoryTools.length > 0) {
+      if (!requestBody.tools) {
+        requestBody.tools = [{ functionDeclarations: [] }];
+      }
+      // Добавляем инструменты памяти к существующим
+      requestBody.tools[0].functionDeclarations.push(...memoryTools);
     }
 
     // Режим размышлений (актуально в основном для Gemini 2.x/3.x).

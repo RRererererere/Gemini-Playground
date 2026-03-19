@@ -5,6 +5,7 @@ import { ChatSidebar, SettingsSidebar } from '@/components/Sidebar';
 import ChatMessage from '@/components/ChatMessage';
 import ChatInput from '@/components/ChatInput';
 import { ToolBuilderModal } from '@/components/ToolBuilder';
+import MemoryModal from '@/components/MemoryModal';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,
@@ -32,6 +33,9 @@ import {
   isThoughtPart,
   normalizeToolResponseInput,
 } from '@/lib/gemini';
+import { buildMemoryPrompt, markMemoriesUsed } from '@/lib/memory-prompt';
+import { MEMORY_TOOLS } from '@/lib/memory-tools';
+import { saveMemory, updateMemory, forgetMemory, getMemories } from '@/lib/memory-store';
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -109,6 +113,8 @@ export default function Home() {
   const [deepThinkSystemPrompt, setDeepThinkSystemPrompt] = useState<string>(DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
   const [temperature, setTemperature] = useState<number>(1.0);
   const [thinkingBudget, setThinkingBudget] = useState<number>(-1); // -1=авто
+  const [memoryEnabled, setMemoryEnabled] = useState<boolean>(true);
+  const [showMemoryModal, setShowMemoryModal] = useState(false);
 
   // UI state
   const [chatSidebarOpen, setChatSidebarOpen] = useState(true);
@@ -201,6 +207,7 @@ export default function Home() {
       const savedChatSidebar = localStorage.getItem('gemini_chats_sidebar');
       const savedSettingsSidebar = localStorage.getItem('gemini_settings_sidebar');
       const savedThinking = localStorage.getItem('gemini_thinking_budget');
+      const savedMemoryEnabled = localStorage.getItem('gemini_memory_enabled');
       const savedDeepThinkPrompt = loadDeepThinkSystemPrompt();
       const mobileViewport = window.matchMedia('(max-width: 767px)').matches;
 
@@ -214,6 +221,7 @@ export default function Home() {
         if (savedSettingsSidebar !== null) setSettingsSidebarOpen(savedSettingsSidebar === 'true');
       }
       if (savedThinking !== null) setThinkingBudget(parseInt(savedThinking));
+      if (savedMemoryEnabled !== null) setMemoryEnabled(savedMemoryEnabled === 'true');
 
       const chats = await loadSavedChats();
       setSavedChats(chats);
@@ -255,6 +263,7 @@ export default function Home() {
   useEffect(() => { localStorage.setItem('gemini_chats_sidebar', chatSidebarOpen.toString()); }, [chatSidebarOpen]);
   useEffect(() => { localStorage.setItem('gemini_settings_sidebar', settingsSidebarOpen.toString()); }, [settingsSidebarOpen]);
   useEffect(() => { localStorage.setItem('gemini_thinking_budget', thinkingBudget.toString()); }, [thinkingBudget]);
+  useEffect(() => { localStorage.setItem('gemini_memory_enabled', memoryEnabled.toString()); }, [memoryEnabled]);
 
   useEffect(() => {
     if (apiKeys.length === 0) {
@@ -370,8 +379,29 @@ export default function Home() {
       m.id !== targetMessageId ? m : { ...m, apiKeySuffix: keySuffix || undefined, modelName: model }
     ));
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Память — добавляем в системный промпт
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const userMessages = history
+      .filter(m => m.role === 'user')
+      .map(m => getVisibleMessageText(m.parts));
+    
+    const { prompt: memoryPrompt, usedMemoryIds } = buildMemoryPrompt(
+      userMessages,
+      currentChatId || undefined,
+      memoryEnabled
+    );
+
+    // Отмечаем использованные воспоминания
+    if (usedMemoryIds.length > 0) {
+      markMemoriesUsed(usedMemoryIds, currentChatId || undefined);
+    }
+
     // DeepThink Pass 1 — если включён, анализируем сначала
     let effectiveSystemPrompt = systemPrompt;
+    if (memoryPrompt) {
+      effectiveSystemPrompt = memoryPrompt + '\n\n' + systemPrompt;
+    }
     let finalAnalysis: DeepThinkAnalysis | null = null;
     
     if (deepThinkState.enabled && !customAnalysis) {
@@ -451,7 +481,8 @@ export default function Home() {
           messages: buildChatRequestMessages(history),
           model,
           systemInstruction: effectiveSystemPrompt,
-          tools,
+          tools: tools, // Только пользовательские tools
+          memoryTools: memoryEnabled ? MEMORY_TOOLS : [], // Инструменты памяти отдельно
           temperature,
           apiKey: key,
           thinkingBudget,
@@ -590,27 +621,189 @@ export default function Home() {
               const { name, args } = parsed.functionCall;
               const callId = parsed.functionCall.id || generateToolCallId(name, args);
               
-              setMessages(prev => prev.map(m => {
-                if (m.id !== targetMessageId) return m;
-                const existingCalls = m.toolCalls || [];
-                const existingIndex = existingCalls.findIndex(c => c.id === callId);
-                // Проверяем, не добавлен ли уже этот вызов
-                if (existingIndex >= 0) {
-                  const nextCalls = [...existingCalls];
-                  nextCalls[existingIndex] = {
-                    ...nextCalls[existingIndex],
-                    name,
-                    args,
-                    thought: parsed.thought === true,
-                    thoughtSignature: parsed.thoughtSignature || nextCalls[existingIndex].thoughtSignature,
-                  };
+              // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+              // Обработка инструментов памяти - выполняем молча, добавляем скрытый functionResponse
+              // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+              const isMemoryTool = memoryEnabled && (name === 'save_memory' || name === 'update_memory' || name === 'forget_memory');
+              
+              if (isMemoryTool) {
+                let memoryResult: { success: boolean; id?: string; error?: string } = { success: false };
+                
+                if (name === 'save_memory') {
+                  try {
+                    const memory = saveMemory(
+                      {
+                        fact: args.fact,
+                        scope: args.scope,
+                        category: args.category,
+                        keywords: args.keywords || [],
+                        confidence: args.confidence,
+                        related_to: args.related_to || [],
+                      },
+                      args.scope === 'local' ? (currentChatId || undefined) : undefined
+                    );
+                    
+                    memoryResult = { success: true, id: memory.id };
+                    
+                    // Добавляем операцию в сообщение для отображения
+                    setMessages(prev => prev.map(m => {
+                      if (m.id !== targetMessageId) return m;
+                      const ops = m.memoryOperations || [];
+                      return {
+                        ...m,
+                        memoryOperations: [
+                          ...ops,
+                          {
+                            type: 'save' as const,
+                            scope: args.scope,
+                            fact: args.fact,
+                            category: args.category,
+                            confidence: args.confidence,
+                            memoryId: memory.id,
+                          },
+                        ],
+                      };
+                    }));
+                  } catch (e) {
+                    console.error('Failed to save memory:', e);
+                    memoryResult = { success: false, error: String(e) };
+                  }
+                } else if (name === 'update_memory') {
+                  try {
+                    const globalMems = getMemories('global');
+                    const localMems = currentChatId ? getMemories('local', currentChatId) : [];
+                    const allMems = [...globalMems, ...localMems];
+                    const oldMemory = allMems.find(m => m.id === args.id);
+                    const oldFact = oldMemory?.fact;
 
-                  return {
-                    ...m,
-                    toolCalls: nextCalls,
-                  };
+                    updateMemory(
+                      args.id,
+                      oldMemory?.scope || 'global',
+                      { fact: args.fact, confidence: args.confidence },
+                      oldMemory?.scope === 'local' ? (currentChatId || undefined) : undefined
+                    );
+
+                    memoryResult = { success: true, id: args.id };
+
+                    setMessages(prev => prev.map(m => {
+                      if (m.id !== targetMessageId) return m;
+                      const ops = m.memoryOperations || [];
+                      return {
+                        ...m,
+                        memoryOperations: [
+                          ...ops,
+                          {
+                            type: 'update' as const,
+                            scope: oldMemory?.scope || 'global',
+                            fact: args.fact,
+                            oldFact,
+                            confidence: args.confidence,
+                            memoryId: args.id,
+                          },
+                        ],
+                      };
+                    }));
+                  } catch (e) {
+                    console.error('Failed to update memory:', e);
+                    memoryResult = { success: false, error: String(e) };
+                  }
+                } else if (name === 'forget_memory') {
+                  try {
+                    const globalMems = getMemories('global');
+                    const localMems = currentChatId ? getMemories('local', currentChatId) : [];
+                    const allMems = [...globalMems, ...localMems];
+                    const memory = allMems.find(m => m.id === args.id);
+
+                    if (memory) {
+                      forgetMemory(
+                        args.id,
+                        memory.scope,
+                        memory.scope === 'local' ? (currentChatId || undefined) : undefined
+                      );
+
+                      memoryResult = { success: true, id: args.id };
+
+                      setMessages(prev => prev.map(m => {
+                        if (m.id !== targetMessageId) return m;
+                        const ops = m.memoryOperations || [];
+                        return {
+                          ...m,
+                          memoryOperations: [
+                            ...ops,
+                            {
+                              type: 'forget' as const,
+                              scope: memory.scope,
+                              fact: memory.fact,
+                              reason: args.reason,
+                              memoryId: args.id,
+                            },
+                          ],
+                        };
+                      }));
+                    } else {
+                      memoryResult = { success: false, error: 'Memory not found' };
+                    }
+                  } catch (e) {
+                    console.error('Failed to forget memory:', e);
+                    memoryResult = { success: false, error: String(e) };
+                  }
                 }
                 
+                // Добавляем скрытый toolCall + toolResponse для модели
+                // Это позволяет модели видеть результат и не зацикливаться
+                setMessages(prev => prev.map(m => {
+                  if (m.id !== targetMessageId) return m;
+                  
+                  const hiddenToolCall = {
+                    id: callId,
+                    name,
+                    args,
+                    status: 'submitted' as const,
+                    result: memoryResult,
+                    hidden: true, // Помечаем как скрытый для UI
+                  };
+                  
+                  const hiddenToolResponse = {
+                    id: generateId(),
+                    toolCallId: callId,
+                    name,
+                    response: memoryResult,
+                    hidden: true, // Помечаем как скрытый для UI
+                  };
+                  
+                  return {
+                    ...m,
+                    toolCalls: [...(m.toolCalls || []), hiddenToolCall],
+                    toolResponses: [...(m.toolResponses || []), hiddenToolResponse],
+                  };
+                }));
+                
+                // НЕ добавляем в видимые tool calls - пропускаем блок ниже
+              }
+              
+              // Обычные tool calls (не память) - добавляем только если это НЕ memory tool
+              if (!isMemoryTool) {
+                setMessages(prev => prev.map(m => {
+                  if (m.id !== targetMessageId) return m;
+                  const existingCalls = m.toolCalls || [];
+                  const existingIndex = existingCalls.findIndex(c => c.id === callId);
+                  // Проверяем, не добавлен ли уже этот вызов
+                  if (existingIndex >= 0) {
+                    const nextCalls = [...existingCalls];
+                    nextCalls[existingIndex] = {
+                      ...nextCalls[existingIndex],
+                      name,
+                      args,
+                      thought: parsed.thought === true,
+                      thoughtSignature: parsed.thoughtSignature || nextCalls[existingIndex].thoughtSignature,
+                    };
+
+                    return {
+                      ...m,
+                      toolCalls: nextCalls,
+                    };
+                  }
+                  
                 return {
                   ...m,
                   toolCalls: [
@@ -626,6 +819,7 @@ export default function Home() {
                   ],
                 };
               }));
+              }
             }
 
             // Текст ответа
@@ -657,7 +851,7 @@ export default function Home() {
         m.id === targetMessageId ? { ...m, isStreaming: false } : m
       ));
     }
-  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt]);
+  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, memoryEnabled]);
 
   // ============ HANDLERS ============
   const handleSend = useCallback(async (text: string, files: AttachedFile[]) => {
@@ -1049,6 +1243,9 @@ export default function Home() {
     onOpenDeepThinkDialog: () => {
       setShowDeepThinkDialog(true);
     },
+    onOpenMemoryModal: () => {
+      setShowMemoryModal(true);
+    },
     deepThinkSystemPrompt,
     onDeepThinkSystemPromptChange: setDeepThinkSystemPrompt,
     temperature,
@@ -1063,6 +1260,8 @@ export default function Home() {
     onLoadChat: handleLoadChat,
     onNewChat: handleNewChat,
     onDeleteChat: handleDeleteSavedChat,
+    memoryEnabled,
+    onMemoryEnabledChange: setMemoryEnabled,
   };
 
   return (
@@ -1439,6 +1638,13 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {/* Memory Modal */}
+      <MemoryModal
+        open={showMemoryModal}
+        onClose={() => setShowMemoryModal(false)}
+        chatId={currentChatId || undefined}
+      />
     </div>
   );
 }

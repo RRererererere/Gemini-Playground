@@ -66,6 +66,7 @@ export interface SidebarSharedProps {
   onOpenToolBuilder?: (tool?: ChatTool) => void;
   onOpenSavePromptDialog?: () => void;
   onOpenDeepThinkDialog?: () => void;
+  onOpenMemoryModal?: () => void;
   deepThinkSystemPrompt: string;
   onDeepThinkSystemPromptChange: (prompt: string) => void;
   temperature: number;
@@ -80,6 +81,8 @@ export interface SidebarSharedProps {
   onLoadChat: (chat: SavedChat) => void;
   onNewChat: () => void;
   onDeleteChat: (id: string) => void;
+  memoryEnabled: boolean;
+  onMemoryEnabledChange: (enabled: boolean) => void;
   onClose?: () => void;
 }
 
@@ -301,6 +304,7 @@ export function SettingsSidebar({
   onOpenToolBuilder,
   onOpenSavePromptDialog,
   onOpenDeepThinkDialog,
+  onOpenMemoryModal,
   deepThinkSystemPrompt,
   onDeepThinkSystemPromptChange,
   temperature,
@@ -312,6 +316,8 @@ export function SettingsSidebar({
   savedChats,
   onSavedChatsChange,
   onLoadChat,
+  memoryEnabled,
+  onMemoryEnabledChange,
   onClose,
 }: SidebarSharedProps) {
   const [loadingModels, setLoadingModels] = useState(false);
@@ -798,6 +804,37 @@ export function SettingsSidebar({
               <SettingsSectionHeader id="tools" label="Инструменты" icon={Wrench} openSections={openSections} onToggle={toggleSection} />
               {openSections.has('tools') && (
                 <div className="space-y-3 px-4 pb-4">
+                  {/* Память */}
+                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <Brain size={13} className="text-[var(--text-muted)]" />
+                        <span className="text-xs font-medium text-[var(--text-primary)]">Память</span>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={memoryEnabled}
+                          onChange={e => onMemoryEnabledChange(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-9 h-5 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-500"></div>
+                      </label>
+                    </div>
+                    <p className="text-[10px] text-[var(--text-muted)] leading-relaxed mb-2">
+                      Модель запоминает факты о вас и использует их в будущих разговорах
+                    </p>
+                    {memoryEnabled && (
+                      <button
+                        onClick={() => onOpenMemoryModal?.()}
+                        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--border)] text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] transition-all"
+                      >
+                        <Brain size={12} />
+                        Управление памятью
+                      </button>
+                    )}
+                  </div>
+
                   {tools.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-5 py-6 text-center">
                       <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--surface-3)] text-[var(--text-muted)]">

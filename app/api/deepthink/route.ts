@@ -104,9 +104,13 @@ export async function POST(request: NextRequest) {
     // Поддерживают ли модели режим размышлений (thinkingConfig)
     const isThinkingModel = modelId.toLowerCase().includes('thinking') || modelId.toLowerCase().includes('thinking-exp');
 
+    // Ограничиваем историю чтобы не упереться в лимит контекста
+    const MAX_HISTORY_MESSAGES = 20;
+    const limitedHistory = historyContents.slice(-MAX_HISTORY_MESSAGES);
+
     const requestBody: any = {
       contents: [
-        ...historyContents,
+        ...limitedHistory,
         {
           role: 'user',
           parts: [{ text: DEEPTHINK_PROMPT_WITH_MULTIMODAL_CONTEXT(systemInstruction || '') }],
@@ -117,7 +121,7 @@ export async function POST(request: NextRequest) {
       },
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 8192, // Увеличим лимит для длинных анализов
+        maxOutputTokens: 16384, // Увеличим лимит для длинных анализов
       },
     };
 
@@ -149,9 +153,14 @@ export async function POST(request: NextRequest) {
       
       console.error(`[DeepThink API Error] Model: ${modelId}, Status: ${errCode}, Message: ${errMessage}`);
 
+      // Если ошибка связана с лимитом токенов - даём понятное сообщение
+      if (errMessage.toLowerCase().includes('token') || errMessage.toLowerCase().includes('length') || errCode === 400) {
+        errMessage = 'Слишком большой запрос. Попробуй сократить историю или отключи DeepThink для этого сообщения.';
+      }
+
       // Возвращаем 200 но с ошибкой в потоке, чтобы фронтенд мог это обработать
       return new Response(
-        `data: ${JSON.stringify({ error: `DeepThink failed (${modelId}): ${errMessage}` })}\n\ndata: [DONE]\n\n`,
+        `data: ${JSON.stringify({ error: `DeepThink: ${errMessage}` })}\n\ndata: [DONE]\n\n`,
         { 
           status: 200, 
           headers: { 

@@ -11,6 +11,7 @@ import {
   Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square, Wrench, Video
 } from 'lucide-react';
 import type { Message, AttachedFile, Part, DeepThinkAnalysis } from '@/types';
+import MemoryPill from './MemoryPill';
 
 interface ChatMessageProps {
   message: Message;
@@ -1207,31 +1208,39 @@ function ToolCallsBlock({
   messageId: string;
   onSubmitToolResults?: (messageId: string, responses: Array<{ toolCallId: string; rawResponse: string }>) => void;
 }) {
+  // Фильтруем скрытые tool calls (memory tools)
+  const visibleToolCalls = toolCalls.filter(call => !call.hidden);
+  
   const [responses, setResponses] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     // По умолчанию все развернуты если pending
     const initial: Record<string, boolean> = {};
-    toolCalls.forEach(call => {
+    visibleToolCalls.forEach(call => {
       initial[call.id] = call.status === 'pending';
     });
     return initial;
   });
 
-  const allSubmitted = toolCalls.every(call => call.status === 'submitted');
-  const canSubmit = toolCalls.every(call => responses[call.id]?.trim());
+  const allSubmitted = visibleToolCalls.every(call => call.status === 'submitted');
+  const canSubmit = visibleToolCalls.every(call => responses[call.id]?.trim());
 
   const handleSubmit = () => {
     if (!onSubmitToolResults || !canSubmit) return;
-    const results = toolCalls.map(call => ({
+    const results = visibleToolCalls.map(call => ({
       toolCallId: call.id,
       rawResponse: responses[call.id] || '',
     }));
     onSubmitToolResults(messageId, results);
   };
 
+  // Если все tool calls скрыты, не рендерим блок
+  if (visibleToolCalls.length === 0) {
+    return null;
+  }
+
   return (
     <div className="mb-4 space-y-3">
-      {toolCalls.map(call => {
+      {visibleToolCalls.map(call => {
         const isExpanded = expanded[call.id] ?? false;
         const argsStr = JSON.stringify(call.args, null, 2);
         const resultStr = call.result ? JSON.stringify(call.result, null, 2) : '';
@@ -1582,6 +1591,24 @@ export default function ChatMessage({
                 messageId={message.id}
                 onSubmitToolResults={onSubmitToolResults}
               />
+            )}
+
+            {/* Memory Operations */}
+            {!isUser && message.memoryOperations && message.memoryOperations.length > 0 && (
+              <>
+                {message.memoryOperations.map((op, idx) => (
+                  <MemoryPill
+                    key={`${message.id}-mem-${idx}`}
+                    operation={op.type}
+                    scope={op.scope}
+                    fact={op.fact}
+                    oldFact={op.oldFact}
+                    category={op.category}
+                    confidence={op.confidence}
+                    reason={op.reason}
+                  />
+                ))}
+              </>
             )}
 
             {/* Tool Responses (в user сообщениях) */}
