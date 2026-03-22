@@ -154,8 +154,13 @@ export const calculatorSkill: Skill = {
       if (!converter) {
         // Попробуем обратное
         const reverseConverter = conversions[to]?.[from];
-        if (reverseConverter) {
-          // Это означает что from и to перепутаны? Нет, просто не нашли
+        if (reverseConverter && typeof reverseConverter === 'function') {
+          // Используем обратную конверсию
+          const result = 1 / reverseConverter(1) * value;
+          return {
+            mode: 'respond',
+            response: { result, from, to, value },
+          };
         }
         return {
           mode: 'respond',

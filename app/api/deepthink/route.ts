@@ -47,8 +47,6 @@ ${history}
 
 Помни: нейронка которая получит этот промпт ничего не знает о твоём анализе. Всё важное должно быть прямо в промпте.`;
 
-import { DEEPTHINK_MEMORY_MARKER } from '@/lib/gemini';
-
 const DEEPTHINK_PROMPT_WITH_MULTIMODAL_CONTEXT = (originalSystem: string) => `
 Original system prompt for the main chat:
 """

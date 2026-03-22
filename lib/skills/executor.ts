@@ -23,7 +23,7 @@ const SKILL_CATALOG = new Map<string, Skill>(
 // Загружаем HF Space скиллы из localStorage и регистрируем
 export function reloadHFSpaceSkills(): void {
   // Удаляем старые HF skills из каталога
-  for (const [id] of SKILL_CATALOG) {
+  for (const [id] of Array.from(SKILL_CATALOG)) {
     if (id.startsWith('hf_')) SKILL_CATALOG.delete(id);
   }
   
@@ -99,9 +99,9 @@ function createContext(
 
 /** Ищем активный скилл у которого есть tool с таким именем */
 export function findSkillByToolName(toolName: string): Skill | null {
-  for (const skill of SKILL_CATALOG.values()) {
+  for (const skill of Array.from(SKILL_CATALOG.values())) {
     if (!isSkillActive(skill.id)) continue;
-    if (skill.tools.some(t => t.name === toolName)) {
+    if (skill.tools.some((t: any) => t.name === toolName)) {
       return skill;
     }
   }
@@ -217,7 +217,7 @@ export function buildSkillsSystemPrompt(
 ): string {
   const parts: string[] = [];
 
-  for (const skill of SKILL_CATALOG.values()) {
+  for (const skill of Array.from(SKILL_CATALOG.values())) {
     if (!isSkillActive(skill.id)) continue;
     if (!skill.onSystemPrompt) continue;
 
@@ -241,7 +241,7 @@ export function buildSkillsSystemPrompt(
 
 export function collectSkillTools(): GeminiToolDeclaration[] {
   const declarations: GeminiToolDeclaration[] = [];
-  for (const skill of SKILL_CATALOG.values()) {
+  for (const skill of Array.from(SKILL_CATALOG.values())) {
     if (!isSkillActive(skill.id)) continue;
     declarations.push(...skill.tools);
   }
@@ -258,7 +258,7 @@ export async function notifySkillsMessageComplete(
   messages: Message[],
   onUIEvent: (event: SkillUIEvent) => void
 ): Promise<void> {
-  for (const skill of SKILL_CATALOG.values()) {
+  for (const skill of Array.from(SKILL_CATALOG.values())) {
     if (!isSkillActive(skill.id)) continue;
     if (!skill.onMessageComplete) continue;
 

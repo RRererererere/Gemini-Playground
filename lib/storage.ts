@@ -156,8 +156,8 @@ function restoreFilePreviewUrl(file: AttachedFile): AttachedFile {
 
   if (canPreviewInline && file.data && !file.previewUrl) {
     try {
-      // Проверяем кэш по уникальному ключу (fileId или hash данных)
-      const cacheKey = file.fileId || file.data.slice(0, 100);
+      // Проверяем кэш по уникальному ключу (id или hash данных)
+      const cacheKey = file.id || file.data.slice(0, 100);
       
       if (previewUrlCache.has(cacheKey)) {
         return { ...file, previewUrl: previewUrlCache.get(cacheKey) };
