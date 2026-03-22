@@ -1,4 +1,6 @@
 import { NextRequest } from 'next/server';
+import { DEEPTHINK_MEMORY_MARKER } from '@/lib/gemini';
+import { classifyGeminiError, extractRetryAfterSeconds } from '@/lib/gemini-errors';
 
 export const maxDuration = 30;
 export const dynamic = 'force-dynamic';
@@ -45,7 +47,7 @@ ${history}
 
 Помни: нейронка которая получит этот промпт ничего не знает о твоём анализе. Всё важное должно быть прямо в промпте.`;
 
-const DEEPTHINK_MEMORY_MARKER = '[DeepThink context from previous assistant turn]';
+import { DEEPTHINK_MEMORY_MARKER } from '@/lib/gemini';
 
 const DEEPTHINK_PROMPT_WITH_MULTIMODAL_CONTEXT = (originalSystem: string) => `
 Original system prompt for the main chat:
@@ -145,22 +147,32 @@ export async function POST(request: NextRequest) {
       const errBody = await response.text();
       let errMessage = 'Gemini API error';
       let errCode = response.status;
+      let errStatus: string | undefined = undefined;
+      
       try {
         const errJson = JSON.parse(errBody);
         errMessage = errJson?.error?.message || errMessage;
         errCode = errJson?.error?.code || errCode;
+        errStatus = errJson?.error?.status || errStatus;
       } catch {}
       
       console.error(`[DeepThink API Error] Model: ${modelId}, Status: ${errCode}, Message: ${errMessage}`);
 
-      // Если ошибка связана с лимитом токенов - даём понятное сообщение
-      if (errMessage.toLowerCase().includes('token') || errMessage.toLowerCase().includes('length') || errCode === 400) {
-        errMessage = 'Слишком большой запрос. Попробуй сократить историю или отключи DeepThink для этого сообщения.';
-      }
+      // Классифицируем ошибку и получаем понятное сообщение
+      const classified = classifyGeminiError(errCode, errMessage);
+      const retryAfterSeconds = extractRetryAfterSeconds(errMessage);
+      const displayMessage = classified.userMessage || errMessage;
 
       // Возвращаем 200 но с ошибкой в потоке, чтобы фронтенд мог это обработать
       return new Response(
-        `data: ${JSON.stringify({ error: `DeepThink: ${errMessage}` })}\n\ndata: [DONE]\n\n`,
+        `data: ${JSON.stringify({ 
+          error: `DeepThink: ${displayMessage}`,
+          originalError: errMessage,
+          errorType: classified.errorType,
+          errorCode: errCode,
+          errorStatus: errStatus,
+          retryAfterSeconds
+        })}\n\ndata: [DONE]\n\n`,
         { 
           status: 200, 
           headers: { 
@@ -202,8 +214,17 @@ export async function POST(request: NextRequest) {
               const parsed = JSON.parse(jsonStr);
 
               if (parsed.error) {
+                const msg = parsed.error.message || 'Gemini API error';
+                const code = parsed.error.code || 0;
+                const classified = classifyGeminiError(code, msg);
+                const displayMessage = classified.userMessage || msg;
+                
                 await writer.write(
-                  encoder.encode(`data: ${JSON.stringify({ error: parsed.error.message })}\n\n`)
+                  encoder.encode(`data: ${JSON.stringify({ 
+                    error: displayMessage,
+                    originalError: msg,
+                    errorType: classified.errorType
+                  })}\n\n`)
                 );
                 continue;
               }

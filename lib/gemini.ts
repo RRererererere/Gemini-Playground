@@ -12,6 +12,8 @@ export const DEFAULT_DEEPTHINK_SYSTEM_PROMPT = `You are the internal strategist 
 Read the conversation, think through the user's real intent, and produce a system prompt for the answering model.
 Output only the final system prompt after your reasoning.`;
 
+export const DEEPTHINK_MEMORY_MARKER = '[DeepThink context from previous assistant turn]';
+
 export function isThoughtPart(part: Part): part is ThoughtPart {
   return 'thought' in part && part.thought === true;
 }

@@ -49,6 +49,61 @@ import {
 } from '@/lib/storage';
 import { DEFAULT_DEEPTHINK_SYSTEM_PROMPT, formatToolPayload } from '@/lib/gemini';
 import { ToolBuilderModal } from '@/components/ToolBuilder';
+import { getInstalledSkills, setSkillEnabled, getSkillById } from '@/lib/skills';
+
+// Skills Section Component
+function SkillsSection({ onSkillsChanged }: { onSkillsChanged?: () => void }) {
+  const [installedRecords, setInstalledRecords] = useState<ReturnType<typeof getInstalledSkills>>([]);
+  
+  useEffect(() => {
+    setInstalledRecords(getInstalledSkills());
+  }, []);
+  
+  const handleToggle = (skillId: string) => {
+    const record = installedRecords.find(r => r.id === skillId);
+    if (record) {
+      setSkillEnabled(skillId, !record.enabled);
+      setInstalledRecords(getInstalledSkills());
+      onSkillsChanged?.();
+    }
+  };
+
+  if (installedRecords.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between px-1">
+        <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)]">Встроенные</span>
+        <span className="text-[10px] text-[var(--text-muted)]">{installedRecords.filter(r => r.enabled).length}/{installedRecords.length}</span>
+      </div>
+      {installedRecords.map(record => {
+        const skill = getSkillById(record.id);
+        if (!skill) return null;
+        
+        return (
+          <div
+            key={record.id}
+            className="flex items-center justify-between rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-[var(--text-primary)]">{skill.name}</p>
+              <p className="mt-0.5 text-xs text-[var(--text-dim)]">{skill.description}</p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer ml-3">
+              <input
+                type="checkbox"
+                checked={record.enabled}
+                onChange={() => handleToggle(record.id)}
+                className="sr-only peer"
+              />
+              <div className="w-9 h-5 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+            </label>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export interface SidebarSharedProps {
   apiKeys: ApiKeyEntry[];
@@ -67,6 +122,8 @@ export interface SidebarSharedProps {
   onOpenSavePromptDialog?: () => void;
   onOpenDeepThinkDialog?: () => void;
   onOpenMemoryModal?: () => void;
+  onOpenSkillsMarket?: () => void;
+  onOpenHFSpaces?: () => void;
   deepThinkSystemPrompt: string;
   onDeepThinkSystemPromptChange: (prompt: string) => void;
   temperature: number;
@@ -74,6 +131,7 @@ export interface SidebarSharedProps {
   thinkingBudget: number;
   onThinkingBudgetChange: (v: number) => void;
   tokenCount: number;
+  isCountingTokens: boolean;
   isStreaming: boolean;
   savedChats: SavedChat[];
   onSavedChatsChange: (chats: SavedChat[]) => void;
@@ -83,6 +141,7 @@ export interface SidebarSharedProps {
   onDeleteChat: (id: string) => void;
   memoryEnabled: boolean;
   onMemoryEnabledChange: (enabled: boolean) => void;
+  onSkillsChanged?: () => void;
   onClose?: () => void;
 }
 
@@ -305,6 +364,8 @@ export function SettingsSidebar({
   onOpenSavePromptDialog,
   onOpenDeepThinkDialog,
   onOpenMemoryModal,
+  onOpenSkillsMarket,
+  onOpenHFSpaces,
   deepThinkSystemPrompt,
   onDeepThinkSystemPromptChange,
   temperature,
@@ -312,12 +373,14 @@ export function SettingsSidebar({
   thinkingBudget,
   onThinkingBudgetChange,
   tokenCount,
+  isCountingTokens,
   isStreaming,
   savedChats,
   onSavedChatsChange,
   onLoadChat,
   memoryEnabled,
   onMemoryEnabledChange,
+  onSkillsChanged,
   onClose,
 }: SidebarSharedProps) {
   const [loadingModels, setLoadingModels] = useState(false);
@@ -498,6 +561,7 @@ export function SettingsSidebar({
               </div>
               <div className="flex items-center gap-2">
                 {isStreaming && <span className="h-1.5 w-1.5 rounded-full bg-[var(--gem-green)] animate-pulse" />}
+                {isCountingTokens && <span className="h-1.5 w-1.5 rounded-full bg-[var(--text-dim)] animate-pulse" />}
                 <span className={`text-sm font-mono font-medium ${tokenCount > 0 ? 'text-[var(--text-primary)]' : 'text-[var(--text-dim)]'}`}>
                   {formatTokenCount(tokenCount)}
                 </span>
@@ -835,12 +899,31 @@ export function SettingsSidebar({
                     )}
                   </div>
 
+                  {/* Skills - встроенные инструменты */}
+                  <SkillsSection onSkillsChanged={onSkillsChanged} />
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => onOpenSkillsMarket?.()}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-xs text-[var(--text-muted)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+                    >
+                      <Plus size={13} />
+                      Скиллы
+                    </button>
+                    <button
+                      onClick={() => onOpenHFSpaces?.()}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-xs text-[var(--text-muted)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+                    >
+                      🤗 HF Spaces
+                    </button>
+                  </div>
+
                   {tools.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-5 py-6 text-center">
                       <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--surface-3)] text-[var(--text-muted)]">
                         <Wrench size={16} />
                       </div>
-                      <p className="text-sm font-medium text-[var(--text-primary)]">Нет инструментов</p>
+                      <p className="text-sm font-medium text-[var(--text-primary)]">Нет пользовательских инструментов</p>
                       <p className="mt-1 text-xs leading-relaxed text-[var(--text-muted)]">
                         Создайте функции, которые модель сможет вызывать
                       </p>

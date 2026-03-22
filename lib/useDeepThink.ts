@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import type { Message, DeepThinkAnalysis } from '@/types';
 
 export interface DeepThinkState {
@@ -15,9 +15,20 @@ export function useDeepThink() {
     lastAnalysis: null,
     error: null,
   });
+  
+  // AbortController для отмены DeepThink запроса
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const toggle = useCallback(() => {
     setState(prev => ({ ...prev, enabled: !prev.enabled, lastAnalysis: null }));
+  }, []);
+  
+  const abort = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setState(prev => ({ ...prev, isAnalyzing: false, error: 'Cancelled by user' }));
+    }
   }, []);
 
   const analyze = useCallback(async (
@@ -29,12 +40,16 @@ export function useDeepThink() {
     onThinkingUpdate?: (thinking: string) => void,
   ): Promise<{ enhancedPrompt: string; analysis: DeepThinkAnalysis | null; error: string | null }> => {
     setState(prev => ({ ...prev, isAnalyzing: true, error: null }));
+    
+    // Создаём новый AbortController для этого запроса
+    abortControllerRef.current = new AbortController();
 
     try {
       const response = await fetch('/api/deepthink', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages, systemInstruction, apiKey, model, deepThinkSystemPrompt }),
+        signal: abortControllerRef.current.signal,
       });
       if (!response.ok) {
         const data = await response.json();
@@ -97,10 +112,17 @@ export function useDeepThink() {
       return { enhancedPrompt, analysis: null, error: null };
 
     } catch (err: any) {
+      // Проверяем, была ли отмена пользователем
+      if (err.name === 'AbortError') {
+        setState(prev => ({ ...prev, isAnalyzing: false, error: 'Cancelled' }));
+        return { enhancedPrompt: systemInstruction, analysis: null, error: 'Cancelled' };
+      }
       setState(prev => ({ ...prev, isAnalyzing: false, error: err.message }));
       return { enhancedPrompt: systemInstruction, analysis: null, error: err.message };
+    } finally {
+      abortControllerRef.current = null;
     }
   }, []);
 
-  return { state, toggle, analyze };
+  return { state, toggle, analyze, abort };
 }

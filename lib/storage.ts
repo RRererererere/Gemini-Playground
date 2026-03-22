@@ -1,7 +1,9 @@
-import type { SavedChat, SavedSystemPrompt, AttachedFile, InlineDataPart, Message, Part } from '@/types';
+import type { SavedChat, SavedSystemPrompt, AttachedFile, InlineDataPart, Message, Part, SkillArtifact } from '@/types';
 import { saveFiles, loadFiles } from './fileStorage';
 
 // ====================== FILE HELPERS ======================
+
+const ARTIFACT_SIZE_THRESHOLD = 100 * 1024; // 100KB
 
 // Extract file IDs from messages
 function extractFileIds(messages: Message[]): string[] {
@@ -10,6 +12,12 @@ function extractFileIds(messages: Message[]): string[] {
     if (msg.files) {
       for (const file of msg.files) {
         ids.push(file.id);
+      }
+    }
+    // Добавляем ID артефактов
+    if (msg.skillArtifacts) {
+      for (const artifact of msg.skillArtifacts) {
+        ids.push(`artifact_${artifact.id}`);
       }
     }
   }
@@ -21,19 +29,47 @@ async function stripFileData(messages: Message[]): Promise<Message[]> {
   const filesToSave: Array<{ id: string; data: string }> = [];
   
   const stripped = messages.map(msg => {
-    if (!msg.files || msg.files.length === 0) return msg;
+    let strippedFiles = msg.files;
+    let strippedArtifacts = msg.skillArtifacts;
     
-    const strippedFiles = msg.files.map(file => {
-      if (file.data) {
-        filesToSave.push({ id: file.id, data: file.data });
-      }
-      // Keep metadata, remove data
-      return { ...file, data: '', previewUrl: undefined };
-    });
+    // Strip file data
+    if (msg.files && msg.files.length > 0) {
+      strippedFiles = msg.files.map(file => {
+        if (file.data) {
+          filesToSave.push({ id: file.id, data: file.data });
+        }
+        // Keep metadata, remove data
+        return { ...file, data: '', previewUrl: undefined };
+      });
+    }
+
+    // Strip large artifact data
+    if (msg.skillArtifacts && msg.skillArtifacts.length > 0) {
+      strippedArtifacts = msg.skillArtifacts.map(artifact => {
+        if (artifact.data.kind === 'base64') {
+          const size = artifact.data.base64.length;
+          if (size > ARTIFACT_SIZE_THRESHOLD) {
+            // Сохраняем в IndexedDB
+            filesToSave.push({ id: `artifact_${artifact.id}`, data: artifact.data.base64 });
+            // Заменяем на stored reference
+            return {
+              ...artifact,
+              data: { kind: 'stored' as const, stored: 'idb' as const }
+            };
+          }
+        }
+        return artifact;
+      });
+    }
 
     const strippedParts = msg.parts.filter(part => !('inlineData' in part));
 
-    return { ...msg, files: strippedFiles, parts: strippedParts };
+    return { 
+      ...msg, 
+      files: strippedFiles, 
+      skillArtifacts: strippedArtifacts,
+      parts: strippedParts 
+    };
   });
   
   // Save file data to IndexedDB
@@ -56,14 +92,40 @@ async function restoreFileData(messages: Message[]): Promise<Message[]> {
   const fileDataMap = await loadFiles(fileIds);
   
   return messages.map(msg => {
-    if (!msg.files || msg.files.length === 0) return msg;
+    let restoredFiles = msg.files;
+    let restoredArtifacts = msg.skillArtifacts;
     
-    const restoredFiles = msg.files.map(file => {
-      const data = fileDataMap.get(file.id) || '';
-      return restoreFilePreviewUrl({ ...file, data });
-    });
+    // Restore files
+    if (msg.files && msg.files.length > 0) {
+      restoredFiles = msg.files.map(file => {
+        const data = fileDataMap.get(file.id) || '';
+        return restoreFilePreviewUrl({ ...file, data });
+      });
+    }
 
-    const inlineParts: InlineDataPart[] = restoredFiles
+    // Restore artifacts
+    if (msg.skillArtifacts && msg.skillArtifacts.length > 0) {
+      restoredArtifacts = msg.skillArtifacts.map(artifact => {
+        if (artifact.data.kind === 'stored') {
+          const base64 = fileDataMap.get(`artifact_${artifact.id}`) || '';
+          if (base64) {
+            // Восстанавливаем mimeType из типа артефакта
+            let mimeType = 'application/octet-stream';
+            if (artifact.type === 'image') mimeType = 'image/png';
+            else if (artifact.type === 'video') mimeType = 'video/mp4';
+            else if (artifact.type === 'audio') mimeType = 'audio/mpeg';
+            
+            return {
+              ...artifact,
+              data: { kind: 'base64' as const, mimeType, base64 }
+            };
+          }
+        }
+        return artifact;
+      });
+    }
+
+    const inlineParts: InlineDataPart[] = (restoredFiles || [])
       .filter(file => file.data)
       .map(file => ({
         inlineData: {
@@ -77,12 +139,16 @@ async function restoreFileData(messages: Message[]): Promise<Message[]> {
     return {
       ...msg,
       files: restoredFiles,
+      skillArtifacts: restoredArtifacts,
       parts: [...textAndOtherParts, ...inlineParts] as Part[],
     };
   });
 }
 
 // Restore previewUrl (object URL) for previewable files from base64 data
+// Кэш для Object URLs чтобы избежать утечек памяти
+const previewUrlCache = new Map<string, string>();
+
 function restoreFilePreviewUrl(file: AttachedFile): AttachedFile {
   const canPreviewInline =
     file.mimeType.startsWith('image/') ||
@@ -90,13 +156,34 @@ function restoreFilePreviewUrl(file: AttachedFile): AttachedFile {
 
   if (canPreviewInline && file.data && !file.previewUrl) {
     try {
+      // Проверяем кэш по уникальному ключу (fileId или hash данных)
+      const cacheKey = file.fileId || file.data.slice(0, 100);
+      
+      if (previewUrlCache.has(cacheKey)) {
+        return { ...file, previewUrl: previewUrlCache.get(cacheKey) };
+      }
+      
       const blob = base64ToBlob(file.data, file.mimeType);
-      return { ...file, previewUrl: URL.createObjectURL(blob) };
+      const url = URL.createObjectURL(blob);
+      previewUrlCache.set(cacheKey, url);
+      
+      return { ...file, previewUrl: url };
     } catch {
       return file;
     }
   }
   return file;
+}
+
+// Функция для очистки неиспользуемых URL (вызывать при удалении чата)
+export function revokePreviewUrls(fileIds: string[]) {
+  fileIds.forEach(id => {
+    const url = previewUrlCache.get(id);
+    if (url) {
+      URL.revokeObjectURL(url);
+      previewUrlCache.delete(id);
+    }
+  });
 }
 
 function base64ToBlob(base64: string, mimeType: string): Blob {

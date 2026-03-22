@@ -43,6 +43,9 @@ const ACCEPTED_TYPES = {
   'application/json': ['.json'],
 };
 
+// Максимальный размер файла в байтах (3.5MB для безопасности, учитывая лимит Vercel 4.5MB)
+const MAX_FILE_SIZE = 3.5 * 1024 * 1024;
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -53,6 +56,105 @@ function fileToBase64(file: File): Promise<string> {
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
+  });
+}
+
+// Сжатие изображения если оно слишком большое
+async function compressImage(file: File, maxSizeMB: number = 3.5): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        
+        // Уменьшаем размер если изображение слишком большое
+        const maxDimension = 2048;
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = (height / width) * maxDimension;
+            width = maxDimension;
+          } else {
+            width = (width / height) * maxDimension;
+            height = maxDimension;
+          }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        
+        // Пробуем разные уровни качества
+        let quality = 0.9;
+        const tryCompress = () => {
+          canvas.toBlob(
+            (blob) => {
+              if (!blob) {
+                reject(new Error('Compression failed'));
+                return;
+              }
+              
+              // Если размер все еще большой и качество можно снизить
+              if (blob.size > maxSizeMB * 1024 * 1024 && quality > 0.3) {
+                quality -= 0.1;
+                tryCompress();
+                return;
+              }
+              
+              const compressedFile = new File([blob], file.name, {
+                type: 'image/jpeg',
+                lastModified: Date.now(),
+              });
+              resolve(compressedFile);
+            },
+            'image/jpeg',
+            quality
+          );
+        };
+        
+        tryCompress();
+      };
+      img.onerror = () => reject(new Error('Image load failed'));
+      img.src = e.target?.result as string;
+    };
+    reader.onerror = () => reject(new Error('File read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+// Сжатие видео (уменьшение разрешения и битрейта)
+async function compressVideo(file: File, maxSizeMB: number = 3.5): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    video.onloadedmetadata = async () => {
+      try {
+        // Уменьшаем разрешение
+        const scale = Math.min(1, Math.sqrt((maxSizeMB * 1024 * 1024) / file.size));
+        canvas.width = Math.floor(video.videoWidth * scale);
+        canvas.height = Math.floor(video.videoHeight * scale);
+        
+        // Если файл уже достаточно маленький, возвращаем как есть
+        if (file.size <= maxSizeMB * 1024 * 1024) {
+          resolve(file);
+          return;
+        }
+        
+        // Для больших видео предупреждаем пользователя
+        alert(`Видео слишком большое (${(file.size / 1024 / 1024).toFixed(1)}MB). Максимальный размер: ${maxSizeMB}MB. Попробуйте сжать видео перед загрузкой или используйте более короткий клип.`);
+        reject(new Error('Video too large'));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    
+    video.onerror = () => reject(new Error('Video load failed'));
+    video.src = URL.createObjectURL(file);
   });
 }
 
@@ -148,20 +250,57 @@ export default function ChatInput({
     if (lowerName.endsWith('.3g2')) finalMimeType = 'video/3gpp2';
 
     try {
-      const data = await fileToBase64(file);
+      let processedFile = file;
+      
+      // Проверяем размер файла
+      if (file.size > MAX_FILE_SIZE) {
+        // Для изображений пробуем сжать
+        if (finalMimeType.startsWith('image/')) {
+          try {
+            processedFile = await compressImage(file);
+            console.log(`Изображение сжато: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(processedFile.size / 1024 / 1024).toFixed(2)}MB`);
+          } catch (err) {
+            alert(`Не удалось сжать изображение. Максимальный размер: ${(MAX_FILE_SIZE / 1024 / 1024).toFixed(1)}MB`);
+            return null;
+          }
+        }
+        // Для видео показываем предупреждение
+        else if (finalMimeType.startsWith('video/')) {
+          try {
+            await compressVideo(file);
+            return null; // compressVideo выбросит ошибку для больших файлов
+          } catch {
+            return null;
+          }
+        }
+        // Для остальных файлов просто отклоняем
+        else {
+          alert(`Файл слишком большой (${(file.size / 1024 / 1024).toFixed(1)}MB). Максимальный размер: ${(MAX_FILE_SIZE / 1024 / 1024).toFixed(1)}MB`);
+          return null;
+        }
+      }
+      
+      // Финальная проверка размера после сжатия
+      if (processedFile.size > MAX_FILE_SIZE) {
+        alert(`Файл все еще слишком большой после сжатия. Максимальный размер: ${(MAX_FILE_SIZE / 1024 / 1024).toFixed(1)}MB`);
+        return null;
+      }
+
+      const data = await fileToBase64(processedFile);
       const previewUrl = finalMimeType.startsWith('image/') || finalMimeType === 'application/pdf'
-        ? URL.createObjectURL(file)
+        ? URL.createObjectURL(processedFile)
         : undefined;
 
       return {
         id: Math.random().toString(36).slice(2),
         name: file.name,
         mimeType: finalMimeType,
-        size: file.size,
+        size: processedFile.size,
         data,
         previewUrl,
       };
-    } catch {
+    } catch (err) {
+      console.error('File processing error:', err);
       return null;
     }
   }, []);

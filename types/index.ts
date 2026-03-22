@@ -73,9 +73,11 @@ export interface Message {
   kind?: 'tool_response';
   parts: Part[];
   files?: AttachedFile[];
+  skillArtifacts?: SkillArtifact[]; // результаты работы скиллов
   toolCalls?: ToolCall[];
   toolResponses?: ToolResponse[];
   memoryOperations?: MemoryOperation[]; // операции с памятью для отображения
+  skillToolCalls?: SkillToolCall[]; // вызовы skill tools для отображения
   apiKeySuffix?: string;   // last 4 chars of the API key used for generation
   isStreaming?: boolean;
   thinking?: string;       // размышления модели (обычные)
@@ -94,6 +96,31 @@ export interface Message {
   errorRetryAfterMs?: number; // absolute timestamp when retry becomes available
   // UI helper: force-open editor for user prompt
   forceEdit?: boolean;
+}
+
+// Артефакт скилла (импортируется из lib/skills/types.ts в рантайме)
+export interface SkillArtifact {
+  id: string;
+  type: 'image' | 'video' | 'audio' | 'document' | 'code' | 'table' | 'chart' | 'text' | 'custom';
+  label?: string;
+  data: 
+    | { kind: 'base64'; mimeType: string; base64: string }
+    | { kind: 'url'; url: string; mimeType?: string }
+    | { kind: 'text'; content: string; language?: string }
+    | { kind: 'json'; value: unknown }
+    | { kind: 'blob'; blob: Blob; mimeType: string }
+    | { kind: 'stored'; stored: 'idb' }; // большой артефакт в IndexedDB
+  sendToGemini?: boolean;
+  downloadable?: boolean;
+  filename?: string;
+  skillId?: string;
+}
+
+// Вызов skill tool для отображения в чате
+export interface SkillToolCall {
+  name: string;
+  args: Record<string, unknown>;
+  result: unknown;
 }
 
 export interface DeepThinkAnalysis {

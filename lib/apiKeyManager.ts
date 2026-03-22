@@ -186,11 +186,16 @@ export function isRateLimitError(message: string): boolean {
 // Проверить — является ли ошибка невалидным ключом
 export function isInvalidKeyError(message: string): boolean {
   const lower = message.toLowerCase();
+  // Более точная проверка: ищем HTTP коды как отдельные слова
+  const has401 = /\b401\b/.test(message);
+  const has403 = /\b403\b/.test(message);
+  const hasKeyword = lower.includes('api') && (lower.includes('key') || lower.includes('invalid') || lower.includes('permission'));
+  
   return (
     lower.includes('api key') && lower.includes('invalid') ||
     lower.includes('api_key_invalid') ||
     lower.includes('permission denied') ||
-    lower.includes('401') ||
-    lower.includes('403') && lower.includes('key')
+    (has401 && hasKeyword) ||
+    (has403 && lower.includes('key'))
   );
 }

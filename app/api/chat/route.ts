@@ -1,58 +1,14 @@
 import { NextRequest } from 'next/server';
 import type { ChatTool } from '@/types';
 import { toolToDeclaration } from '@/lib/gemini';
+import { classifyGeminiError, extractRetryAfterSeconds } from '@/lib/gemini-errors';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
 export const fetchCache = 'force-no-store';
 
-// Проверить — это ли rate-limit ошибка
-function isRateLimitError(status: number, message: string): boolean {
-  return (
-    status === 429 ||
-    message.toLowerCase().includes('quota') ||
-    message.toLowerCase().includes('rate limit') ||
-    message.toLowerCase().includes('resource exhausted')
-  );
-}
-
-function classifyGeminiError(status: number, message: string): { errorType: string; isRateLimit: boolean; isQuota: boolean; isInvalidKey: boolean; isPermission: boolean } {
-  const m = (message || '').toLowerCase();
-  const isRateLimit = isRateLimitError(status, message);
-  const isQuota =
-    m.includes('exceeded your current quota') ||
-    m.includes('quota') ||
-    m.includes('billing') ||
-    m.includes('insufficient_quota');
-  const isInvalidKey =
-    status === 401 ||
-    (status === 403 && (m.includes('api key') || m.includes('api-key') || m.includes('key'))) ||
-    m.includes('api key not valid') ||
-    m.includes('api_key_invalid') ||
-    m.includes('invalid api key') ||
-    m.includes('permission denied') && m.includes('key');
-  const isPermission =
-    status === 403 && !isInvalidKey ||
-    m.includes('permission denied') ||
-    m.includes('not authorized');
-
-  let errorType = 'unknown';
-  if (isQuota) errorType = 'quota';
-  else if (isRateLimit) errorType = 'rate_limit';
-  else if (isInvalidKey) errorType = 'invalid_key';
-  else if (isPermission) errorType = 'permission';
-  else if (status === 400) errorType = 'bad_request';
-  else if (status === 408) errorType = 'timeout';
-  else if (status >= 500) errorType = 'internal';
-  return { errorType, isRateLimit, isQuota, isInvalidKey, isPermission };
-}
-
-function extractRetryAfterSeconds(message: string): number | null {
-  const m = (message || '').match(/retry\s+in\s+([0-9]+(?:\.[0-9]+)?)s/i);
-  if (!m) return null;
-  const n = Number(m[1]);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
+// В App Router лимит body настраивается через next.config.mjs или route segment config
+// Vercel ограничивает до 4.5MB для Hobby/Pro планов
 
 // Санитизация данных для Gemini API - конвертирует все значения в допустимые типы
 function sanitizeForGemini(obj: any): any {
@@ -151,6 +107,7 @@ export async function POST(request: NextRequest) {
       tools,
       memoryTools, // Инструменты памяти (уже в формате Gemini API)
       thinkingBudget, // -1 = авто, 0 = выкл, N = конкретное
+      maxOutputTokens, // Максимальное количество токенов в ответе
       includeThoughts, // request model thoughts (Gemini 2.x/3.x)
     } = body;
 
@@ -245,7 +202,7 @@ export async function POST(request: NextRequest) {
       contents,
       generationConfig: {
         temperature: typeof temperature === 'number' ? temperature : 1.0,
-        maxOutputTokens: 8192,
+        maxOutputTokens: typeof maxOutputTokens === 'number' ? maxOutputTokens : 8192,
       },
     };
 
@@ -316,28 +273,32 @@ export async function POST(request: NextRequest) {
     if (!geminiResponse.ok) {
       const errBody = await geminiResponse.text();
       let errMessage = 'Gemini API error';
-      let isRateLimit = false;
-      let errorType = 'unknown';
       let errorCode = geminiResponse.status;
       let errorStatus: string | undefined = undefined;
+      
       try {
         const errJson = JSON.parse(errBody);
         errMessage = errJson?.error?.message || errMessage;
         errorCode = errJson?.error?.code || errorCode;
         errorStatus = errJson?.error?.status || errorStatus;
-        const classified = classifyGeminiError(geminiResponse.status, errMessage);
-        isRateLimit = classified.isRateLimit;
-        errorType = classified.errorType;
       } catch {}
-      if (errorType === 'unknown') {
-        const classified = classifyGeminiError(geminiResponse.status, errMessage);
-        isRateLimit = classified.isRateLimit;
-        errorType = classified.errorType;
-      }
+      
+      const classified = classifyGeminiError(geminiResponse.status, errMessage);
       const retryAfterSeconds = extractRetryAfterSeconds(errMessage);
+      
+      // Используем понятное сообщение для пользователя, если оно есть
+      const displayMessage = classified.userMessage || errMessage;
 
       return new Response(
-        `data: ${JSON.stringify({ error: errMessage, isRateLimit, errorType, errorCode, errorStatus, retryAfterSeconds })}\n\ndata: [DONE]\n\n`,
+        `data: ${JSON.stringify({ 
+          error: displayMessage, 
+          originalError: errMessage, 
+          isRateLimit: classified.isRateLimit, 
+          errorType: classified.errorType, 
+          errorCode, 
+          errorStatus, 
+          retryAfterSeconds 
+        })}\n\ndata: [DONE]\n\n`,
         {
           status: 200,
           headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
@@ -378,9 +339,14 @@ export async function POST(request: NextRequest) {
                 const statusText = parsed.error.status;
                 const classified = classifyGeminiError(code, msg);
                 const retryAfterSeconds = extractRetryAfterSeconds(msg);
+                
+                // Используем понятное сообщение для пользователя, если оно есть
+                const displayMessage = classified.userMessage || msg;
+                
                 await writer.write(
                   encoder.encode(`data: ${JSON.stringify({
-                    error: msg,
+                    error: displayMessage,
+                    originalError: msg,
                     isRateLimit: classified.isRateLimit,
                     errorType: classified.errorType,
                     errorCode: code,

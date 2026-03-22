@@ -50,7 +50,35 @@ export function saveMemory(
   memories.push(memory);
 
   const key = data.scope === 'global' ? GLOBAL_KEY : `${LOCAL_KEY_PREFIX}${chatId}`;
-  localStorage.setItem(key, JSON.stringify(memories));
+  
+  try {
+    localStorage.setItem(key, JSON.stringify(memories));
+  } catch (err: any) {
+    // Защита от QuotaExceededError
+    if (err.name === 'QuotaExceededError') {
+      console.error('localStorage quota exceeded. Removing oldest memories...');
+      
+      // Удаляем 20% самых старых воспоминаний
+      const toRemove = Math.ceil(memories.length * 0.2);
+      const sorted = [...memories].sort((a, b) => a.created_at - b.created_at);
+      const toKeep = sorted.slice(toRemove);
+      
+      try {
+        localStorage.setItem(key, JSON.stringify(toKeep));
+        console.log(`Removed ${toRemove} old memories to free space`);
+        
+        // Возвращаем память если она попала в сохранённые
+        const saved = toKeep.find(m => m.id === memory.id);
+        if (!saved) {
+          throw new Error('Memory quota exceeded. Please delete old memories.');
+        }
+      } catch {
+        throw new Error('Memory storage full. Please delete old memories manually.');
+      }
+    } else {
+      throw err;
+    }
+  }
 
   return memory;
 }
@@ -72,7 +100,15 @@ export function updateMemory(
   };
 
   const key = scope === 'global' ? GLOBAL_KEY : `${LOCAL_KEY_PREFIX}${chatId}`;
-  localStorage.setItem(key, JSON.stringify(memories));
+  
+  try {
+    localStorage.setItem(key, JSON.stringify(memories));
+  } catch (err: any) {
+    if (err.name === 'QuotaExceededError') {
+      throw new Error('Memory storage full. Cannot update memory.');
+    }
+    throw err;
+  }
 
   return memories[idx];
 }

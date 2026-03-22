@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { useDeepThink } from '@/lib/useDeepThink';
 import DeepThinkToggle from '@/components/DeepThinkToggle';
-import type { ChatTool, Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis, ToolResponse, SavedSystemPrompt } from '@/types';
+import type { ChatTool, Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis, ToolResponse, SavedSystemPrompt, SkillArtifact } from '@/types';
 import {
   loadApiKeys, saveApiKeys, isRateLimitError,
 } from '@/lib/apiKeyManager';
@@ -25,9 +25,11 @@ import {
   loadSystemPrompts,
   saveSystemPrompts,
   createSystemPrompt,
+  revokePreviewUrls,
 } from '@/lib/storage';
 import {
   DEFAULT_DEEPTHINK_SYSTEM_PROMPT,
+  DEEPTHINK_MEMORY_MARKER,
   buildChatRequestMessages,
   getVisibleMessageText,
   isThoughtPart,
@@ -36,15 +38,32 @@ import {
 import { buildMemoryPrompt, markMemoriesUsed } from '@/lib/memory-prompt';
 import { MEMORY_TOOLS } from '@/lib/memory-tools';
 import { saveMemory, updateMemory, forgetMemory, getMemories } from '@/lib/memory-store';
+// Skills system
+import {
+  collectSkillTools,
+  buildSkillsSystemPrompt,
+  executeSkillToolCall,
+  notifySkillsMessageComplete,
+  isSkillToolCall,
+  reloadHFSpaceSkills,
+} from '@/lib/skills';
+import { useSkillsUI } from '@/lib/useSkillsUI';
+import { SkillsMarket } from '@/components/SkillsMarket';
+import { HFSpaceManager } from '@/components/HFSpaceManager';
 
 function generateId() {
+  // Используем crypto.randomUUID для гарантированной уникальности
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // Fallback для старых браузеров
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
 const ACTIVE_API_KEY_INDEX_STORAGE_KEY = 'gemini_active_key_index';
 
 function generateToolCallId(name: string, args: unknown) {
-  return `${name}:${JSON.stringify(args)}`;
+  return `${name}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
 function getApiKeySuffix(key?: string | null): string {
@@ -89,8 +108,6 @@ ${analysis.futureStrategy ? `План на будущее: ${analysis.futureStra
 ---`;
 }
 
-const DEEPTHINK_MEMORY_MARKER = '[DeepThink context from previous assistant turn]';
-
 export default function Home() {
   // API Keys (multiple)
   const [apiKeys, setApiKeys] = useState<ApiKeyEntry[]>([]);
@@ -113,8 +130,15 @@ export default function Home() {
   const [deepThinkSystemPrompt, setDeepThinkSystemPrompt] = useState<string>(DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
   const [temperature, setTemperature] = useState<number>(1.0);
   const [thinkingBudget, setThinkingBudget] = useState<number>(-1); // -1=авто
+  const [maxOutputTokens, setMaxOutputTokens] = useState<number>(8192);
   const [memoryEnabled, setMemoryEnabled] = useState<boolean>(true);
   const [showMemoryModal, setShowMemoryModal] = useState(false);
+
+  // Skills state
+  const [showSkillsMarket, setShowSkillsMarket] = useState(false);
+  const [showHFSpaces, setShowHFSpaces] = useState(false);
+  const [skillsRevision, setSkillsRevision] = useState(0); // триггер пересборки tools
+  const { handleSkillEvent } = useSkillsUI();
 
   // UI state
   const [chatSidebarOpen, setChatSidebarOpen] = useState(true);
@@ -126,6 +150,7 @@ export default function Home() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [tokenCount, setTokenCount] = useState(0);
+  const [isCountingTokens, setIsCountingTokens] = useState(false);
   const [error, setError] = useState<string>('');
 
   // Saved chats
@@ -159,7 +184,7 @@ export default function Home() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const tokenDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
-  const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze } = useDeepThink();
+  const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze, abort: abortDeepThink } = useDeepThink();
   const selectedApiKeyEntry = apiKeys[activeKeyIndex] || null;
   const selectedApiKey = selectedApiKeyEntry?.key || '';
   const selectedApiKeySuffix = getApiKeySuffix(selectedApiKeyEntry?.key);
@@ -291,6 +316,34 @@ export default function Home() {
   // Token counting
   const countTokens = useCallback(async (msgs: Message[], sys: string, mod: string, apiKey: string) => {
     if (!apiKey || !mod || msgs.length === 0) { setTokenCount(0); return; }
+    
+    setIsCountingTokens(true);
+    
+    // Строим полный системный промпт с memory + skills
+    const userMessages = msgs
+      .filter(m => m.role === 'user')
+      .map(m => getVisibleMessageText(m.parts));
+    
+    const { prompt: memoryPrompt } = buildMemoryPrompt(
+      userMessages,
+      currentChatId || undefined,
+      memoryEnabled
+    );
+    
+    const skillsPromptInjection = buildSkillsSystemPrompt(
+      currentChatId || '',
+      msgs,
+      handleSkillEvent
+    );
+    
+    let effectiveSystemPrompt = sys;
+    if (memoryPrompt) {
+      effectiveSystemPrompt = memoryPrompt + '\n\n' + sys;
+    }
+    if (skillsPromptInjection) {
+      effectiveSystemPrompt = effectiveSystemPrompt + skillsPromptInjection;
+    }
+    
     try {
       const res = await fetch('/api/tokens', {
         method: 'POST',
@@ -298,14 +351,16 @@ export default function Home() {
         body: JSON.stringify({
           messages: buildChatRequestMessages(msgs),
           model: mod,
-          systemInstruction: sys,
+          systemInstruction: effectiveSystemPrompt, // Используем полный промпт
           apiKey,
         }),
       });
       const data = await res.json();
       setTokenCount(data.totalTokens || 0);
     } catch {}
-  }, []);
+    
+    setIsCountingTokens(false);
+  }, [currentChatId, memoryEnabled, handleSkillEvent]);
 
   useEffect(() => {
     if (tokenDebounceRef.current) clearTimeout(tokenDebounceRef.current);
@@ -314,7 +369,7 @@ export default function Home() {
       countTokens(messages, systemPrompt, model, selectedApiKey);
     }, 400);
     return () => { if (tokenDebounceRef.current) clearTimeout(tokenDebounceRef.current); };
-  }, [messages, systemPrompt, model, selectedApiKey, countTokens, isStreaming]);
+  }, [messages, systemPrompt, model, selectedApiKey, countTokens, isStreaming, skillsRevision]);
 
   // ============ SAVE CHAT ============
   const saveCurrentChat = useCallback(async (msgs: Message[], title?: string, updateCurrentId: boolean = true) => {
@@ -337,8 +392,17 @@ export default function Home() {
     if (existing) chatObj.createdAt = existing.createdAt;
 
     await saveChatToStorage(chatObj);
-    const updated = await loadSavedChats();
-    setSavedChats(updated);
+    
+    // Оптимизация: обновляем savedChats локально вместо перезагрузки всех чатов
+    setSavedChats(prev => {
+      const idx = prev.findIndex(c => c.id === chatId);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = chatObj;
+        return updated;
+      }
+      return [...prev, chatObj];
+    });
     
     // Обновляем currentChatId только если это не создание нового чата
     if (updateCurrentId) {
@@ -397,10 +461,20 @@ export default function Home() {
       markMemoriesUsed(usedMemoryIds, currentChatId || undefined);
     }
 
+    // Skills System Prompt injection
+    const skillsPromptInjection = buildSkillsSystemPrompt(
+      currentChatId || '',
+      messages,
+      handleSkillEvent
+    );
+
     // DeepThink Pass 1 — если включён, анализируем сначала
     let effectiveSystemPrompt = systemPrompt;
     if (memoryPrompt) {
       effectiveSystemPrompt = memoryPrompt + '\n\n' + systemPrompt;
+    }
+    if (skillsPromptInjection) {
+      effectiveSystemPrompt = effectiveSystemPrompt + skillsPromptInjection;
     }
     let finalAnalysis: DeepThinkAnalysis | null = null;
     
@@ -517,6 +591,9 @@ export default function Home() {
           ];
         }
         
+        // Собираем skill tools
+        const skillTools = collectSkillTools();
+        
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -527,10 +604,14 @@ export default function Home() {
             systemInstruction: effectiveSystemPrompt,
             tools: tools,
             // После MAX_MEMORY_CALLS — отключаем memory tools чтобы не зациклиться
-            memoryTools: (memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS) ? MEMORY_TOOLS : [],
+            memoryTools: [
+              ...(memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS ? MEMORY_TOOLS : []),
+              ...skillTools,
+            ],
             temperature,
             apiKey: key,
             thinkingBudget,
+            maxOutputTokens, // Добавляем настройку
             includeThoughts: deepThinkState.enabled === true,
           }),
         });
@@ -668,6 +749,63 @@ export default function Home() {
             if (parsed.functionCall) {
               const { name, args } = parsed.functionCall;
               const callId = parsed.functionCall.id || generateToolCallId(name, args);
+              
+              // ── SKILL TOOL CALL ──────────────────────────────────────────
+              if (isSkillToolCall(name)) {
+                const skillResult = await executeSkillToolCall(
+                  name,
+                  args as Record<string, unknown>,
+                  currentChatId || '',
+                  messages,
+                  handleSkillEvent
+                );
+                
+                // Добавляем артефакты в сообщение
+                if (skillResult.artifacts.length > 0) {
+                  setMessages(prev => prev.map(m => {
+                    if (m.id !== targetMessageId) return m;
+                    return {
+                      ...m,
+                      skillArtifacts: [...(m.skillArtifacts || []), ...skillResult.artifacts] as SkillArtifact[],
+                    };
+                  }));
+                }
+                
+                if (skillResult.functionResponse !== null) {
+                  // mode: 'respond' — добавляем toolResponse для следующего раунда
+                  roundToolCalls.push({
+                    id: callId,
+                    name,
+                    args,
+                    thoughtSignature: parsed.thoughtSignature,
+                  });
+                  accumulatedToolResponses.push({
+                    toolCallId: callId,
+                    name,
+                    response: skillResult.functionResponse,
+                    hidden: true, // не показываем в UI как обычный tool call
+                  });
+                  
+                  // Добавляем в skillToolCalls для отображения в UI
+                  setMessages(prev => prev.map(m => {
+                    if (m.id !== targetMessageId) return m;
+                    return {
+                      ...m,
+                      skillToolCalls: [...(m.skillToolCalls || []), {
+                        name,
+                        args: args as Record<string, unknown>,
+                        result: skillResult.functionResponse,
+                      }],
+                    };
+                  }));
+                  
+                  // После стрима сделаем ещё один раунд
+                  shouldContinueLoop = true;
+                }
+                // mode: 'fire_and_forget' — ничего не добавляем, модель продолжает
+                continue; // не обрабатываем как обычный tool
+              }
+              // ─────────────────────────────────────────────────────────────
               
               // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
               // Обработка инструментов памяти - выполняем молча, добавляем скрытый functionResponse
@@ -847,10 +985,17 @@ export default function Home() {
         // Если были memory tool calls в этом раунде — накапливаем их для следующего
         if (roundToolCalls.length > 0) {
           accumulatedToolCalls = [...accumulatedToolCalls, ...roundToolCalls];
-          // Сбрасываем текст в сообщении чтобы модель дописала с чистого листа
-          setMessages(prev => prev.map(m =>
-            m.id !== targetMessageId ? m : { ...m, parts: [{ text: '' }], isStreaming: true }
-          ));
+          // НЕ сбрасываем текст если он уже есть — сохраняем накопленный контент
+          setMessages(prev => prev.map(m => {
+            if (m.id !== targetMessageId) return m;
+            const textPart = m.parts.find(p => 'text' in p && !('thought' in p));
+            const currentText = textPart && 'text' in textPart ? textPart.text : '';
+            // Сбрасываем только если текста ещё нет
+            if (!currentText) {
+              return { ...m, parts: [{ text: '' }], isStreaming: true };
+            }
+            return { ...m, isStreaming: true };
+          }));
         }
       }
 
@@ -862,9 +1007,20 @@ export default function Home() {
       setIsStreaming(false);
       setStreamingId(null);
       abortControllerRef.current = null;
-      setMessages(prev => prev.map(m =>
-        m.id === targetMessageId ? { ...m, isStreaming: false } : m
-      ));
+      setMessages(prev => prev.map(m => {
+        if (m.id === targetMessageId) {
+          // Уведомляем скиллы о завершении сообщения
+          const finalMessage = { ...m, isStreaming: false };
+          notifySkillsMessageComplete(
+            finalMessage,
+            currentChatId || '',
+            messages,
+            handleSkillEvent
+          ).catch(console.error);
+          return finalMessage;
+        }
+        return m;
+      }));
     }
   }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, memoryEnabled]);
 
@@ -1083,15 +1239,15 @@ export default function Home() {
 
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort();
-  }, []);
+    abortDeepThink(); // Отменяем DeepThink если он работает
+  }, [abortDeepThink]);
 
   const handleAddUserMessage = useCallback(() => {
     const msg: Message = { id: generateId(), role: 'user', parts: [{ text: '' }] };
     setMessages(prev => [...prev, msg]);
   }, []);
 
-  const handleClearChat = useCallback(() => {
-    if (isStreaming) return;
+  const clearChatState = useCallback(() => {
     setMessages([]);
     setTokenCount(0);
     setError('');
@@ -1099,7 +1255,18 @@ export default function Home() {
     setChatTitle('');
     setUnsaved(false);
     setActiveChatId(null);
-  }, [isStreaming]);
+  }, []);
+
+  const handleClearChat = useCallback(() => {
+    if (isStreaming) return;
+    
+    // Подтверждение перед очисткой
+    if (messages.length > 0 && !confirm('Очистить текущий чат? Несохранённые изменения будут потеряны.')) {
+      return;
+    }
+    
+    clearChatState();
+  }, [isStreaming, messages.length, clearChatState]);
 
   const handleNewChat = useCallback(() => {
     if (isStreaming) return;
@@ -1107,17 +1274,20 @@ export default function Home() {
     if (messages.length > 0) {
       saveCurrentChat(messages, undefined, false).catch(console.error);
     }
-    // Сразу очищаем чат
-    handleClearChat();
+    // Сразу очищаем чат БЕЗ подтверждения (это новый чат, не удаление)
+    clearChatState();
     setSystemPrompt('');
     setDeepThinkSystemPrompt(loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
     setTools([]);
-  }, [isStreaming, messages, saveCurrentChat, handleClearChat]);
+  }, [isStreaming, messages, saveCurrentChat, clearChatState]);
 
   const handleLoadChat = useCallback((chat: SavedChat) => {
     if (isStreaming) return;
     if (messages.length > 0 && unsaved) {
-      saveCurrentChat(messages);
+      saveCurrentChat(messages).catch(err => {
+        console.error('Failed to save current chat before loading:', err);
+        // TODO: показать toast пользователю
+      });
     }
     setMessages(chat.messages);
     setCurrentChatId(chat.id);
@@ -1133,19 +1303,41 @@ export default function Home() {
   }, [isStreaming, messages, unsaved, saveCurrentChat]);
 
   const handleDeleteSavedChat = useCallback(async (id: string) => {
+    // Получаем чат перед удалением для очистки URL
+    const chat = savedChats.find(c => c.id === id);
+    if (chat) {
+      // Собираем все id файлов из сообщений
+      const fileIds: string[] = [];
+      chat.messages.forEach(msg => {
+        if (msg.files) {
+          msg.files.forEach(file => {
+            fileIds.push(file.id);
+          });
+        }
+      });
+      // Очищаем Object URLs
+      if (fileIds.length > 0) {
+        revokePreviewUrls(fileIds);
+      }
+    }
+    
     await deleteChatFromStorage(id);
-    const updated = await loadSavedChats();
-    setSavedChats(updated);
+    
+    // Оптимизация: удаляем из state локально вместо перезагрузки
+    setSavedChats(prev => prev.filter(c => c.id !== id));
+    
     if (currentChatId === id) {
       handleClearChat();
     }
-  }, [currentChatId, handleClearChat]);
+  }, [currentChatId, handleClearChat, savedChats]);
 
   const handleSavedChatsChange = useCallback(async (chats: SavedChat[]) => {
+    // Оптимизация: сохраняем только изменённые чаты
+    // Предполагаем что chats — это новый порядок, сохраняем всё
     setSavedChats(chats);
-    for (const c of chats) {
-      await saveChatToStorage(c);
-    }
+    
+    // Сохраняем параллельно вместо последовательно
+    await Promise.all(chats.map(c => saveChatToStorage(c)));
   }, []);
 
   const handleApiKeysChange = useCallback((keys: ApiKeyEntry[]) => {
@@ -1161,10 +1353,13 @@ export default function Home() {
       // Сохраняем только если получили реальный ответ
       const lastText = getVisibleMessageText(lastMsg.parts);
       if (lastMsg.role === 'model' && (lastText || lastMsg.isBlocked || (lastMsg.toolCalls?.length || 0) > 0)) {
-        saveCurrentChat(messages);
+        saveCurrentChat(messages).catch(err => {
+          console.error('Auto-save failed:', err);
+          // TODO: показать toast пользователю
+        });
       }
     }
-  }, [isStreaming]);
+  }, [isStreaming, messages, unsaved, saveCurrentChat]);
 
   const hasKeys = !!selectedApiKeyEntry;
   const hasApiAndModel = hasKeys && !!model;
@@ -1261,6 +1456,12 @@ export default function Home() {
     onOpenMemoryModal: () => {
       setShowMemoryModal(true);
     },
+    onOpenSkillsMarket: () => {
+      setShowSkillsMarket(true);
+    },
+    onOpenHFSpaces: () => {
+      setShowHFSpaces(true);
+    },
     deepThinkSystemPrompt,
     onDeepThinkSystemPromptChange: setDeepThinkSystemPrompt,
     temperature,
@@ -1268,6 +1469,7 @@ export default function Home() {
     thinkingBudget,
     onThinkingBudgetChange: setThinkingBudget,
     tokenCount,
+    isCountingTokens,
     isStreaming,
     savedChats,
     onSavedChatsChange: handleSavedChatsChange,
@@ -1277,6 +1479,7 @@ export default function Home() {
     onDeleteChat: handleDeleteSavedChat,
     memoryEnabled,
     onMemoryEnabledChange: setMemoryEnabled,
+    onSkillsChanged: () => setSkillsRevision(r => r + 1),
   };
 
   return (
@@ -1659,6 +1862,26 @@ export default function Home() {
         open={showMemoryModal}
         onClose={() => setShowMemoryModal(false)}
         chatId={currentChatId || undefined}
+      />
+
+      {/* Skills Market Modal */}
+      <SkillsMarket
+        open={showSkillsMarket}
+        onClose={() => setShowSkillsMarket(false)}
+        chatId={currentChatId || ''}
+        messages={messages}
+        onUIEvent={handleSkillEvent}
+        onSkillsChanged={() => setSkillsRevision(r => r + 1)}
+      />
+
+      {/* HF Spaces Manager Modal */}
+      <HFSpaceManager
+        open={showHFSpaces}
+        onClose={() => setShowHFSpaces(false)}
+        onSpacesChanged={() => {
+          reloadHFSpaceSkills();
+          setSkillsRevision(r => r + 1);
+        }}
       />
     </div>
   );

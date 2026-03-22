@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type { Message, AttachedFile, Part, DeepThinkAnalysis } from '@/types';
 import MemoryPill from './MemoryPill';
+import { SkillArtifactsGroup } from './SkillArtifactRenderer';
 
 interface ChatMessageProps {
   message: Message;
@@ -1348,6 +1349,85 @@ function ToolCallsBlock({
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Skill Tool Call Pill - сворачиваемая плашка для вызовов skill tools
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SkillToolCallPill({
+  name,
+  args,
+  result,
+}: {
+  name: string;
+  args: Record<string, unknown>;
+  result: unknown;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  
+  const resultStr = typeof result === 'string' 
+    ? result 
+    : JSON.stringify(result, null, 2);
+  
+  const hasArgs = Object.keys(args).length > 0;
+  
+  // Короткий превью результата (первые 50 символов)
+  const resultPreview = resultStr.length > 50 
+    ? resultStr.slice(0, 50) + '...' 
+    : resultStr;
+
+  return (
+    <div className="mb-3">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-left transition-all hover:border-[var(--border-strong)] hover:bg-[var(--surface-3)]"
+      >
+        <Wrench size={12} className="flex-shrink-0 text-[var(--text-muted)]" />
+        <span className="flex-1 truncate font-mono text-xs text-[var(--text-primary)]">
+          {name}
+        </span>
+        {!expanded && (
+          <span className="truncate text-xs text-[var(--text-dim)]">
+            → {resultPreview}
+          </span>
+        )}
+        <ChevronDown 
+          size={14} 
+          className={`flex-shrink-0 text-[var(--text-dim)] transition-transform ${expanded ? 'rotate-180' : ''}`}
+        />
+      </button>
+      
+      {expanded && (
+        <div className="mt-2 rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-3 text-xs">
+          {hasArgs && (
+            <div className="mb-3">
+              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-dim)]">
+                Аргументы
+              </p>
+              <div className="space-y-1">
+                {Object.entries(args).map(([key, value]) => (
+                  <div key={key} className="flex gap-2">
+                    <span className="font-mono text-[var(--text-muted)]">{key}:</span>
+                    <span className="font-mono text-[var(--text-primary)]">{String(value)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          <div>
+            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-dim)]">
+              Результат
+            </p>
+            <pre className="overflow-x-auto rounded-lg bg-[var(--surface-2)] p-2 font-mono text-xs leading-relaxed text-[var(--text-primary)]">
+              {resultStr}
+            </pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ChatMessage({
   message, index, isLast, isStreaming,
   canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit
@@ -1514,6 +1594,13 @@ export default function ChatMessage({
           </div>
         )}
 
+        {/* Skill Artifacts */}
+        {message.skillArtifacts && message.skillArtifacts.length > 0 && (
+          <div className={`mb-2 ${isUser ? 'text-right' : 'text-left'}`}>
+            <SkillArtifactsGroup artifacts={message.skillArtifacts} />
+          </div>
+        )}
+
         {/* Editing */}
         {isEditing ? (
           <div className="w-full">
@@ -1606,6 +1693,20 @@ export default function ChatMessage({
                     category={op.category}
                     confidence={op.confidence}
                     reason={op.reason}
+                  />
+                ))}
+              </>
+            )}
+
+            {/* Skill Tool Calls */}
+            {!isUser && message.skillToolCalls && message.skillToolCalls.length > 0 && (
+              <>
+                {message.skillToolCalls.map((call, idx) => (
+                  <SkillToolCallPill
+                    key={`${message.id}-skill-${idx}`}
+                    name={call.name}
+                    args={call.args}
+                    result={call.result}
                   />
                 ))}
               </>
