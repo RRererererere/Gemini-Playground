@@ -61,13 +61,62 @@ function ConfigModal({
   onSave: (config: Record<string, string>) => void;
   onClose: () => void;
 }) {
+  const [tab, setTab] = useState<'config' | 'prompt'>('config');
   const [values, setValues] = useState<Record<string, string>>(() => getSkillConfig(skill.id));
+  
+  // Prompt state
+  const [customPrompt, setCustomPrompt] = useState<string>('');
+  const [hasCustomPrompt, setHasCustomPrompt] = useState(false);
+  const [defaultPrompt, setDefaultPrompt] = useState<string>('');
 
   const fields = skill.configSchema ?? [];
 
+  // Load prompt on mount
+  useEffect(() => {
+    const { getSkillPrompt } = require('@/lib/storage');
+    const custom = getSkillPrompt(skill.id);
+    
+    // Get default prompt from skill
+    const ctx = {
+      chatId: '',
+      messages: [],
+      storage: {
+        get: () => null,
+        set: () => {},
+        getJSON: () => null,
+        setJSON: () => {},
+        remove: () => {},
+      },
+      emit: () => {},
+    };
+    const defaultP = skill.onSystemPrompt?.(ctx as any) || '';
+    
+    setDefaultPrompt(defaultP);
+    if (custom) {
+      setCustomPrompt(custom);
+      setHasCustomPrompt(true);
+    } else {
+      setCustomPrompt(defaultP);
+      setHasCustomPrompt(false);
+    }
+  }, [skill]);
+
+  const handleSavePrompt = () => {
+    const { saveSkillPrompt } = require('@/lib/storage');
+    saveSkillPrompt(skill.id, customPrompt);
+    setHasCustomPrompt(true);
+  };
+
+  const handleResetPrompt = () => {
+    const { resetSkillPrompt } = require('@/lib/storage');
+    resetSkillPrompt(skill.id);
+    setCustomPrompt(defaultPrompt);
+    setHasCustomPrompt(false);
+  };
+
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="w-full max-w-md rounded-3xl border border-[var(--border-strong)] bg-[var(--surface-1)] shadow-2xl">
+      <div className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-3xl border border-[var(--border-strong)] bg-[var(--surface-1)] shadow-2xl">
         <div className="border-b border-[var(--border)] px-6 py-4">
           <div className="flex items-center justify-between">
             <div>
@@ -85,59 +134,125 @@ function ConfigModal({
           </div>
         </div>
 
-        <div className="p-6">
-          {fields.length === 0 ? (
-            <p className="text-sm italic text-[var(--text-dim)]">У этого скилла нет настроек.</p>
+        {/* Tabs */}
+        <div className="flex gap-2 px-6 pt-4 border-b border-[var(--border)] pb-3">
+          <button
+            onClick={() => setTab('config')}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+              tab === 'config'
+                ? 'bg-white text-black'
+                : 'text-[var(--text-dim)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            ⚙️ Настройки
+          </button>
+          <button
+            onClick={() => setTab('prompt')}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+              tab === 'prompt'
+                ? 'bg-white text-black'
+                : 'text-[var(--text-dim)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            📝 Промпт
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {tab === 'config' ? (
+            fields.length === 0 ? (
+              <p className="text-sm italic text-[var(--text-dim)]">У этого скилла нет настроек.</p>
+            ) : (
+              <div className="space-y-4">
+                {fields.map(field => (
+                  <div key={field.key}>
+                    <label className="mb-2 block text-sm font-medium text-[var(--text-primary)]">
+                      {field.label}
+                      {field.required && <span className="ml-1 text-red-400">*</span>}
+                    </label>
+                    {field.description && (
+                      <p className="mb-2 text-xs text-[var(--text-muted)]">{field.description}</p>
+                    )}
+                    {field.type === 'select' ? (
+                      <select
+                        className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--text-primary)] focus:border-[var(--border-strong)] focus:outline-none"
+                        value={values[field.key] ?? ''}
+                        onChange={e => setValues(v => ({ ...v, [field.key]: e.target.value }))}
+                      >
+                        <option value="">— выбери —</option>
+                        {field.options?.map(o => (
+                          <option key={o} value={o}>{o}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type={field.type === 'password' ? 'password' : 'text'}
+                        placeholder={field.placeholder}
+                        className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
+                        value={values[field.key] ?? ''}
+                        onChange={e => setValues(v => ({ ...v, [field.key]: e.target.value }))}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )
           ) : (
-            <div className="space-y-4">
-              {fields.map(field => (
-                <div key={field.key}>
-                  <label className="mb-2 block text-sm font-medium text-[var(--text-primary)]">
-                    {field.label}
-                    {field.required && <span className="ml-1 text-red-400">*</span>}
-                  </label>
-                  {field.description && (
-                    <p className="mb-2 text-xs text-[var(--text-muted)]">{field.description}</p>
-                  )}
-                  {field.type === 'select' ? (
-                    <select
-                      className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--text-primary)] focus:border-[var(--border-strong)] focus:outline-none"
-                      value={values[field.key] ?? ''}
-                      onChange={e => setValues(v => ({ ...v, [field.key]: e.target.value }))}
-                    >
-                      <option value="">— выбери —</option>
-                      {field.options?.map(o => (
-                        <option key={o} value={o}>{o}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type={field.type === 'password' ? 'password' : 'text'}
-                      placeholder={field.placeholder}
-                      className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
-                      value={values[field.key] ?? ''}
-                      onChange={e => setValues(v => ({ ...v, [field.key]: e.target.value }))}
-                    />
-                  )}
-                </div>
-              ))}
+            <div className="flex flex-col h-full">
+              <div className="mb-3">
+                <p className="text-sm text-[var(--text-muted)] mb-2">
+                  {hasCustomPrompt 
+                    ? '✅ Используется кастомный промпт'
+                    : '📄 Используется дефолтный промпт'}
+                </p>
+              </div>
+              <textarea
+                value={customPrompt}
+                onChange={(e) => setCustomPrompt(e.target.value)}
+                className="flex-1 w-full min-h-[300px] rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4 text-sm text-[var(--text-primary)] font-mono focus:border-[var(--border-strong)] focus:outline-none resize-none"
+                placeholder="Системный промпт для скилла..."
+              />
+              <div className="mt-3 text-xs text-[var(--text-dim)]">
+                {customPrompt.length} символов
+              </div>
             </div>
           )}
+        </div>
 
-          <div className="mt-6 flex gap-2">
-            <button
-              onClick={onClose}
-              className="flex-1 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2 text-sm text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
-            >
-              Отмена
-            </button>
-            <button
-              onClick={() => onSave(values)}
-              className="flex-1 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90"
-            >
-              Сохранить
-            </button>
-          </div>
+        <div className="border-t border-[var(--border)] px-6 py-4 flex gap-2">
+          {tab === 'config' ? (
+            <>
+              <button
+                onClick={onClose}
+                className="flex-1 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2 text-sm text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+              >
+                Отмена
+              </button>
+              <button
+                onClick={() => onSave(values)}
+                className="flex-1 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90"
+              >
+                Сохранить
+              </button>
+            </>
+          ) : (
+            <>
+              {hasCustomPrompt && (
+                <button
+                  onClick={handleResetPrompt}
+                  className="flex-1 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-400 transition-colors hover:bg-red-500/20"
+                >
+                  Восстановить дефолтный
+                </button>
+              )}
+              <button
+                onClick={handleSavePrompt}
+                className="flex-1 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90"
+              >
+                Сохранить промпт
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -219,15 +334,13 @@ function SkillCard({
             >
               {active ? 'Отключить' : 'Включить'}
             </button>
-            {skill.configSchema && skill.configSchema.length > 0 && (
-              <button
-                onClick={onConfigure}
-                className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-dim)] transition-colors hover:text-[var(--text-primary)]"
-                title="Настройки"
-              >
-                <Settings size={14} />
-              </button>
-            )}
+            <button
+              onClick={onConfigure}
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-dim)] transition-colors hover:text-[var(--text-primary)]"
+              title="Настройки"
+            >
+              <Settings size={14} />
+            </button>
             <button
               onClick={onUninstall}
               className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-dim)] transition-colors hover:bg-red-500/10 hover:text-red-400"

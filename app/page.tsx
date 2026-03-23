@@ -9,11 +9,14 @@ import MemoryModal from '@/components/MemoryModal';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,
-  Save, X, ArrowDown, RefreshCw
+  Save, X, ArrowDown, RefreshCw, MonitorPlay
 } from 'lucide-react';
+// @ts-ignore
+import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
+import LivePreviewPanel from '@/components/LivePreviewPanel';
 import { useDeepThink } from '@/lib/useDeepThink';
 import DeepThinkToggle from '@/components/DeepThinkToggle';
-import type { ChatTool, Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis, ToolResponse, SavedSystemPrompt, SkillArtifact } from '@/types';
+import type { ChatTool, Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis, ToolResponse, SavedSystemPrompt, SkillArtifact, CanvasElement, WebsiteType } from '@/types';
 import {
   loadApiKeys, saveApiKeys, isRateLimitError,
 } from '@/lib/apiKeyManager';
@@ -152,6 +155,15 @@ export default function Home() {
   const [tokenCount, setTokenCount] = useState(0);
   const [isCountingTokens, setIsCountingTokens] = useState(false);
   const [error, setError] = useState<string>('');
+  const [showLiveCanvas, setShowLiveCanvas] = useState(false);
+  const [liveCode, setLiveCode] = useState('');
+  const [websiteType, setWebsiteType] = useState<WebsiteType>(null);
+  
+  // Mobile canvas state: 'hidden' | 'sheet' (55%) | 'fullscreen'
+  type MobileCanvasState = 'hidden' | 'sheet' | 'fullscreen';
+  const [mobileCanvasState, setMobileCanvasState] = useState<MobileCanvasState>('hidden');
+  
+  const [pendingCanvasElement, setPendingCanvasElement] = useState<CanvasElement | null>(null);
 
   // Saved chats
   const [savedChats, setSavedChats] = useState<SavedChat[]>([]);
@@ -183,11 +195,18 @@ export default function Home() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const tokenDebounceRef = useRef<NodeJS.Timeout | null>(null);
+  const livePreviewRef = useRef<any>(null);
+  const messagesRef = useRef<Message[]>([]); // Keep latest messages to avoid stale closure
 
   const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze, abort: abortDeepThink } = useDeepThink();
   const selectedApiKeyEntry = apiKeys[activeKeyIndex] || null;
   const selectedApiKey = selectedApiKeyEntry?.key || '';
   const selectedApiKeySuffix = getApiKeySuffix(selectedApiKeyEntry?.key);
+
+  // Keep messagesRef in sync with messages state
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // Detect mobile only when crossing breakpoint.
   // Keyboard open/close on mobile fires resize, so we avoid closing panels on every resize event.
@@ -628,6 +647,11 @@ export default function Home() {
         let pendingText = '';
         let pendingThinking = '';
         let flushScheduled = false;
+
+        // streaming HTML в canvas
+        let htmlAccumulator = '';
+        let isInsideHtmlBlock = false;
+        let htmlUpdateTimer: ReturnType<typeof setTimeout> | null = null;
         
         // tool calls собранные в этом раунде
         const roundToolCalls: any[] = [];
@@ -649,6 +673,43 @@ export default function Home() {
           }
 
           if (textChunk) {
+            const chunk = textChunk;
+            
+            // 🔥 LIVE HTML STREAMING PARSER
+            // Детектируем ```html блоки и обновляем preview в реальном времени
+            const fullText = (htmlAccumulator + chunk);
+            
+            // Начало HTML блока
+            if (!isInsideHtmlBlock && fullText.includes('```html')) {
+              isInsideHtmlBlock = true;
+              setShowLiveCanvas(true); // Автооткрытие canvas
+            }
+            
+            if (isInsideHtmlBlock) {
+              htmlAccumulator += chunk;
+              
+              // Конец блока
+              const endMarkers = ['```\n', '```\r', '```\r\n', '``` ', '```<'];
+              if (endMarkers.some(marker => htmlAccumulator.includes(marker))) {
+                isInsideHtmlBlock = false;
+              }
+              
+              // Извлекаем HTML (всё между ```html и ```)
+              const htmlMatch = htmlAccumulator.match(/```(?:html)[\s\n]+([\s\S]*?)(?:```|$)/i);
+              if (htmlMatch && htmlMatch[1]) {
+                const partialHTML = htmlMatch[1];
+                
+                // Throttle: обновляем не чаще 80ms (оптимально для плавности)
+                if (htmlUpdateTimer) clearTimeout(htmlUpdateTimer);
+                htmlUpdateTimer = setTimeout(() => {
+                  // Only update when we have meaningful HTML (at least has <body> tag or 200+ chars)
+                  if (partialHTML.length > 200 || partialHTML.includes('<body')) {
+                    setLiveCode(partialHTML);
+                  }
+                }, 80);
+              }
+            }
+
             setMessages(prev => prev.map(m => {
               if (m.id !== targetMessageId) return m;
               const hasTextPart = m.parts.some(p => 'text' in p);
@@ -785,6 +846,14 @@ export default function Home() {
                     response: skillResult.functionResponse,
                     hidden: true, // не показываем в UI как обычный tool call
                   });
+                  
+                  // 🌐 Извлекаем website_type из set_website_meta
+                  if (name === 'set_website_meta' && typeof skillResult.functionResponse === 'object' && skillResult.functionResponse !== null) {
+                    const response = skillResult.functionResponse as any;
+                    if (response.website_type) {
+                      setWebsiteType(response.website_type as WebsiteType);
+                    }
+                  }
                   
                   // Добавляем в skillToolCalls для отображения в UI
                   setMessages(prev => prev.map(m => {
@@ -1007,22 +1076,32 @@ export default function Home() {
       setIsStreaming(false);
       setStreamingId(null);
       abortControllerRef.current = null;
+      
       setMessages(prev => prev.map(m => {
         if (m.id === targetMessageId) {
-          // Уведомляем скиллы о завершении сообщения
           const finalMessage = { ...m, isStreaming: false };
+          
+          // Уведомляем скиллы о завершении сообщения
           notifySkillsMessageComplete(
             finalMessage,
             currentChatId || '',
             messages,
             handleSkillEvent
           ).catch(console.error);
+          
           return finalMessage;
         }
         return m;
       }));
     }
   }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, memoryEnabled]);
+
+  // Auto-open sheet for ai_interactive sites when streaming ends
+  useEffect(() => {
+    if (!isStreaming && isMobile && showLiveCanvas && websiteType === 'ai_interactive' && mobileCanvasState === 'hidden') {
+      setMobileCanvasState('sheet');
+    }
+  }, [isStreaming, isMobile, showLiveCanvas, websiteType, mobileCanvasState]);
 
   // ============ HANDLERS ============
   const handleSend = useCallback(async (text: string, files: AttachedFile[]) => {
@@ -1279,6 +1358,10 @@ export default function Home() {
     setSystemPrompt('');
     setDeepThinkSystemPrompt(loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
     setTools([]);
+    // 🔥 Сбрасываем canvas
+    setLiveCode('');
+    setWebsiteType(null);
+    setShowLiveCanvas(false);
   }, [isStreaming, messages, saveCurrentChat, clearChatState]);
 
   const handleLoadChat = useCallback((chat: SavedChat) => {
@@ -1527,8 +1610,44 @@ export default function Home() {
         </div>
       )}
 
-      {/* Main Chat Area */}
-      <div className="flex-1 flex min-w-0 flex-col overflow-hidden">
+      {/* Mobile: Bottom Sheet для ai_interactive или Tab Switcher для static */}
+      {isMobile && showLiveCanvas && websiteType === 'static' && (
+        <div className="flex-shrink-0 flex bg-[var(--surface-1)] border-b border-[var(--border-subtle)] px-4 py-2">
+          <div className="flex bg-[var(--surface-3)] p-1 rounded-lg w-full">
+            <button 
+              onClick={() => setMobileCanvasState('hidden')} 
+              className={`flex-1 text-center py-1.5 text-[13px] font-semibold rounded-md transition-colors ${
+                mobileCanvasState === 'hidden' ? 'bg-[var(--surface-4)] text-[var(--accent)] shadow-sm' : 'text-[var(--text-dim)] hover:text-[var(--text-muted)]'
+              }`}
+            >
+              Чат
+            </button>
+            <button 
+              onClick={() => setMobileCanvasState('fullscreen')} 
+              className={`flex-1 text-center py-1.5 text-[13px] font-semibold rounded-md transition-colors ${
+                mobileCanvasState === 'fullscreen' ? 'bg-[var(--surface-4)] text-[var(--accent)] shadow-sm' : 'text-[var(--text-dim)] hover:text-[var(--text-muted)]'
+              }`}
+            >
+              Live Preview
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main Area with optional Live Canvas */}
+      <PanelGroup direction={isMobile ? "vertical" : "horizontal"} className="flex-1 min-w-0 overflow-hidden">
+        
+        {/* Chat Panel */}
+        <Panel 
+           defaultSize={showLiveCanvas && !isMobile ? 50 : 100} 
+           minSize={30} 
+           className={`flex flex-col min-w-0 overflow-hidden relative ${
+             isMobile && showLiveCanvas && (
+               (websiteType === 'static' && mobileCanvasState === 'fullscreen') ||
+               (websiteType === 'ai_interactive' && mobileCanvasState === 'fullscreen')
+             ) ? '!hidden' : ''
+           }`}
+        >
 
         {/* Top bar */}
         <div className="flex flex-shrink-0 items-center justify-between border-b border-[var(--border-subtle)] bg-[rgba(10,10,10,0.86)] px-3 py-2.5 backdrop-blur-xl">
@@ -1585,6 +1704,17 @@ export default function Home() {
             </button>
             <div className="w-[1px] h-4 bg-[var(--border)] mx-1 hidden sm:block" />
             
+            {/* Restore Preview Button - shows when code exists but canvas is closed */}
+            {liveCode && !showLiveCanvas && (
+              <button
+                onClick={() => setShowLiveCanvas(true)}
+                className="flex items-center justify-center w-8 h-8 text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-lg transition-colors"
+                title="Открыть превью сайта"
+              >
+                <MonitorPlay size={16} />
+              </button>
+            )}
+            
             {messages.length > 0 && (
               <button
                 onClick={handleClearChat}
@@ -1595,6 +1725,20 @@ export default function Home() {
                 <span className="hidden md:block">Очистить</span>
               </button>
             )}
+            <button
+              onClick={() => setShowLiveCanvas(prev => !prev)}
+              className={`flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-all ${
+                showLiveCanvas
+                  ? 'border-[var(--border-strong)] bg-[var(--surface-3)] text-[var(--text-primary)]'
+                  : 'border-transparent text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
+              }`}
+              title="Live Canvas"
+            >
+              <MonitorPlay size={13} />
+              <span className="hidden md:block">Canvas</span>
+            </button>
+            <div className="w-[1px] h-4 bg-[var(--border)] mx-1 hidden sm:block" />
+            
             <button
               onClick={handleNewChat}
               disabled={isStreaming}
@@ -1647,6 +1791,10 @@ export default function Home() {
                   onEditPreviousUserMessage={forceEditPreviousUserMessage}
                   onClearForceEdit={clearForceEdit}
                   onEditDeepThinkAnalysis={handleEditDeepThinkAnalysis}
+                  onPlayHTML={(html) => {
+                    setLiveCode(html);
+                    setShowLiveCanvas(true);
+                  }}
                 />
               ))}
               <div ref={chatEndRef} />
@@ -1662,6 +1810,17 @@ export default function Home() {
               title="Вниз"
             >
               <ArrowDown size={18} />
+            </button>
+          )}
+
+          {/* Floating button для открытия preview на мобилках */}
+          {isMobile && showLiveCanvas && mobileCanvasState === 'hidden' && (
+            <button
+              onClick={() => setMobileCanvasState(websiteType === 'ai_interactive' ? 'sheet' : 'fullscreen')}
+              className="fixed bottom-24 right-4 p-3 bg-indigo-600 text-white rounded-full shadow-lg hover:bg-indigo-700 transition-all z-20"
+              title="Открыть превью"
+            >
+              <MonitorPlay size={20} />
             </button>
           )}
         </div>
@@ -1684,9 +1843,162 @@ export default function Home() {
             onContinue={handleContinue}
             canRun={messages.length > 0 && !isStreaming && hasApiAndModel}
             onRun={handleRegenerate}
+            pendingCanvasElement={pendingCanvasElement}
+            onCanvasElementConsumed={() => setPendingCanvasElement(null)}
           />
         </div>
-      </div>
+        </Panel>
+
+        {!isMobile && showLiveCanvas && (
+           <PanelResizeHandle className="w-1 bg-[var(--border-subtle)] hover:bg-[var(--border-strong)] transition-colors cursor-col-resize z-10" />
+        )}
+
+        {/* Desktop: обычная панель */}
+        {!isMobile && showLiveCanvas && (
+          <Panel 
+             defaultSize={50} 
+             minSize={30} 
+             className="flex flex-col min-w-0 border-l border-[var(--border)] overflow-hidden bg-[var(--surface-1)]"
+          >
+             <LivePreviewPanel 
+               ref={livePreviewRef}
+               code={liveCode}
+               websiteType={websiteType}
+               isStreaming={isStreaming}
+               onClose={() => setShowLiveCanvas(false)} 
+               onElementSelected={(element) => {
+                 setPendingCanvasElement(element);
+               }}
+               onAIDataReceived={async (bridgeData) => {
+                 // 🔥 GEMINI BRIDGE — данные от сайта → AI
+                 const dataText = JSON.stringify(bridgeData.data, null, 2);
+                 const userMessage = `[🌐 SITE DATA] ${bridgeData.eventType}\n\`\`\`json\n${dataText}\n\`\`\``;
+                 
+                 // Добавляем сообщение в чат
+                 const newUserMsg: Message = {
+                   id: generateId(),
+                   role: 'user',
+                   parts: [{ text: userMessage }],
+                 };
+                 
+                 setMessages(prev => [...prev, newUserMsg]);
+                 
+                 // Отправляем в AI
+                 const assistantMsg: Message = {
+                   id: generateId(),
+                   role: 'model',
+                   parts: [],
+                   isStreaming: true,
+                 };
+                 
+                 setMessages(prev => [...prev, assistantMsg]);
+                 
+                 // Вызываем streamGeneration с актуальной историей из ref (избегаем stale closure)
+                 await streamGeneration([...messagesRef.current, newUserMsg], assistantMsg.id, false);
+               }}
+             />
+          </Panel>
+        )}
+
+        {/* Mobile: Bottom Sheet для ai_interactive или fullscreen для static */}
+        {isMobile && showLiveCanvas && mobileCanvasState !== 'hidden' && (
+          <div 
+            className={`fixed inset-x-0 bg-[var(--surface-1)] border-t border-[var(--border)] z-50 transition-all duration-300 ease-out ${
+              mobileCanvasState === 'sheet' 
+                ? 'bottom-0 top-[45%] rounded-t-2xl shadow-2xl' 
+                : 'bottom-0 top-0'
+            }`}
+            onTouchStart={(e) => {
+              const touch = e.touches[0];
+              const startY = touch.clientY;
+              const startState = mobileCanvasState;
+              
+              const handleTouchMove = (e: TouchEvent) => {
+                const currentY = e.touches[0].clientY;
+                const diff = currentY - startY;
+                
+                // Свайп вниз из fullscreen → sheet
+                if (startState === 'fullscreen' && diff > 100) {
+                  setMobileCanvasState('sheet');
+                  document.removeEventListener('touchmove', handleTouchMove);
+                  document.removeEventListener('touchend', handleTouchEnd);
+                }
+                // Свайп вниз из sheet → hidden
+                else if (startState === 'sheet' && diff > 100) {
+                  setMobileCanvasState('hidden');
+                  document.removeEventListener('touchmove', handleTouchMove);
+                  document.removeEventListener('touchend', handleTouchEnd);
+                }
+                // Свайп вверх из sheet → fullscreen
+                else if (startState === 'sheet' && diff < -100) {
+                  setMobileCanvasState('fullscreen');
+                  document.removeEventListener('touchmove', handleTouchMove);
+                  document.removeEventListener('touchend', handleTouchEnd);
+                }
+              };
+              
+              const handleTouchEnd = () => {
+                document.removeEventListener('touchmove', handleTouchMove);
+                document.removeEventListener('touchend', handleTouchEnd);
+              };
+              
+              document.addEventListener('touchmove', handleTouchMove);
+              document.addEventListener('touchend', handleTouchEnd);
+            }}
+          >
+            {/* Drag handle для sheet */}
+            {mobileCanvasState === 'sheet' && (
+              <div className="flex justify-center py-2 cursor-grab active:cursor-grabbing">
+                <div className="w-12 h-1 bg-white/20 rounded-full" />
+              </div>
+            )}
+            
+            <div className="h-full flex flex-col overflow-hidden">
+              <LivePreviewPanel 
+                ref={livePreviewRef}
+                code={liveCode}
+                websiteType={websiteType}
+                isStreaming={isStreaming}
+                onClose={() => {
+                  setShowLiveCanvas(false);
+                  setMobileCanvasState('hidden');
+                }} 
+                onElementSelected={(element) => {
+                  setPendingCanvasElement(element);
+                  setMobileCanvasState('hidden'); // Возвращаемся к чату
+                }}
+                onAIDataReceived={async (bridgeData) => {
+                  // 🔥 GEMINI BRIDGE — данные от сайта → AI
+                  const dataText = JSON.stringify(bridgeData.data, null, 2);
+                  const userMessage = `[🌐 SITE DATA] ${bridgeData.eventType}\n\`\`\`json\n${dataText}\n\`\`\``;
+                  
+                  // Добавляем сообщение в чат
+                  const newUserMsg: Message = {
+                    id: generateId(),
+                    role: 'user',
+                    parts: [{ text: userMessage }],
+                  };
+                  
+                  setMessages(prev => [...prev, newUserMsg]);
+                  
+                  // Отправляем в AI
+                  const assistantMsg: Message = {
+                    id: generateId(),
+                    role: 'model',
+                    parts: [],
+                    isStreaming: true,
+                  };
+                  
+                  setMessages(prev => [...prev, assistantMsg]);
+                  
+                  // Вызываем streamGeneration с актуальной историей из ref (избегаем stale closure)
+                  await streamGeneration([...messagesRef.current, newUserMsg], assistantMsg.id, false);
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </PanelGroup>
 
       {!isMobile && (
         <div className="flex-shrink-0 overflow-hidden border-l border-[var(--border-subtle)] transition-[width,opacity] duration-300 ease-out" style={settingsSidebarStyle}>

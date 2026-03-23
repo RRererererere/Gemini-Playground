@@ -1,3 +1,31 @@
+export interface CanvasElement {
+  type: 'click' | 'drag-image' | 'drag-text';
+  tagName: string;
+  innerText?: string;
+  dataURL?: string;
+  alt?: string;
+  className?: string;
+  id?: string;
+}
+
+// Gemini Bridge Protocol
+export interface BridgePayload {
+  eventType: string;        // "calculate", "analyze", "process" etc
+  data: Record<string, any>; // User data from site
+  format?: 'silent' | 'show' | 'auto'; // How to display in chat
+}
+
+export interface BridgeResponse {
+  type: string;             // Event type to match
+  html?: string;            // HTML to inject into site
+  data?: Record<string, any>; // Any data for site
+  message?: string;         // Optional message for chat
+}
+
+export type PreviewMode = 'interact' | 'inspect' | 'ai-app';
+
+export type WebsiteType = 'static' | 'ai_interactive' | null;
+
 export interface TextPart {
   text: string;
 }

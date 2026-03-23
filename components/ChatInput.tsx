@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Send, Square, Paperclip, X, FileText, Image as ImageIcon,
   Volume2, Braces, Plus, ArrowRight, Video
 } from 'lucide-react';
-import type { AttachedFile } from '@/types';
+import type { AttachedFile, CanvasElement } from '@/types';
 
 interface ChatInputProps {
   onSend: (text: string, files: AttachedFile[]) => void;
@@ -17,6 +17,8 @@ interface ChatInputProps {
   onContinue: () => void;
   canRun: boolean;
   onRun: () => void;
+  pendingCanvasElement?: CanvasElement | null;
+  onCanvasElementConsumed?: () => void;
 }
 
 const ACCEPTED_TYPES = {
@@ -218,13 +220,32 @@ function FileChip({ file, onRemove }: { file: AttachedFile; onRemove: () => void
 
 export default function ChatInput({
   onSend, onStop, isStreaming, disabled,
-  canContinue, onContinue, canRun, onRun, onAddUserMessage
+  canContinue, onContinue, canRun, onRun, onAddUserMessage,
+  pendingCanvasElement, onCanvasElementConsumed
 }: ChatInputProps) {
   const [text, setText] = useState('');
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [canvasPreview, setCanvasPreview] = useState<CanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (pendingCanvasElement) {
+      setCanvasPreview(pendingCanvasElement);
+      onCanvasElementConsumed?.();
+      // Фокус на textarea
+      textareaRef.current?.focus();
+    }
+  }, [pendingCanvasElement, onCanvasElementConsumed]);
+
+  useEffect(() => {
+    const handleWindowDragOver = (e: DragEvent) => {
+      setIsDragging(true);
+    };
+    window.addEventListener('dragover', handleWindowDragOver);
+    return () => window.removeEventListener('dragover', handleWindowDragOver);
+  }, []);
 
   const processFile = useCallback(async (file: File): Promise<AttachedFile | null> => {
     const lowerName = file.name.toLowerCase();
@@ -312,11 +333,50 @@ export default function ChatInput({
     setFiles(prev => [...prev, ...valid].slice(0, 10)); // max 10 files
   }, [processFile]);
 
+  useEffect(() => {
+    const handleMobileDrop = (e: any) => {
+      const payload = e.detail;
+      if (payload && payload.type === 'text') {
+        const quoteContent = `[Элемент из Canvas] <${payload.tagName?.toLowerCase()}>:\n"${payload.content}"\n`;
+        setText(prev => prev + (prev ? '\n\n' : '') + quoteContent);
+      } else if (payload && payload.type === 'image' && payload.dataURL) {
+        fetch(payload.dataURL).then(r => r.blob()).then(blob => {
+          const file = new File([blob], `canvas-image-${Date.now()}.png`, { type: 'image/png' });
+          handleFiles([file]);
+        });
+        setText(prev => prev + (prev ? '\n\n' : '') + `[Перетащил изображение из Canvas] ${payload.alt ? `(alt: ${payload.alt})` : ''}\n`);
+      }
+    };
+    document.addEventListener('canvas-mobile-drop', handleMobileDrop);
+    return () => document.removeEventListener('canvas-mobile-drop', handleMobileDrop);
+  }, [handleFiles]);
+
   const handleSend = () => {
     if (isStreaming) return;
-    if (!text.trim() && files.length === 0) return;
+    if (!text.trim() && files.length === 0 && !canvasPreview) return;
     if (disabled) return;
-    onSend(text.trim(), files);
+
+    let finalText = text;
+    let additionalFiles = [...files];
+
+    if (canvasPreview) {
+      if (canvasPreview.type === 'drag-image' && canvasPreview.dataURL) {
+        const base64Data = canvasPreview.dataURL.split(',')[1];
+        additionalFiles.push({
+          id: Math.random().toString(36).slice(2),
+          type: 'image',
+          mimeType: 'image/png',
+          data: base64Data,
+          size: Math.round((base64Data.length * 3) / 4),
+          name: canvasPreview.alt || 'canvas-element.png',
+        } as any);
+      } else {
+        finalText = `[Элемент с сайта: <${canvasPreview.tagName?.toLowerCase()}> "${canvasPreview.innerText?.slice(0, 100)}"]\n\n${text}`;
+      }
+      setCanvasPreview(null);
+    }
+
+    onSend(finalText.trim(), additionalFiles);
     setText('');
     setFiles([]);
   };
@@ -331,10 +391,35 @@ export default function ChatInput({
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
+    
+    try {
+      const jsonStr = e.dataTransfer.getData('application/json');
+      if (jsonStr) {
+        const payload = JSON.parse(jsonStr);
+        if (payload && payload.source === 'live-canvas-drag') {
+          if (payload.type === 'text') {
+            const quoteContent = `[Элемент из Canvas] <${payload.tagName.toLowerCase()}>:\n"${payload.content}"\n`;
+            setText(prev => prev + (prev ? '\n\n' : '') + quoteContent);
+          } else if (payload.type === 'image' && payload.dataURL) {
+            fetch(payload.dataURL)
+              .then(res => res.blob())
+              .then(blob => {
+                const file = new File([blob], `canvas-image-${Date.now()}.png`, { type: 'image/png' });
+                handleFiles([file]);
+              });
+            setText(prev => prev + (prev ? '\n\n' : '') + `[Перетащил изображение из Canvas] ${payload.alt ? `(alt: ${payload.alt})` : ''}\n`);
+          }
+          return;
+        }
+      }
+    } catch (err) {
+      // Ignore parsing errors, fallback to files
+    }
+
     handleFiles(e.dataTransfer.files);
   };
 
-  const hasContent = text.trim().length > 0 || files.length > 0;
+  const hasContent = text.trim().length > 0 || files.length > 0 || canvasPreview !== null;
 
   return (
     <div className="px-4 pb-4 pt-2">
@@ -369,6 +454,21 @@ export default function ChatInput({
                 onRemove={() => setFiles(prev => prev.filter(x => x.id !== f.id))}
               />
             ))}
+          </div>
+        )}
+
+        {/* Canvas preview */}
+        {canvasPreview && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-3)] border border-[var(--border)] rounded-lg mx-3 mt-3 mb-1 text-xs">
+            <span className="text-[var(--accent)]">📌 Из Canvas:</span>
+            {canvasPreview.type === 'drag-image' && canvasPreview.dataURL ? (
+              <img src={canvasPreview.dataURL} className="h-8 w-8 object-cover rounded" alt={canvasPreview.alt} />
+            ) : (
+              <span className="text-[var(--text-muted)] truncate max-w-[200px]">
+                &lt;{canvasPreview.tagName?.toLowerCase()}&gt; {canvasPreview.innerText?.slice(0, 60)}
+              </span>
+            )}
+            <button onClick={() => setCanvasPreview(null)} className="ml-auto text-[var(--text-dim)] hover:text-red-400">✕</button>
           </div>
         )}
 

@@ -8,7 +8,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import {
   User, Sparkles, Copy, Check, Edit2, Trash2, RefreshCw,
   ChevronDown, ChevronUp, FileText, Image as ImageIcon, Volume2, Braces,
-  Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square, Wrench, Video
+  Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square, Wrench, Video, MonitorPlay
 } from 'lucide-react';
 import type { Message, AttachedFile, Part, DeepThinkAnalysis } from '@/types';
 import MemoryPill from './MemoryPill';
@@ -28,6 +28,7 @@ interface ChatMessageProps {
   onEditPreviousUserMessage?: (modelMessageId: string) => void;
   onClearForceEdit?: (userMessageId: string) => void;
   onEditDeepThinkAnalysis?: (id: string, analysis: DeepThinkAnalysis) => void;
+  onPlayHTML?: (html: string) => void;
 }
 
 function FilePreview({ file }: { file: AttachedFile }) {
@@ -466,9 +467,10 @@ function VideoPlayer({ file }: { file: AttachedFile }) {
   );
 }
 
-function CodeBlock({ code, language }: { code: string; language?: string }) {
+function CodeBlock({ code, language, onPlayHTML }: { code: string; language?: string; onPlayHTML?: (html: string) => void }) {
   const [copied, setCopied] = useState(false);
   const lang = language || '';
+  const isHTML = lang.toLowerCase() === 'html';
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code).then(() => {
@@ -477,17 +479,35 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
     });
   };
 
+  const handlePlay = () => {
+    if (isHTML && onPlayHTML) {
+      onPlayHTML(code);
+    }
+  };
+
   return (
     <div className="relative group my-3 rounded-lg border border-[var(--border)] overflow-hidden">
       <div className="flex items-center justify-between px-4 py-2 bg-[var(--surface-3)] border-b border-[var(--border)]">
         <span className="text-[10px] font-mono text-[var(--text-dim)] uppercase tracking-widest">{lang || 'code'}</span>
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] transition-colors"
-        >
-          {copied ? <Check size={11} className="text-[var(--gem-green)]" /> : <Copy size={11} />}
-          {copied ? 'Скопировано' : 'Копировать'}
-        </button>
+        <div className="flex items-center gap-2">
+          {isHTML && onPlayHTML && (
+            <button
+              onClick={handlePlay}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[#1a1a1a] text-white text-[11px] font-medium hover:bg-[#2a2a2a] transition-colors"
+              title="Открыть в Live Preview"
+            >
+              <MonitorPlay size={12} />
+              <span className="hidden sm:inline">Play</span>
+            </button>
+          )}
+          <button
+            onClick={handleCopy}
+            className="flex items-center gap-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] transition-colors"
+          >
+            {copied ? <Check size={11} className="text-[var(--gem-green)]" /> : <Copy size={11} />}
+            <span className="hidden sm:inline">{copied ? 'Скопировано' : 'Копировать'}</span>
+          </button>
+        </div>
       </div>
       <div className="overflow-x-auto">
         <SyntaxHighlighter
@@ -518,11 +538,13 @@ function StreamingText({
   isStreaming, 
   isLast,
   animateKey,
+  onPlayHTML,
 }: { 
   text: string; 
   isStreaming: boolean;
   isLast: boolean;
   animateKey: number;
+  onPlayHTML?: (html: string) => void;
 }) {
   const prevTextRef = useRef<string>('');
   const [oldText, setOldText] = useState('');
@@ -561,6 +583,7 @@ function StreamingText({
               <CodeBlock
                 language={lang}
                 code={String(children).replace(/\n$/, '')}
+                onPlayHTML={onPlayHTML}
               />
             );
           },
@@ -590,6 +613,7 @@ function StreamingText({
                 <CodeBlock
                   language={lang}
                   code={String(children).replace(/\n$/, '')}
+                  onPlayHTML={onPlayHTML}
                 />
               );
             },
@@ -1430,7 +1454,7 @@ function SkillToolCallPill({
 
 export default function ChatMessage({
   message, index, isLast, isStreaming,
-  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit
+  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -1762,6 +1786,7 @@ export default function ChatMessage({
                       isStreaming={isStreaming}
                       isLast={isLast}
                       animateKey={animateKey}
+                      onPlayHTML={onPlayHTML}
                     />
                     ) : isStreaming && isLast ? (
                       thinking

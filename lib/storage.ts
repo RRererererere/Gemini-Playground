@@ -577,3 +577,39 @@ export async function importAllSettings(file: File): Promise<void> {
     reader.readAsText(file, 'utf-8');
   });
 }
+
+// ====================== SKILL PROMPTS ======================
+
+const SKILL_PROMPTS_KEY = 'gemini_skill_prompts';
+
+export interface SkillPromptOverride {
+  skillId: string;
+  customPrompt: string;
+}
+
+export function loadSkillPrompts(): Record<string, string> {
+  try {
+    const stored = localStorage.getItem(SKILL_PROMPTS_KEY);
+    if (!stored) return {};
+    return JSON.parse(stored);
+  } catch {
+    return {};
+  }
+}
+
+export function saveSkillPrompt(skillId: string, prompt: string) {
+  const prompts = loadSkillPrompts();
+  prompts[skillId] = prompt;
+  localStorage.setItem(SKILL_PROMPTS_KEY, JSON.stringify(prompts));
+}
+
+export function getSkillPrompt(skillId: string): string | null {
+  const prompts = loadSkillPrompts();
+  return prompts[skillId] || null;
+}
+
+export function resetSkillPrompt(skillId: string) {
+  const prompts = loadSkillPrompts();
+  delete prompts[skillId];
+  localStorage.setItem(SKILL_PROMPTS_KEY, JSON.stringify(prompts));
+}

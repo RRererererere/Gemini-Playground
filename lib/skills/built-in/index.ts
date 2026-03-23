@@ -4,6 +4,7 @@ import { urlReaderSkill } from './url-reader';
 import { notesSkill } from './notes';
 import { qrGeneratorSkill } from './qr-generator';
 import { tableGeneratorSkill } from './table-generator';
+import { websiteBuilderSkill } from './website-builder';
 import type { Skill } from '../types';
 
 export const BUILT_IN_SKILLS: Skill[] = [
@@ -13,6 +14,7 @@ export const BUILT_IN_SKILLS: Skill[] = [
   notesSkill,
   qrGeneratorSkill,
   tableGeneratorSkill,
+  websiteBuilderSkill,
 ];
 
-export { datetimeSkill, calculatorSkill, urlReaderSkill, notesSkill, qrGeneratorSkill, tableGeneratorSkill };
+export { datetimeSkill, calculatorSkill, urlReaderSkill, notesSkill, qrGeneratorSkill, tableGeneratorSkill, websiteBuilderSkill };

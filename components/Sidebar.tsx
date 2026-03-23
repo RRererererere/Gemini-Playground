@@ -305,13 +305,13 @@ export function ChatSidebar({
                 const isActive = chat.id === currentChatId;
 
                 return (
-                  <button
+                  <div
                     key={chat.id}
                     onClick={() => {
                       onLoadChat(chat);
                       onClose?.();
                     }}
-                    className={`group flex w-full items-start gap-3 rounded-[22px] border px-4 py-3 text-left transition-all ${
+                    className={`group flex w-full items-start gap-3 rounded-[22px] border px-4 py-3 cursor-pointer transition-all ${
                       isActive
                         ? 'border-[var(--border-strong)] bg-[linear-gradient(180deg,rgba(255,255,255,0.09),rgba(255,255,255,0.04))] shadow-[0_18px_40px_rgba(0,0,0,0.26)]'
                         : 'border-[var(--border)] bg-[var(--surface-1)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)]'
@@ -336,7 +336,7 @@ export function ChatSidebar({
                         <Trash2 size={13} />
                       </button>
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>
