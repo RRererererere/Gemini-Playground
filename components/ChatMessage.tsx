@@ -8,9 +8,10 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import {
   User, Sparkles, Copy, Check, Edit2, Trash2, RefreshCw,
   ChevronDown, ChevronUp, FileText, Image as ImageIcon, Volume2, Braces,
-  Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square, Wrench, Video, MonitorPlay
+  Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square, Wrench, Video, MonitorPlay,
+  Send, Calculator, ClipboardList, MessageSquare, Globe
 } from 'lucide-react';
-import type { Message, AttachedFile, Part, DeepThinkAnalysis } from '@/types';
+import type { Message, AttachedFile, Part, DeepThinkAnalysis, BridgePayload } from '@/types';
 import MemoryPill from './MemoryPill';
 import { SkillArtifactsGroup } from './SkillArtifactRenderer';
 
@@ -1452,6 +1453,121 @@ function SkillToolCallPill({
   );
 }
 
+function BridgeDataBlock({ bridgeData }: { bridgeData: BridgePayload }) {
+  const [expanded, setExpanded] = useState(true);
+  
+  // Определяем иконку и цвет в зависимости от типа события
+  const getEventStyle = (eventType: string) => {
+    const type = eventType.toLowerCase();
+    if (type.includes('form') || type.includes('submit')) {
+      return { icon: Send, color: 'blue', label: 'Отправка формы' };
+    }
+    if (type.includes('calculate') || type.includes('calc')) {
+      return { icon: Calculator, color: 'green', label: 'Расчет' };
+    }
+    if (type.includes('survey') || type.includes('poll')) {
+      return { icon: ClipboardList, color: 'purple', label: 'Опрос' };
+    }
+    if (type.includes('feedback')) {
+      return { icon: MessageSquare, color: 'orange', label: 'Обратная связь' };
+    }
+    return { icon: Globe, color: 'cyan', label: 'Данные с сайта' };
+  };
+  
+  const style = getEventStyle(bridgeData.eventType);
+  const Icon = style.icon;
+  
+  // Цветовые классы для разных типов
+  const colorClasses = {
+    blue: {
+      border: 'border-blue-500/30',
+      bg: 'from-blue-500/5 to-blue-600/5',
+      iconBg: 'bg-blue-500/20',
+      iconText: 'text-blue-400',
+      labelText: 'text-blue-400',
+      headerText: 'text-blue-400/80',
+      codeBorder: 'border-blue-500/20',
+      codeText: 'text-blue-300/80',
+    },
+    green: {
+      border: 'border-green-500/30',
+      bg: 'from-green-500/5 to-green-600/5',
+      iconBg: 'bg-green-500/20',
+      iconText: 'text-green-400',
+      labelText: 'text-green-400',
+      headerText: 'text-green-400/80',
+      codeBorder: 'border-green-500/20',
+      codeText: 'text-green-300/80',
+    },
+    purple: {
+      border: 'border-purple-500/30',
+      bg: 'from-purple-500/5 to-purple-600/5',
+      iconBg: 'bg-purple-500/20',
+      iconText: 'text-purple-400',
+      labelText: 'text-purple-400',
+      headerText: 'text-purple-400/80',
+      codeBorder: 'border-purple-500/20',
+      codeText: 'text-purple-300/80',
+    },
+    orange: {
+      border: 'border-orange-500/30',
+      bg: 'from-orange-500/5 to-orange-600/5',
+      iconBg: 'bg-orange-500/20',
+      iconText: 'text-orange-400',
+      labelText: 'text-orange-400',
+      headerText: 'text-orange-400/80',
+      codeBorder: 'border-orange-500/20',
+      codeText: 'text-orange-300/80',
+    },
+    cyan: {
+      border: 'border-cyan-500/30',
+      bg: 'from-cyan-500/5 to-cyan-600/5',
+      iconBg: 'bg-cyan-500/20',
+      iconText: 'text-cyan-400',
+      labelText: 'text-cyan-400',
+      headerText: 'text-cyan-400/80',
+      codeBorder: 'border-cyan-500/20',
+      codeText: 'text-cyan-300/80',
+    },
+  };
+  
+  const colors = colorClasses[style.color as keyof typeof colorClasses];
+  
+  return (
+    <div className={`mb-3 rounded-2xl border ${colors.border} bg-gradient-to-br ${colors.bg} overflow-hidden`}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-3 px-4 py-3 bg-black/20 hover:bg-black/30 transition-colors"
+      >
+        <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${colors.iconBg}`}>
+          <Icon size={16} className={colors.iconText} />
+        </div>
+        <div className="flex-1 min-w-0 text-left">
+          <p className="text-sm font-semibold text-[var(--text-primary)]">{style.label}</p>
+          <p className={`text-xs ${colors.labelText} font-medium`}>{bridgeData.eventType}</p>
+        </div>
+        <ChevronDown
+          size={16}
+          className={`text-[var(--text-dim)] transition-transform ${expanded ? 'rotate-180' : ''}`}
+        />
+      </button>
+      {expanded && (
+        <div className="px-4 py-4 border-t border-white/5">
+          <p className={`mb-2 text-xs font-semibold uppercase tracking-wider ${colors.headerText} flex items-center gap-1.5`}>
+            <Braces size={11} />
+            Данные
+          </p>
+          <div className={`overflow-x-auto rounded-xl bg-black/40 border ${colors.codeBorder} p-3`}>
+            <pre className={`text-xs ${colors.codeText} font-mono leading-relaxed max-h-96 overflow-y-auto`}>
+              {JSON.stringify(bridgeData.data, null, 2)}
+            </pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ChatMessage({
   message, index, isLast, isStreaming,
   canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML
@@ -1734,6 +1850,11 @@ export default function ChatMessage({
                   />
                 ))}
               </>
+            )}
+
+            {/* Bridge Data (данные от сайта) */}
+            {isUser && message.bridgeData && (
+              <BridgeDataBlock bridgeData={message.bridgeData} />
             )}
 
             {/* Tool Responses (в user сообщениях) */}

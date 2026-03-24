@@ -98,7 +98,7 @@ export interface AttachedFile {
 export interface Message {
   id: string;
   role: 'user' | 'model';
-  kind?: 'tool_response';
+  kind?: 'tool_response' | 'bridge_data'; // добавили bridge_data
   parts: Part[];
   files?: AttachedFile[];
   skillArtifacts?: SkillArtifact[]; // результаты работы скиллов
@@ -106,6 +106,7 @@ export interface Message {
   toolResponses?: ToolResponse[];
   memoryOperations?: MemoryOperation[]; // операции с памятью для отображения
   skillToolCalls?: SkillToolCall[]; // вызовы skill tools для отображения
+  bridgeData?: BridgePayload; // данные от сайта через GeminiBridge
   apiKeySuffix?: string;   // last 4 chars of the API key used for generation
   isStreaming?: boolean;
   thinking?: string;       // размышления модели (обычные)

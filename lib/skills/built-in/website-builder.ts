@@ -237,14 +237,55 @@ You MUST specify website_type in set_website_meta:
    - Use for: landing pages, portfolios, blogs, documentation, static content
 
 2. **"ai_interactive"** — Interactive app that sends data to AI in chat
-   - Website can send data to AI via window.parent.postMessage()
+   - Website can send data to AI via window.GeminiBridge.send()
    - AI responds in chat (not back to website)
-   - Use for: forms that need AI analysis, data collection tools
+   - Use for: forms that need AI analysis, data collection tools, calculators, surveys
+   
+   EXAMPLE CODE for ai_interactive:
+   \`\`\`javascript
+   // Send data to AI when user submits form
+   const submitBtn = document.getElementById('submitBtn');
+   document.getElementById('myForm').addEventListener('submit', (e) => {
+     e.preventDefault();
+     
+     // Disable button to prevent spam
+     submitBtn.disabled = true;
+     submitBtn.textContent = 'Отправлено...';
+     
+     const formData = {
+       name: document.getElementById('name').value,
+       email: document.getElementById('email').value,
+       message: document.getElementById('message').value
+     };
+     
+     // Send to AI for analysis
+     window.GeminiBridge.send('form_submission', formData);
+     
+     // Show loading state
+     window.GeminiBridge.setLoading(true);
+     
+     // Re-enable after 3 seconds (optional)
+     setTimeout(() => {
+       submitBtn.disabled = false;
+       submitBtn.textContent = 'Отправить';
+       window.GeminiBridge.setLoading(false);
+     }, 3000);
+   });
+   
+   // Optional: Listen for AI response (if needed)
+   window.GeminiBridge.onResponse((type, payload) => {
+     console.log('AI responded:', type, payload);
+     submitBtn.disabled = false;
+     submitBtn.textContent = 'Отправить';
+     window.GeminiBridge.setLoading(false);
+   });
+   \`\`\`
 
 EXAMPLES:
 - "Create a landing page for coffee shop" → website_type: "static"
 - "Build a portfolio website" → website_type: "static"
-- "Make a form to collect user feedback" → website_type: "ai_interactive"
+- "Make a form to collect user feedback and analyze it with AI" → website_type: "ai_interactive"
+- "Create a calculator that sends results to AI for explanation" → website_type: "ai_interactive"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🎯 AVAILABLE TOOLS
@@ -264,6 +305,12 @@ EXAMPLES:
 4. Make designs responsive and modern
 5. Use semantic HTML5 tags
 6. Add smooth transitions and animations
+
+🔥 FOR AI_INTERACTIVE SITES — CRITICAL:
+- ALWAYS disable submit button after sending data: \`button.disabled = true\`
+- Change button text to show loading: \`button.textContent = 'Отправлено...'\`
+- Re-enable after 3 seconds or when AI responds
+- This prevents spam and improves UX
 
 When user clicks on an element:
 - You'll receive context: { type: 'click', tagName: 'BUTTON', id: 'submit-btn', className: '...' }

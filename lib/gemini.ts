@@ -175,6 +175,17 @@ export function formatToolPayload(value: unknown): string {
 export function buildChatRequestMessages(messages: Message[]) {
   return messages
     .map(message => {
+      // Для bridge_data сообщений создаем специальный формат
+      if (message.kind === 'bridge_data' && message.bridgeData) {
+        const dataText = JSON.stringify(message.bridgeData.data, null, 2);
+        return {
+          role: message.role,
+          parts: [{
+            text: `[🌐 SITE DATA] ${message.bridgeData.eventType}\n\`\`\`json\n${dataText}\n\`\`\``
+          }]
+        };
+      }
+      
       const parts: any[] = message.parts
         .filter(part => {
           if ('text' in part) return isThoughtPart(part) || Boolean(part.text);

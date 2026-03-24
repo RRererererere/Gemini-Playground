@@ -1871,14 +1871,14 @@ export default function Home() {
                }}
                onAIDataReceived={async (bridgeData) => {
                  // 🔥 GEMINI BRIDGE — данные от сайта → AI
-                 const dataText = JSON.stringify(bridgeData.data, null, 2);
-                 const userMessage = `[🌐 SITE DATA] ${bridgeData.eventType}\n\`\`\`json\n${dataText}\n\`\`\``;
                  
-                 // Добавляем сообщение в чат
+                 // Создаем красивое сообщение с bridgeData
                  const newUserMsg: Message = {
                    id: generateId(),
                    role: 'user',
-                   parts: [{ text: userMessage }],
+                   kind: 'bridge_data',
+                   parts: [{ text: `Данные от сайта (${bridgeData.eventType})` }],
+                   bridgeData: bridgeData,
                  };
                  
                  setMessages(prev => [...prev, newUserMsg]);
@@ -1969,14 +1969,14 @@ export default function Home() {
                 }}
                 onAIDataReceived={async (bridgeData) => {
                   // 🔥 GEMINI BRIDGE — данные от сайта → AI
-                  const dataText = JSON.stringify(bridgeData.data, null, 2);
-                  const userMessage = `[🌐 SITE DATA] ${bridgeData.eventType}\n\`\`\`json\n${dataText}\n\`\`\``;
                   
-                  // Добавляем сообщение в чат
+                  // Создаем красивое сообщение с bridgeData
                   const newUserMsg: Message = {
                     id: generateId(),
                     role: 'user',
-                    parts: [{ text: userMessage }],
+                    kind: 'bridge_data',
+                    parts: [{ text: `Данные от сайта (${bridgeData.eventType})` }],
+                    bridgeData: bridgeData,
                   };
                   
                   setMessages(prev => [...prev, newUserMsg]);

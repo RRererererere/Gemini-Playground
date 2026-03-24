@@ -58,7 +58,8 @@ const LivePreviewPanel = forwardRef<LivePreviewPanelRef, LivePreviewPanelProps>(
   }));
 
   // Bridge script для bidirectional communication
-  const bridgeScript = `
+  const getBridgeScript = useCallback(() => {
+    return `
     <script>
       (function() {
         // ═══════════════════════════════════════════════════════════
@@ -68,6 +69,7 @@ const LivePreviewPanel = forwardRef<LivePreviewPanelRef, LivePreviewPanelProps>(
         window.GeminiBridge = {
           // Send data to AI (from site to chat)
           send: function(eventType, data, format) {
+            console.log('[GeminiBridge] Sending to AI:', eventType, data);
             window.parent.postMessage({
               source: 'gemini-bridge',
               action: 'send_to_ai',
@@ -80,6 +82,7 @@ const LivePreviewPanel = forwardRef<LivePreviewPanelRef, LivePreviewPanelProps>(
           // Register response handler (AI → site)
           onResponse: function(handler) {
             window.__geminiBridgeHandler = handler;
+            console.log('[GeminiBridge] Response handler registered');
           },
           
           // Show loading state while AI thinks
@@ -95,17 +98,21 @@ const LivePreviewPanel = forwardRef<LivePreviewPanelRef, LivePreviewPanelProps>(
         // Listen for AI responses
         window.addEventListener('message', (e) => {
           if (e.data?.source === 'gemini-ai-response') {
+            console.log('[GeminiBridge] Received AI response:', e.data);
             if (typeof window.__geminiBridgeHandler === 'function') {
               window.__geminiBridgeHandler(e.data.type, e.data.payload);
             }
           }
         });
         
+        console.log('[GeminiBridge] Initialized successfully');
+        
         // ═══════════════════════════════════════════════════════════
         // STANDARD BRIDGE — Click, Hover, Drag
         // ═══════════════════════════════════════════════════════════
         
         const mode = '${previewMode}';
+        console.log('[LivePreview] Mode:', mode);
         
         // 1. Receive code updates from parent (no flicker)
         window.addEventListener('message', (e) => {
@@ -266,9 +273,12 @@ const LivePreviewPanel = forwardRef<LivePreviewPanelRef, LivePreviewPanelProps>(
       })();
     </script>
   `;
+  }, [previewMode]);
 
   const getSrcDoc = () => {
     if (!code) return '';
+    
+    const bridgeScript = getBridgeScript();
     
     // If code has full HTML structure
     if (code.includes('</body>')) {
@@ -373,7 +383,7 @@ const LivePreviewPanel = forwardRef<LivePreviewPanelRef, LivePreviewPanelProps>(
         }, '*');
       }
     }
-  }, [code, isStreaming]); // Now depends on both code and isStreaming
+  }, [code, isStreaming, getBridgeScript]); // Now depends on code, isStreaming, and getBridgeScript
 
   // Reload iframe when streaming ends so all scripts execute
   useEffect(() => {
@@ -391,7 +401,20 @@ const LivePreviewPanel = forwardRef<LivePreviewPanelRef, LivePreviewPanelProps>(
     if (!isStreaming) {
       isBridgeResponseRef.current = false;
     }
-  }, [isStreaming]);
+  }, [isStreaming, getBridgeScript]);
+
+  // Reload iframe when previewMode changes to reinitialize bridge with correct mode
+  useEffect(() => {
+    if (code && isRenderedRef.current && iframeRef.current) {
+      isRenderedRef.current = false;
+      prevCodeRef.current = '';
+      iframeRef.current.srcdoc = getSrcDoc();
+      iframeRef.current.onload = () => {
+        isRenderedRef.current = true;
+        prevCodeRef.current = code;
+      };
+    }
+  }, [previewMode, getBridgeScript]);
 
   const handleRefresh = useCallback(() => {
     if (iframeRef.current) {
@@ -403,7 +426,7 @@ const LivePreviewPanel = forwardRef<LivePreviewPanelRef, LivePreviewPanelProps>(
         prevCodeRef.current = code;
       };
     }
-  }, [code]);
+  }, [code, getBridgeScript]);
 
   const handleCopyCode = useCallback(() => {
     navigator.clipboard.writeText(code);
