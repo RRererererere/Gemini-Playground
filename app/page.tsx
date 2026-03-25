@@ -335,11 +335,21 @@ export default function Home() {
 
   // Token counting
   const tokenCountRequestIdRef = useRef(0);
+  const tokenCountAbortRef = useRef<AbortController | null>(null);
+  
   const countTokens = useCallback(async (msgs: Message[], sys: string, mod: string, apiKey: string) => {
     if (!apiKey || !mod || msgs.length === 0) { setTokenCount(0); return; }
     
+    // Cancel previous request
+    if (tokenCountAbortRef.current) {
+      tokenCountAbortRef.current.abort();
+    }
+    
     // Increment request ID to track latest request
     const requestId = ++tokenCountRequestIdRef.current;
+    const abortController = new AbortController();
+    tokenCountAbortRef.current = abortController;
+    
     setIsCountingTokens(true);
     
     // Строим полный системный промпт с memory + skills
@@ -377,6 +387,7 @@ export default function Home() {
       const res = await fetch('/api/tokens', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: abortController.signal,
         body: JSON.stringify({
           messages: buildChatRequestMessages(msgs),
           model: mod,
@@ -390,11 +401,17 @@ export default function Home() {
       if (requestId === tokenCountRequestIdRef.current) {
         setTokenCount(data.totalTokens || 0);
       }
-    } catch {}
+    } catch (e: any) {
+      // Ignore abort errors
+      if (e.name !== 'AbortError') {
+        console.error('[Token Count Error]:', e);
+      }
+    }
     
     // Only clear loading state if this is still the latest request
     if (requestId === tokenCountRequestIdRef.current) {
       setIsCountingTokens(false);
+      tokenCountAbortRef.current = null;
     }
   }, [currentChatId, memoryEnabled, handleSkillEvent]);
 
@@ -404,7 +421,14 @@ export default function Home() {
     tokenDebounceRef.current = setTimeout(() => {
       countTokens(messages, systemPrompt, model, selectedApiKey);
     }, 400);
-    return () => { if (tokenDebounceRef.current) clearTimeout(tokenDebounceRef.current); };
+    return () => { 
+      if (tokenDebounceRef.current) clearTimeout(tokenDebounceRef.current);
+      // Cleanup abort controller on unmount
+      if (tokenCountAbortRef.current) {
+        tokenCountAbortRef.current.abort();
+        tokenCountAbortRef.current = null;
+      }
+    };
   }, [messages, systemPrompt, model, selectedApiKey, countTokens, isStreaming, skillsRevision]);
 
   // ============ SAVE CHAT ============

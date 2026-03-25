@@ -93,7 +93,7 @@ export async function convertToPptx(html: string, job: ExportJob): Promise<Blob>
 
       // Таблица (если есть)
       if (slideData.table && slideData.table.rows.length > 0) {
-        const borderStyle = { type: 'solid', color: THEME.tableBorder, pt: 0.5 } as const;
+        const borderStyle = { type: 'solid', color: THEME.tableBorder, pt: 0.5 };
         
         const tableRows = slideData.table.rows.map((row, rowIdx) =>
           row.map(cell => ({
@@ -108,7 +108,7 @@ export async function convertToPptx(html: string, job: ExportJob): Promise<Blob>
               color: THEME.textColor,
               fontSize: 12,
               fontFace: THEME.fontFace,
-              border: [borderStyle, borderStyle, borderStyle, borderStyle] as const,
+              border: [borderStyle, borderStyle, borderStyle, borderStyle] as [typeof borderStyle, typeof borderStyle, typeof borderStyle, typeof borderStyle],
               valign: 'middle',
               align: 'left'
             }
