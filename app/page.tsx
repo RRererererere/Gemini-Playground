@@ -870,8 +870,36 @@ export default function Home() {
                   
                   // После стрима сделаем ещё один раунд
                   shouldContinueLoop = true;
+                } else {
+                  // mode: 'fire_and_forget' — отправляем пустой ответ чтобы Gemini продолжил
+                  roundToolCalls.push({
+                    id: callId,
+                    name,
+                    args,
+                    thoughtSignature: parsed.thoughtSignature,
+                  });
+                  accumulatedToolResponses.push({
+                    toolCallId: callId,
+                    name,
+                    response: { status: 'acknowledged' },
+                    hidden: true,
+                  });
+                  
+                  // БАГ #3 FIX: Добавляем в skillToolCalls для отображения в UI
+                  setMessages(prev => prev.map(m => {
+                    if (m.id !== targetMessageId) return m;
+                    return {
+                      ...m,
+                      skillToolCalls: [...(m.skillToolCalls || []), {
+                        name,
+                        args: args as Record<string, unknown>,
+                        result: { status: 'acknowledged' },
+                      }],
+                    };
+                  }));
+                  
+                  shouldContinueLoop = true;
                 }
-                // mode: 'fire_and_forget' — ничего не добавляем, модель продолжает
                 continue; // не обрабатываем как обычный tool
               }
               // ─────────────────────────────────────────────────────────────
@@ -1077,22 +1105,35 @@ export default function Home() {
       setStreamingId(null);
       abortControllerRef.current = null;
       
-      setMessages(prev => prev.map(m => {
-        if (m.id === targetMessageId) {
-          const finalMessage = { ...m, isStreaming: false };
-          
-          // Уведомляем скиллы о завершении сообщения
+      // Помечаем сообщение завершённым
+      setMessages(prev => prev.map(m =>
+        m.id === targetMessageId ? { ...m, isStreaming: false } : m
+      ));
+      
+      // Небольшая задержка чтобы дать React время обновить messagesRef
+      // после последнего flush() перед вызовом onMessageComplete
+      setTimeout(() => {
+        // Используем messagesRef для гарантированного доступа к актуальному состоянию
+        // (избегаем проблемы с React batching где finalMessageSnapshot может быть null)
+        const finalMessage = messagesRef.current.find(m => m.id === targetMessageId);
+        
+        if (finalMessage) {
           notifySkillsMessageComplete(
             finalMessage,
             currentChatId || '',
-            messages,
+            messagesRef.current,
             handleSkillEvent
-          ).catch(console.error);
-          
-          return finalMessage;
+          ).then(newArtifacts => {
+            if (newArtifacts.length > 0) {
+              setMessages(prev => prev.map(m =>
+                m.id === targetMessageId
+                  ? { ...m, skillArtifacts: [...(m.skillArtifacts ?? []), ...newArtifacts] }
+                  : m
+              ));
+            }
+          }).catch(console.error);
         }
-        return m;
-      }));
+      }, 100); // 100ms достаточно для React batching
     }
   }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, memoryEnabled]);
 

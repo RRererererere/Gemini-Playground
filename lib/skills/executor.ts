@@ -257,18 +257,38 @@ export async function notifySkillsMessageComplete(
   chatId: string,
   messages: Message[],
   onUIEvent: (event: SkillUIEvent) => void
-): Promise<void> {
+): Promise<SkillArtifact[]> {
+  console.log('[executor] notifySkillsMessageComplete called', { 
+    messageId: message.id, 
+    role: message.role,
+    partsCount: message.parts.length 
+  });
+  
+  const allArtifacts: SkillArtifact[] = [];
+  
   for (const skill of Array.from(SKILL_CATALOG.values())) {
     if (!isSkillActive(skill.id)) continue;
     if (!skill.onMessageComplete) continue;
 
+    console.log(`[executor] calling onMessageComplete for skill: ${skill.id}`);
+    
     const ctx = createContext(skill, chatId, messages, onUIEvent);
     try {
-      await skill.onMessageComplete(message, ctx);
+      const result = await skill.onMessageComplete(message, ctx);
+      if (result && Array.isArray(result) && result.length > 0) {
+        console.log(`[executor] skill ${skill.id} returned ${result.length} artifacts`);
+        const processed = await processArtifacts(result, skill.id);
+        allArtifacts.push(...processed);
+      } else {
+        console.log(`[executor] skill ${skill.id} returned no artifacts`);
+      }
     } catch (err) {
       console.error(`[Skill ${skill.id}] onMessageComplete error:`, err);
     }
   }
+  
+  console.log(`[executor] total artifacts collected: ${allArtifacts.length}`);
+  return allArtifacts;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

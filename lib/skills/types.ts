@@ -153,8 +153,9 @@ export interface Skill {
   /**
    * Хук после завершения ответа модели.
    * Можно анализировать сообщение и делать side effects.
+   * Возвращает массив артефактов для добавления в сообщение.
    */
-  onMessageComplete?: (message: Message, ctx: SkillContext) => void | Promise<void>;
+  onMessageComplete?: (message: Message, ctx: SkillContext) => SkillArtifact[] | void | Promise<SkillArtifact[] | void>;
 
   /** Вызывается при установке скилла */
   onInstall?: (ctx: SkillContext) => void;

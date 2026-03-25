@@ -2,7 +2,7 @@
 
 import type { SkillArtifact } from '@/types';
 import { useState } from 'react';
-import { Download, X, ZoomIn, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Download, X, ZoomIn, ChevronLeft, ChevronRight, FileText } from 'lucide-react';
 
 interface Props {
   artifact: SkillArtifact;
@@ -48,6 +48,8 @@ export function SkillArtifactRenderer({ artifact }: Props) {
       return <ArtifactText artifact={artifact} />;
     case 'table':
       return <ArtifactTable artifact={artifact} />;
+    case 'document':
+      return <ArtifactDocument artifact={artifact} />;
     default:
       return null;
   }
@@ -466,6 +468,79 @@ function ArtifactTable({ artifact }: Props) {
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Document (Office files: DOCX, XLSX, PPTX)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ArtifactDocument({ artifact }: Props) {
+  // Определяем тип документа по MIME type
+  const getDocumentInfo = () => {
+    const mime = artifact.data.kind === 'base64' ? artifact.data.mimeType : '';
+    if (mime.includes('wordprocessingml') || mime.includes('msword')) {
+      return { icon: '📄', type: 'Word', color: 'bg-blue-500/10 border-blue-500/30' };
+    }
+    if (mime.includes('spreadsheetml') || mime.includes('excel')) {
+      return { icon: '📊', type: 'Excel', color: 'bg-green-500/10 border-green-500/30' };
+    }
+    if (mime.includes('presentationml') || mime.includes('powerpoint')) {
+      return { icon: '📽️', type: 'PowerPoint', color: 'bg-orange-500/10 border-orange-500/30' };
+    }
+    return { icon: '📁', type: 'Документ', color: 'bg-zinc-500/10 border-zinc-500/30' };
+  };
+
+  const docInfo = getDocumentInfo();
+  const filename = artifact.filename || 'document';
+  
+  // Размер файла в KB/MB
+  const getFileSize = () => {
+    if (artifact.data.kind !== 'base64') return '';
+    try {
+      const bytes = atob(artifact.data.base64).length;
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    } catch {
+      return '';
+    }
+  };
+
+  return (
+    <div className="my-3">
+      {artifact.label && (
+        <div className="text-xs text-zinc-400 mb-2">{artifact.label}</div>
+      )}
+      
+      <div className={`flex items-center gap-3 p-4 rounded-lg border ${docInfo.color} transition-colors`}>
+        {/* Icon */}
+        <div className="text-3xl flex-shrink-0">
+          {docInfo.icon}
+        </div>
+
+        {/* Info */}
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-sm text-zinc-200 truncate">
+            {filename}
+          </div>
+          <div className="text-xs text-zinc-400 mt-0.5">
+            {docInfo.type} • {getFileSize()}
+          </div>
+        </div>
+
+        {/* Download button */}
+        {artifact.downloadable !== false && (
+          <button
+            onClick={() => downloadArtifact(artifact)}
+            className="flex items-center gap-2 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-100 text-sm rounded-lg transition-colors flex-shrink-0"
+          >
+            <Download size={16} />
+            Скачать
+          </button>
+        )}
       </div>
     </div>
   );
