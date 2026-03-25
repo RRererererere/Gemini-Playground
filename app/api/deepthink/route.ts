@@ -97,6 +97,9 @@ export async function POST(request: NextRequest) {
     if (!apiKey) {
       return Response.json({ error: 'API key required' }, { status: 400 });
     }
+    if (!Array.isArray(messages)) {
+      return Response.json({ error: 'Messages must be an array' }, { status: 400 });
+    }
 
     const historyContents = buildDeepThinkContents(Array.isArray(messages) ? messages : []);
 
@@ -189,8 +192,9 @@ export async function POST(request: NextRequest) {
     const encoder = new TextEncoder();
 
     (async () => {
+      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
       try {
-        const reader = response.body!.getReader();
+        reader = response.body!.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
         let textAccumulator = '';
@@ -268,6 +272,10 @@ export async function POST(request: NextRequest) {
           await writer.write(encoder.encode('data: [DONE]\n\n'));
         } catch {}
       } finally {
+        // Cleanup reader
+        if (reader) {
+          try { reader.releaseLock(); } catch {}
+        }
         try { await writer.close(); } catch {}
       }
     })();

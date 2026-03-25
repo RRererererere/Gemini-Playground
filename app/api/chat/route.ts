@@ -117,6 +117,9 @@ export async function POST(request: NextRequest) {
     if (!model) {
       return new Response(JSON.stringify({ error: 'Model required' }), { status: 400 });
     }
+    if (!Array.isArray(messages)) {
+      return new Response(JSON.stringify({ error: 'Messages must be an array' }), { status: 400 });
+    }
 
     const modelId = model.startsWith('models/') ? model.slice(7) : model;
 
@@ -312,8 +315,9 @@ export async function POST(request: NextRequest) {
     const encoder = new TextEncoder();
 
     (async () => {
+      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
       try {
-        const reader = geminiResponse.body!.getReader();
+        reader = geminiResponse.body!.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
 
@@ -419,6 +423,10 @@ export async function POST(request: NextRequest) {
           await writer.write(encoder.encode('data: [DONE]\n\n'));
         } catch {}
       } finally {
+        // Cleanup reader
+        if (reader) {
+          try { reader.releaseLock(); } catch {}
+        }
         try { await writer.close(); } catch {}
       }
     })();

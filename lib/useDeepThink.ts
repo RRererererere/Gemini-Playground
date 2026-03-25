@@ -43,6 +43,7 @@ export function useDeepThink() {
     
     // Создаём новый AbortController для этого запроса
     abortControllerRef.current = new AbortController();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
     try {
       const response = await fetch('/api/deepthink', {
@@ -57,7 +58,7 @@ export function useDeepThink() {
         return { enhancedPrompt: systemInstruction, analysis: null, error: data.error };
       }
 
-      const reader = response.body!.getReader();
+      reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
       let thinkingAccumulator = '';
@@ -120,6 +121,10 @@ export function useDeepThink() {
       setState(prev => ({ ...prev, isAnalyzing: false, error: err.message }));
       return { enhancedPrompt: systemInstruction, analysis: null, error: err.message };
     } finally {
+      // Cleanup reader
+      if (reader) {
+        try { reader.releaseLock(); } catch {}
+      }
       abortControllerRef.current = null;
     }
   }, []);

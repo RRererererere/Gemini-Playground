@@ -334,9 +334,12 @@ export default function Home() {
   }, [messages]);
 
   // Token counting
+  const tokenCountRequestIdRef = useRef(0);
   const countTokens = useCallback(async (msgs: Message[], sys: string, mod: string, apiKey: string) => {
     if (!apiKey || !mod || msgs.length === 0) { setTokenCount(0); return; }
     
+    // Increment request ID to track latest request
+    const requestId = ++tokenCountRequestIdRef.current;
     setIsCountingTokens(true);
     
     // Строим полный системный промпт с memory + skills
@@ -382,10 +385,17 @@ export default function Home() {
         }),
       });
       const data = await res.json();
-      setTokenCount(data.totalTokens || 0);
+      
+      // Only update if this is still the latest request
+      if (requestId === tokenCountRequestIdRef.current) {
+        setTokenCount(data.totalTokens || 0);
+      }
     } catch {}
     
-    setIsCountingTokens(false);
+    // Only clear loading state if this is still the latest request
+    if (requestId === tokenCountRequestIdRef.current) {
+      setIsCountingTokens(false);
+    }
   }, [currentChatId, memoryEnabled, handleSkillEvent]);
 
   useEffect(() => {
@@ -575,6 +585,9 @@ export default function Home() {
       ));
     }
 
+    // Cleanup tracker для таймеров
+    const cleanupTimers: ReturnType<typeof setTimeout>[] = [];
+    
     try {
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       // Tool loop — поддерживает несколько раундов memory tool calls
@@ -675,7 +688,6 @@ export default function Home() {
         // streaming HTML в canvas
         let htmlAccumulator = '';
         let isInsideHtmlBlock = false;
-        let htmlUpdateTimer: ReturnType<typeof setTimeout> | null = null;
         
         // tool calls собранные в этом раунде
         const roundToolCalls: any[] = [];
@@ -724,13 +736,13 @@ export default function Home() {
                 const partialHTML = htmlMatch[1];
                 
                 // Throttle: обновляем не чаще 80ms (оптимально для плавности)
-                if (htmlUpdateTimer) clearTimeout(htmlUpdateTimer);
-                htmlUpdateTimer = setTimeout(() => {
+                const timer = setTimeout(() => {
                   // Only update when we have meaningful HTML (at least has <body> tag or 200+ chars)
                   if (partialHTML.length > 200 || partialHTML.includes('<body')) {
                     setLiveCode(partialHTML);
                   }
                 }, 80);
+                cleanupTimers.push(timer);
               }
             }
 
@@ -1126,6 +1138,9 @@ export default function Home() {
         setError(e.message || 'Ошибка стриминга');
       }
     } finally {
+      // Cleanup всех таймеров
+      cleanupTimers.forEach(timer => clearTimeout(timer));
+      
       setIsStreaming(false);
       setStreamingId(null);
       abortControllerRef.current = null;
