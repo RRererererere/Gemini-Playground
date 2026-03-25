@@ -93,7 +93,8 @@ export async function convertToPptx(html: string, job: ExportJob): Promise<Blob>
 
       // Таблица (если есть)
       if (slideData.table && slideData.table.rows.length > 0) {
-        const borderStyle = { type: 'solid', color: THEME.tableBorder, pt: 0.5 };
+        type BorderStyle = { type: 'solid'; color: string; pt: number };
+        const borderStyle: BorderStyle = { type: 'solid', color: THEME.tableBorder, pt: 0.5 };
         
         const tableRows = slideData.table.rows.map((row, rowIdx) =>
           row.map(cell => ({
@@ -108,9 +109,9 @@ export async function convertToPptx(html: string, job: ExportJob): Promise<Blob>
               color: THEME.textColor,
               fontSize: 12,
               fontFace: THEME.fontFace,
-              border: [borderStyle, borderStyle, borderStyle, borderStyle] as [typeof borderStyle, typeof borderStyle, typeof borderStyle, typeof borderStyle],
-              valign: 'middle',
-              align: 'left'
+              border: [borderStyle, borderStyle, borderStyle, borderStyle] as [BorderStyle, BorderStyle, BorderStyle, BorderStyle],
+              valign: 'middle' as const,
+              align: 'left' as const
             }
           }))
         );
@@ -129,8 +130,8 @@ export async function convertToPptx(html: string, job: ExportJob): Promise<Blob>
           text: b.text,
           options: {
             bullet: b.level === 0 
-              ? { type: 'bullet' } 
-              : { type: 'bullet', indent: 30 * b.level },
+              ? { type: 'bullet' as const } 
+              : { type: 'bullet' as const, indent: 30 * b.level },
             fontSize: b.level === 0 ? 18 : 15,
             color: THEME.textColor,
             paraSpaceBefore: 4,
