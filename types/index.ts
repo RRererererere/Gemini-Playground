@@ -60,6 +60,7 @@ export interface ToolResponse {
   toolCallId?: string;
   name: string;
   response: unknown;
+  extraParts?: Array<{ inlineData: { mimeType: string; data: string } }>; // sibling parts для Gemini 2.x multimodal
   hidden?: boolean; // скрытый response (не показывается в UI, но отправляется в API)
   isMemoryTool?: boolean; // memory tool response (не показывается в UI, но отправляется в API)
 }
@@ -224,4 +225,27 @@ export interface ApiKeyEntry {
   blockedByModel?: Record<string, number>;
   lastUsed?: number;
   errorCount: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Image Analysis Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ZoomRegion - percentage-based coordinates for image regions
+export interface ZoomRegion {
+  x1_pct: number; // 0-100
+  y1_pct: number; // 0-100
+  x2_pct: number; // 0-100
+  y2_pct: number; // 0-100
+}
+
+// ImageAnalysisMetadata - metadata for zoom operations
+export interface ImageAnalysisMetadata {
+  imageIdentifier: string; // "img_1" or file ID
+  reason: string; // Why this region was zoomed
+  scale: string; // "3x", "4x", etc.
+  originalSize: string; // "1920×1080px"
+  cropSize: string; // "640×360px"
+  scaledSize: string; // "1920×1080px"
+  timestamp?: number; // When analysis was performed
 }

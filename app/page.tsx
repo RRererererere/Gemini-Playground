@@ -41,6 +41,7 @@ import {
 import { buildMemoryPrompt, markMemoriesUsed } from '@/lib/memory-prompt';
 import { MEMORY_TOOLS } from '@/lib/memory-tools';
 import { saveMemory, updateMemory, forgetMemory, getMemories } from '@/lib/memory-store';
+import { buildImageContext } from '@/lib/image-context';
 // Skills system
 import {
   collectSkillTools,
@@ -355,12 +356,18 @@ export default function Home() {
       handleSkillEvent
     );
     
+    // Добавляем контекст изображений
+    const imageContext = buildImageContext(msgs);
+    
     let effectiveSystemPrompt = sys;
     if (memoryPrompt) {
       effectiveSystemPrompt = memoryPrompt + '\n\n' + sys;
     }
     if (skillsPromptInjection) {
       effectiveSystemPrompt = effectiveSystemPrompt + skillsPromptInjection;
+    }
+    if (imageContext) {
+      effectiveSystemPrompt = effectiveSystemPrompt + imageContext;
     }
     
     try {
@@ -495,6 +502,9 @@ export default function Home() {
     if (skillsPromptInjection) {
       effectiveSystemPrompt = effectiveSystemPrompt + skillsPromptInjection;
     }
+    
+    // ВАЖНО: imageContext добавляется ВНУТРИ tool loop, так как он должен обновляться
+    // после каждого zoom_region вызова (новые изображения добавляются в историю)
     let finalAnalysis: DeepThinkAnalysis | null = null;
     
     if (deepThinkState.enabled && !customAnalysis) {
@@ -599,19 +609,33 @@ export default function Home() {
             },
             {
               role: 'user',
-              parts: accumulatedToolResponses.map(tr => ({
-                functionResponse: {
-                  id: tr.toolCallId,
-                  name: tr.name,
-                  response: tr.response,
-                },
-              })),
+              parts: accumulatedToolResponses.flatMap(tr => {
+                const parts: any[] = [{
+                  functionResponse: {
+                    id: tr.toolCallId,
+                    name: tr.name,
+                    response: tr.response,
+                  },
+                }];
+                // Добавляем sibling parts для Gemini 2.x (например, изображения)
+                if (tr.extraParts) {
+                  parts.push(...tr.extraParts);
+                }
+                return parts;
+              }),
             },
           ];
         }
         
         // Собираем skill tools
         const skillTools = collectSkillTools();
+        
+        // Добавляем контекст изображений ВНУТРИ цикла (обновляется после каждого zoom)
+        const imageContext = buildImageContext(history);
+        let effectiveSystemPromptWithImages = effectiveSystemPrompt;
+        if (imageContext) {
+          effectiveSystemPromptWithImages = effectiveSystemPrompt + imageContext;
+        }
         
         const response = await fetch('/api/chat', {
           method: 'POST',
@@ -620,7 +644,7 @@ export default function Home() {
           body: JSON.stringify({
             messages: contentsForRequest,
             model,
-            systemInstruction: effectiveSystemPrompt,
+            systemInstruction: effectiveSystemPromptWithImages, // Используем с imageContext
             tools: tools,
             // После MAX_MEMORY_CALLS — отключаем memory tools чтобы не зациклиться
             memoryTools: [
@@ -844,6 +868,7 @@ export default function Home() {
                     toolCallId: callId,
                     name,
                     response: skillResult.functionResponse,
+                    extraParts: skillResult.responseParts, // sibling parts для Gemini 2.x
                     hidden: true, // не показываем в UI как обычный tool call
                   });
                   

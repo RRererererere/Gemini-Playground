@@ -22,6 +22,7 @@ export type ToolCallMode =
 export interface SkillToolResult {
   mode: ToolCallMode;
   response?: unknown; // только если mode === 'respond'
+  responseParts?: Array<{ inlineData: { mimeType: string; data: string } }>; // sibling parts для Gemini 2.x
   artifacts?: SkillArtifact[]; // файлы/медиа для отображения в UI
 }
 
@@ -59,6 +60,8 @@ export interface SkillContext {
   storage: SkillStorage;
   /** Эмитить UI событие */
   emit: (event: SkillUIEvent) => void;
+  /** Алиасы изображений (img_1 -> file.id) для удобной ссылки */
+  imageAliases?: Map<string, string>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -185,6 +188,8 @@ export interface InstalledSkillRecord {
 export interface SkillExecutionResult {
   /** Отправить как functionResponse (null = fire_and_forget) */
   functionResponse: unknown | null;
+  /** Sibling parts для Gemini 2.x (например, изображения рядом с functionResponse) */
+  responseParts?: Array<{ inlineData: { mimeType: string; data: string } }>;
   /** UI события для обработки */
   uiEvents: SkillUIEvent[];
   /** Артефакты для добавления в сообщение */

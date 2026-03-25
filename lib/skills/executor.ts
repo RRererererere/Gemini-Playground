@@ -83,6 +83,9 @@ function createContext(
     }
   }));
 
+  // Генерируем алиасы для изображений (img_1, img_2, ...)
+  const imageAliases = createImageAliases(messages);
+
   return {
     chatId,
     messages,
@@ -90,7 +93,27 @@ function createContext(
     config: getSkillConfig(skill.id),
     storage: createSkillStorage(skill.id),
     emit: emitter,
+    imageAliases,
   };
+}
+
+/** Создаёт алиасы img_1, img_2 для всех изображений в чате */
+function createImageAliases(messages: Message[]): Map<string, string> {
+  const aliases = new Map<string, string>();
+  let counter = 1;
+  
+  messages
+    .filter(m => m.role === 'user' && m.files && m.files.length > 0)
+    .forEach(m => {
+      m.files!
+        .filter(f => f.mimeType.startsWith('image/'))
+        .forEach(f => {
+          aliases.set(`img_${counter}`, f.id);
+          counter++;
+        });
+    });
+  
+  return aliases;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -141,6 +164,7 @@ export async function executeSkillToolCall(
 
     return {
       functionResponse: result.mode === 'respond' ? result.response ?? null : null,
+      responseParts: result.responseParts,
       uiEvents,
       artifacts,
     };

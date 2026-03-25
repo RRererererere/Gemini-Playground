@@ -208,6 +208,12 @@ export function buildChatRequestMessages(messages: Message[]) {
 
       for (const toolResponse of message.toolResponses || []) {
         parts.push(buildToolResponsePart(toolResponse));
+        // Добавляем sibling parts для Gemini 2.x (например, изображения рядом с functionResponse)
+        if (toolResponse.extraParts) {
+          for (const extraPart of toolResponse.extraParts) {
+            parts.push(extraPart);
+          }
+        }
       }
 
       return {
