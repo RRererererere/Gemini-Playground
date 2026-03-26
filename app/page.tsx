@@ -39,9 +39,19 @@ import {
   normalizeToolResponseInput,
 } from '@/lib/gemini';
 import { buildMemoryPrompt, markMemoriesUsed } from '@/lib/memory-prompt';
-import { MEMORY_TOOLS } from '@/lib/memory-tools';
+import { MEMORY_TOOLS, IMAGE_MEMORY_TOOLS } from '@/lib/memory-tools';
 import { saveMemory, updateMemory, forgetMemory, getMemories } from '@/lib/memory-store';
+import { 
+  saveImageMemory, 
+  searchImageMemories, 
+  getImageMemory, 
+  loadImageMemoryData,
+  incrementImageMemoryMentions 
+} from '@/lib/image-memory-store';
+import { getImageDimensions } from '@/lib/image-utils';
 import { buildImageContext } from '@/lib/image-context';
+import { collectImages } from '@/lib/image-context';
+import { cropAndScale } from '@/lib/skills/built-in/image-analyser/cropper';
 // Skills system
 import {
   collectSkillTools,
@@ -357,7 +367,7 @@ export default function Home() {
       .filter(m => m.role === 'user')
       .map(m => getVisibleMessageText(m.parts));
     
-    const { prompt: memoryPrompt } = buildMemoryPrompt(
+    const { prompt: memoryPrompt, usedMemoryIds: _usedMemoryIds, usedImageMemoryIds: _usedImageMemoryIds } = buildMemoryPrompt(
       userMessages,
       currentChatId || undefined,
       memoryEnabled
@@ -510,15 +520,15 @@ export default function Home() {
       .filter(m => m.role === 'user')
       .map(m => getVisibleMessageText(m.parts));
     
-    const { prompt: memoryPrompt, usedMemoryIds } = buildMemoryPrompt(
+    const { prompt: memoryPrompt, usedMemoryIds, usedImageMemoryIds } = buildMemoryPrompt(
       userMessages,
       currentChatId || undefined,
       memoryEnabled
     );
 
     // Отмечаем использованные воспоминания
-    if (usedMemoryIds.length > 0) {
-      markMemoriesUsed(usedMemoryIds, currentChatId || undefined);
+    if (usedMemoryIds.length > 0 || usedImageMemoryIds.length > 0) {
+      markMemoriesUsed(usedMemoryIds, usedImageMemoryIds, currentChatId || undefined);
     }
 
     // Skills System Prompt injection
@@ -686,6 +696,7 @@ export default function Home() {
             // После MAX_MEMORY_CALLS — отключаем memory tools чтобы не зациклиться
             memoryTools: [
               ...(memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS ? MEMORY_TOOLS : []),
+              ...(memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS ? IMAGE_MEMORY_TOOLS : []),
               ...skillTools,
             ],
             temperature,
@@ -708,6 +719,30 @@ export default function Home() {
         let pendingText = '';
         let pendingThinking = '';
         let flushScheduled = false;
+
+        // Создаём imageAliases map для image memory tools
+        const imageInfos = collectImages(history);
+        const imageAliases = new Map<string, string>();
+        imageInfos.forEach(info => {
+          imageAliases.set(info.alias, info.id);
+        });
+        
+        // attachedFiles для доступа к файлам
+        const attachedFiles = history
+          .filter(m => m.role === 'user' && m.files && m.files.length > 0)
+          .flatMap(m => m.files!)
+          .map(f => ({
+            id: f.id,
+            name: f.name,
+            mimeType: f.mimeType,
+            size: f.size,
+            getData: async () => {
+              if (f.data) return f.data;
+              // Загрузить из IndexedDB если нет в памяти
+              const { loadFileData } = await import('@/lib/fileStorage');
+              return await loadFileData(f.id) || '';
+            }
+          }));
 
         // streaming HTML в canvas
         let htmlAccumulator = '';
@@ -877,7 +912,7 @@ export default function Home() {
                   name,
                   args as Record<string, unknown>,
                   currentChatId || '',
-                  messages,
+                  history, // Используем history вместо messages — актуальный массив с текущим user сообщением
                   handleSkillEvent
                 );
                 
@@ -1092,6 +1127,188 @@ export default function Home() {
                 // После стрима сделаем ещё один раунд
                 shouldContinueLoop = true;
                 
+              }
+              // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+              // Обработка инструментов визуальной памяти
+              // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+              else if (memoryEnabled && (name === 'save_image_memory' || name === 'search_image_memories' || name === 'recall_image_memory')) {
+                // Лимит вызовов за turn
+                if (memoryCallsThisTurn >= MAX_MEMORY_CALLS) continue;
+                memoryCallsThisTurn++;
+                
+                let imageMemoryResult: any = { success: false };
+                
+                if (name === 'save_image_memory') {
+                  try {
+                    // Найти изображение по image_id
+                    const imageId = args.image_id;
+                    const fileId = imageAliases.get(imageId) || imageId;
+                    
+                    // Получить файл из attachedFiles
+                    const file = attachedFiles.find(f => f.id === fileId);
+                    if (!file) {
+                      imageMemoryResult = { success: false, error: 'Image not found' };
+                    } else {
+                      const base64 = await file.getData();
+                      
+                      // Получить размеры изображения
+                      const { width, height } = await getImageDimensions(base64, file.mimeType);
+                      
+                      // Получить контекст из последних сообщений
+                      const messageContext = history
+                        .slice(-3)
+                        .map(m => getVisibleMessageText(m.parts))
+                        .join(' ')
+                        .slice(-200);
+                      
+                      // Сохранить в память
+                      const memory = await saveImageMemory({
+                        base64,
+                        mimeType: file.mimeType,
+                        width,
+                        height,
+                        description: args.description,
+                        tags: args.tags || [],
+                        entities: args.entities || [],
+                        scope: args.scope,
+                        chatId: currentChatId || '',
+                        messageContext,
+                        annotations: args.save_annotations ? undefined : undefined, // TODO: получить текущие аннотации
+                        relatedMemoryIds: args.related_memory_ids || []
+                      });
+                      
+                      // Если нужно сохранить кропы
+                      if (args.save_crops && Array.isArray(args.save_crops) && args.save_crops.length > 0) {
+                        for (const crop of args.save_crops) {
+                          if (crop.separate_memory) {
+                            // Создать кроп через cropAndScale
+                            const cropResult = await cropAndScale(
+                              base64,
+                              file.mimeType,
+                              crop.region,
+                              1 // без масштабирования
+                            );
+                            
+                            // Сохранить как отдельное image memory
+                            await saveImageMemory({
+                              base64: cropResult.base64,
+                              mimeType: cropResult.mimeType,
+                              width: cropResult.cropSize.width,
+                              height: cropResult.cropSize.height,
+                              description: `${crop.label} (кроп из: ${args.description})`,
+                              tags: [...(args.tags || []), 'crop'],
+                              entities: args.entities || [],
+                              scope: args.scope,
+                              chatId: currentChatId || '',
+                              messageContext,
+                              sourceImageMemoryId: memory.id,
+                              cropRegion: crop.region
+                            });
+                          }
+                        }
+                      }
+                      
+                      imageMemoryResult = { success: true, id: memory.id };
+                      console.log('[image-memory] Saved:', memory.id);
+                    }
+                  } catch (e) {
+                    console.error('[image-memory] Save error:', e);
+                    imageMemoryResult = { success: false, error: String(e) };
+                  }
+                } else if (name === 'search_image_memories') {
+                  try {
+                    const results = searchImageMemories(
+                      args.query,
+                      args.scope,
+                      args.limit || 10
+                    );
+                    
+                    imageMemoryResult = {
+                      success: true,
+                      found: results.length,
+                      results: results.map(r => ({
+                        id: r.id,
+                        description: r.description,
+                        tags: r.tags,
+                        entities: r.entities,
+                        mentions: r.mentions,
+                        created_at: new Date(r.created_at).toLocaleDateString('ru-RU')
+                      }))
+                    };
+                  } catch (e) {
+                    console.error('[image-memory] Search error:', e);
+                    imageMemoryResult = { success: false, error: String(e) };
+                  }
+                } else if (name === 'recall_image_memory') {
+                  try {
+                    const memory = await getImageMemory(args.image_memory_id);
+                    
+                    if (memory) {
+                      const base64 = await loadImageMemoryData(memory.id);
+                      
+                      // Инкрементим mentions
+                      incrementImageMemoryMentions([memory.id]);
+                      
+                      imageMemoryResult = {
+                        success: true,
+                        id: memory.id,
+                        description: memory.description,
+                        tags: memory.tags,
+                        entities: memory.entities,
+                        size: `${memory.originalWidth}×${memory.originalHeight}`,
+                        recalled: true
+                      };
+                      
+                      // Добавляем изображение в responseParts для Gemini
+                      if (base64) {
+                        accumulatedToolResponses.push({
+                          toolCallId: callId,
+                          name,
+                          response: imageMemoryResult,
+                          extraParts: [{
+                            inlineData: {
+                              mimeType: memory.mimeType,
+                              data: base64
+                            }
+                          }],
+                          hidden: true,
+                        });
+                        
+                        roundToolCalls.push({ 
+                          id: callId, 
+                          name, 
+                          args,
+                          thoughtSignature: parsed.thoughtSignature,
+                        });
+                        
+                        shouldContinueLoop = true;
+                        continue; // Пропускаем обычную обработку ниже
+                      }
+                    } else {
+                      imageMemoryResult = { success: false, error: 'Image memory not found' };
+                    }
+                  } catch (e) {
+                    console.error('[image-memory] Recall error:', e);
+                    imageMemoryResult = { success: false, error: String(e) };
+                  }
+                }
+                
+                // Накапливаем для следующего раунда
+                roundToolCalls.push({ 
+                  id: callId, 
+                  name, 
+                  args,
+                  thoughtSignature: parsed.thoughtSignature,
+                });
+                accumulatedToolResponses.push({
+                  toolCallId: callId,
+                  name,
+                  response: imageMemoryResult,
+                  hidden: true,
+                });
+                
+                shouldContinueLoop = true;
+                
               } else {
                 // Обычные tool calls
                 setMessages(prev => prev.map(m => {
@@ -1209,10 +1426,12 @@ export default function Home() {
   }, [isStreaming, isMobile, showLiveCanvas, websiteType, mobileCanvasState]);
 
   // ============ HANDLERS ============
-  const handleSend = useCallback(async (text: string, files: AttachedFile[]) => {
+  const handleSend = useCallback(async (text: string, files: AttachedFile[], annotationRefs?: import('@/types').AnnotationReference[]) => {
     if (!selectedApiKey || !model || isStreaming) return;
 
     setError('');
+    
+    // Текст остается как есть, аннотации сохраняем отдельно
     const userParts: Part[] = [];
     if (text) userParts.push({ text });
     files.forEach(f => userParts.push({ inlineData: { mimeType: f.mimeType, data: f.data } }));
@@ -1222,6 +1441,7 @@ export default function Home() {
       role: 'user',
       parts: userParts,
       files: files.length > 0 ? files : undefined,
+      annotationRefs: annotationRefs && annotationRefs.length > 0 ? annotationRefs : undefined,
     };
 
     const assistantMsgId = generateId();
@@ -1900,6 +2120,32 @@ export default function Home() {
                     setLiveCode(html);
                     setShowLiveCanvas(true);
                   }}
+                  onAnnotationClick={(annotation) => {
+                    // Находим изображение для этой аннотации
+                    const imageFile = message.files?.find(f => f.mimeType.startsWith('image/'));
+                    if (!imageFile) return;
+                    
+                    // Получаем цвет для типа аннотации
+                    const annotationColors: Record<string, string> = {
+                      highlight: '#FBBF24',
+                      pointer: '#60A5FA',
+                      warning: '#F87171',
+                      success: '#4ADE80',
+                      info: '#A78BFA'
+                    };
+                    
+                    const annotationRef: import('@/types').AnnotationReference = {
+                      id: Math.random().toString(36).slice(2),
+                      imageId: imageFile.id,
+                      imageName: imageFile.name,
+                      annotation: annotation,
+                      color: annotationColors[annotation.type] || '#60A5FA'
+                    };
+                    
+                    if ((window as any).__chatInputAddAnnotation) {
+                      (window as any).__chatInputAddAnnotation(annotationRef);
+                    }
+                  }}
                 />
               ))}
               <div ref={chatEndRef} />
@@ -1950,6 +2196,7 @@ export default function Home() {
             onRun={handleRegenerate}
             pendingCanvasElement={pendingCanvasElement}
             onCanvasElementConsumed={() => setPendingCanvasElement(null)}
+            onAnnotationClick={() => {}}
           />
         </div>
         </Panel>

@@ -14,6 +14,8 @@ import {
 import type { Message, AttachedFile, Part, DeepThinkAnalysis, BridgePayload } from '@/types';
 import MemoryPill from './MemoryPill';
 import { SkillArtifactsGroup } from './SkillArtifactRenderer';
+import AnnotationRefDisplay from './AnnotationRefDisplay';
+import ImageLightbox from './ImageLightbox';
 
 interface ChatMessageProps {
   message: Message;
@@ -30,6 +32,7 @@ interface ChatMessageProps {
   onClearForceEdit?: (userMessageId: string) => void;
   onEditDeepThinkAnalysis?: (id: string, analysis: DeepThinkAnalysis) => void;
   onPlayHTML?: (html: string) => void;
+  onAnnotationClick?: (annotation: import('@/types').AnnotationItem) => void;
 }
 
 function FilePreview({ file }: { file: AttachedFile }) {
@@ -52,12 +55,18 @@ function FilePreview({ file }: { file: AttachedFile }) {
     return (
       <>
         <div
-          className="relative rounded-lg overflow-hidden border border-[var(--border)] max-w-xs cursor-pointer"
+          className="relative rounded-lg overflow-hidden border border-[var(--border)] max-w-xs cursor-pointer group"
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
           onClick={() => setShowModal(true)}
         >
           <img src={file.previewUrl} alt={file.name} className="max-h-48 w-auto object-cover" />
+          
+          {/* ID Badge */}
+          <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-sm text-white/70 text-[9px] font-mono px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity">
+            {file.id}
+          </div>
+          
           <div className={`absolute inset-0 transition-colors flex items-end ${isHovered ? 'bg-black/30' : 'bg-black/0'}`}>
             <div className={`transition-opacity px-2 py-1 bg-black/70 w-full ${isHovered ? 'opacity-100' : 'opacity-0'}`}>
               <p className="text-white text-xs truncate">{file.name}</p>
@@ -184,116 +193,22 @@ function PdfModal({ file, src, onClose }: { file: AttachedFile; src: string; onC
 
 // Image modal with zoom
 function ImageModal({ file, onClose }: { file: AttachedFile; onClose: () => void }) {
-  const [scale, setScale] = useState(1);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const imgRef = useRef<HTMLImageElement>(null);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
-
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setScale(s => Math.max(0.5, Math.min(5, s * delta)));
+  const metadata = {
+    width: undefined,
+    height: undefined,
+    type: file.mimeType,
+    size: file.size
   };
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (scale > 1) {
-      setIsDragging(true);
-      setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
-    }
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (isDragging) {
-      setPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
-    }
-  };
-
-  const handleMouseUp = () => setIsDragging(false);
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length === 1 && scale > 1) {
-      setIsDragging(true);
-      setDragStart({ x: e.touches[0].clientX - position.x, y: e.touches[0].clientY - position.y });
-    }
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (isDragging && e.touches.length === 1) {
-      setPosition({ x: e.touches[0].clientX - dragStart.x, y: e.touches[0].clientY - dragStart.y });
-    }
-  };
-
-  const handleTouchEnd = () => setIsDragging(false);
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <button
-        onClick={onClose}
-        className="absolute top-4 right-4 text-white/70 hover:text-white text-2xl w-10 h-10 flex items-center justify-center rounded-full bg-black/30 hover:bg-black/50 transition-colors z-10"
-      >
-        ×
-      </button>
-      <div className="absolute top-4 left-4 flex gap-2 z-10">
-        <button
-          onClick={(e) => { e.stopPropagation(); setScale(s => Math.max(0.5, s - 0.2)); }}
-          className="text-white/70 hover:text-white px-3 py-1.5 rounded-lg bg-black/30 hover:bg-black/50 transition-colors text-sm"
-        >
-          −
-        </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); setScale(1); setPosition({ x: 0, y: 0 }); }}
-          className="text-white/70 hover:text-white px-3 py-1.5 rounded-lg bg-black/30 hover:bg-black/50 transition-colors text-sm"
-        >
-          {Math.round(scale * 100)}%
-        </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); setScale(s => Math.min(5, s + 0.2)); }}
-          className="text-white/70 hover:text-white px-3 py-1.5 rounded-lg bg-black/30 hover:bg-black/50 transition-colors text-sm"
-        >
-          +
-        </button>
-      </div>
-      <div
-        className="relative max-w-full max-h-full overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-        onWheel={handleWheel}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        style={{ cursor: scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default' }}
-      >
-        <img
-          ref={imgRef}
-          src={file.previewUrl}
-          alt={file.name}
-          className="max-w-full max-h-[90vh] object-contain select-none"
-          style={{
-            transform: `scale(${scale}) translate(${position.x / scale}px, ${position.y / scale}px)`,
-            transition: isDragging ? 'none' : 'transform 0.1s ease-out',
-          }}
-          draggable={false}
-        />
-      </div>
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/50 px-4 py-2 rounded-lg">
-        <p className="text-white text-sm">{file.name}</p>
-      </div>
-    </div>
+    <ImageLightbox
+      src={file.previewUrl || ''}
+      alt={file.name}
+      imageId={file.id}
+      fileName={file.name}
+      metadata={metadata}
+      onClose={onClose}
+    />
   );
 }
 
@@ -1570,7 +1485,7 @@ function BridgeDataBlock({ bridgeData }: { bridgeData: BridgePayload }) {
 
 export default function ChatMessage({
   message, index, isLast, isStreaming,
-  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML
+  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -1734,10 +1649,17 @@ export default function ChatMessage({
           </div>
         )}
 
+        {/* Annotation References */}
+        {message.annotationRefs && message.annotationRefs.length > 0 && (
+          <div className={`mb-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
+            <AnnotationRefDisplay annotationRefs={message.annotationRefs} />
+          </div>
+        )}
+
         {/* Skill Artifacts */}
         {message.skillArtifacts && message.skillArtifacts.length > 0 && (
           <div className={`mb-2 ${isUser ? 'text-right' : 'text-left'}`}>
-            <SkillArtifactsGroup artifacts={message.skillArtifacts} />
+            <SkillArtifactsGroup artifacts={message.skillArtifacts} onAnnotationClick={onAnnotationClick} />
           </div>
         )}
 

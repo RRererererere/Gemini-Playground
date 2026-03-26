@@ -312,6 +312,149 @@ EXAMPLES:
 - Re-enable after 3 seconds or when AI responds
 - This prevents spam and improves UX
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📸 WORKING WITH IMAGES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When user sends you images in chat, you can use them on the website!
+
+🎯 HOW TO USE IMAGES:
+
+1. Check "Available Images" section in your context — it lists all images with their IDs
+   Example: "img_1: photo.jpg", "img_2: logo.png"
+
+2. Use special attribute \`data-image-id\` in your HTML:
+   \`\`\`html
+   <img data-image-id="img_1" alt="Description" class="w-full">
+   \`\`\`
+
+3. Add this script ONCE at the end of <body> to auto-load all images:
+   \`\`\`html
+   <script>
+   // Auto-load images from IndexedDB
+   (function() {
+     const images = document.querySelectorAll('[data-image-id]');
+     
+     images.forEach(img => {
+       const id = img.getAttribute('data-image-id');
+       
+       // Open IndexedDB
+       const dbRequest = indexedDB.open('gemini_studio_files', 1);
+       
+       dbRequest.onsuccess = function(e) {
+         const db = e.target.result;
+         const tx = db.transaction('files', 'readonly');
+         const store = tx.objectStore('files');
+         const getRequest = store.get(id);
+         
+         getRequest.onsuccess = function() {
+           const base64 = getRequest.result;
+           if (base64) {
+             let mimeType = 'image/jpeg';
+             if (base64.startsWith('/9j/')) mimeType = 'image/jpeg';
+             else if (base64.startsWith('iVBORw0KGgo')) mimeType = 'image/png';
+             else if (base64.startsWith('R0lGOD')) mimeType = 'image/gif';
+             else if (base64.startsWith('UklGR')) mimeType = 'image/webp';
+             
+             img.src = 'data:' + mimeType + ';base64,' + base64;
+           }
+         };
+       };
+     });
+   })();
+   </script>
+   \`\`\`
+
+📋 EXAMPLES:
+
+User sends photo.jpg → You see "img_1: photo.jpg" in context
+\`\`\`html
+<!DOCTYPE html>
+<html>
+<head>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+  <!-- Hero section with user's photo -->
+  <div class="hero">
+    <img data-image-id="img_1" alt="Hero image" class="w-full h-96 object-cover">
+    <h1>Welcome!</h1>
+  </div>
+  
+  <!-- Auto-load script at the end -->
+  <script>
+  (function() {
+    const images = document.querySelectorAll('[data-image-id]');
+    images.forEach(img => {
+      const id = img.getAttribute('data-image-id');
+      const dbRequest = indexedDB.open('gemini_studio_files', 1);
+      dbRequest.onsuccess = function(e) {
+        const db = e.target.result;
+        const tx = db.transaction('files', 'readonly');
+        const store = tx.objectStore('files');
+        const getRequest = store.get(id);
+        getRequest.onsuccess = function() {
+          const base64 = getRequest.result;
+          if (base64) {
+            let mimeType = 'image/jpeg';
+            if (base64.startsWith('/9j/')) mimeType = 'image/jpeg';
+            else if (base64.startsWith('iVBORw0KGgo')) mimeType = 'image/png';
+            else if (base64.startsWith('R0lGOD')) mimeType = 'image/gif';
+            else if (base64.startsWith('UklGR')) mimeType = 'image/webp';
+            img.src = 'data:' + mimeType + ';base64,' + base64;
+          }
+        };
+      };
+    });
+  })();
+  </script>
+</body>
+</html>
+\`\`\`
+
+Multiple images (gallery):
+\`\`\`html
+<div class="grid grid-cols-3 gap-4">
+  <img data-image-id="img_1" alt="Photo 1" class="rounded-lg">
+  <img data-image-id="img_2" alt="Photo 2" class="rounded-lg">
+  <img data-image-id="img_3" alt="Photo 3" class="rounded-lg">
+</div>
+
+<!-- Script loads all images automatically -->
+<script>
+(function() {
+  const images = document.querySelectorAll('[data-image-id]');
+  images.forEach(img => {
+    const id = img.getAttribute('data-image-id');
+    const dbRequest = indexedDB.open('gemini_studio_files', 1);
+    dbRequest.onsuccess = function(e) {
+      const db = e.target.result;
+      const tx = db.transaction('files', 'readonly');
+      const store = tx.objectStore('files');
+      const getRequest = store.get(id);
+      getRequest.onsuccess = function() {
+        const base64 = getRequest.result;
+        if (base64) {
+          let mimeType = 'image/jpeg';
+          if (base64.startsWith('/9j/')) mimeType = 'image/jpeg';
+          else if (base64.startsWith('iVBORw0KGgo')) mimeType = 'image/png';
+          else if (base64.startsWith('R0lGOD')) mimeType = 'image/gif';
+          else if (base64.startsWith('UklGR')) mimeType = 'image/webp';
+          img.src = 'data:' + mimeType + ';base64,' + base64;
+        }
+      };
+    };
+  });
+})();
+</script>
+\`\`\`
+
+🔥 REMEMBER:
+- Use \`data-image-id="img_X"\` attribute on <img> tags
+- Add the auto-load script ONCE at the end of <body>
+- Script automatically loads all images from IndexedDB
+- Images appear instantly without external URLs!
+
 When user clicks on an element:
 - You'll receive context: { type: 'click', tagName: 'BUTTON', id: 'submit-btn', className: '...' }
 - Call update_element({ selector: '#submit-btn', changes: 'Make it blue' })

@@ -149,3 +149,58 @@ export async function clearAllFiles(): Promise<void> {
     console.error('Failed to clear files from IndexedDB:', err);
   }
 }
+
+// Get file with metadata (searches in current chat messages from localStorage)
+export async function getFile(fileId: string): Promise<{
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  data: string;
+} | null> {
+  try {
+    // Load base64 data from IndexedDB
+    const data = await loadFileData(fileId);
+    if (!data) return null;
+
+    // Try to find metadata in localStorage chats
+    if (typeof window !== 'undefined') {
+      const chatsJson = localStorage.getItem('chats');
+      if (chatsJson) {
+        const chats = JSON.parse(chatsJson);
+        
+        // Search through all chats for this file
+        for (const chat of chats) {
+          if (chat.messages) {
+            for (const message of chat.messages) {
+              if (message.files) {
+                const file = message.files.find((f: any) => f.id === fileId);
+                if (file) {
+                  return {
+                    id: file.id,
+                    name: file.name,
+                    mimeType: file.mimeType,
+                    size: file.size,
+                    data
+                  };
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback: return with minimal metadata
+    return {
+      id: fileId,
+      name: 'image.png',
+      mimeType: 'image/png',
+      size: Math.round((data.length * 3) / 4),
+      data
+    };
+  } catch (err) {
+    console.error('Failed to get file:', err);
+    return null;
+  }
+}

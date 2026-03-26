@@ -194,6 +194,25 @@ export function buildChatRequestMessages(messages: Message[]) {
         })
         .map(part => partToGeminiPart(part));
 
+      // Добавляем текст аннотаций если есть
+      if (message.annotationRefs && message.annotationRefs.length > 0) {
+        const annotationsText = message.annotationRefs.map(ref => {
+          const region = `${ref.annotation.x1_pct.toFixed(1)}%-${ref.annotation.y1_pct.toFixed(1)}% to ${ref.annotation.x2_pct.toFixed(1)}%-${ref.annotation.y2_pct.toFixed(1)}%`;
+          return `@[${ref.annotation.label}] (на изображении "${ref.imageName}", область: ${region})`;
+        }).join(', ');
+        
+        // Находим текстовую часть и добавляем к ней аннотации
+        const textPartIndex = parts.findIndex(p => p.text !== undefined);
+        if (textPartIndex >= 0) {
+          parts[textPartIndex].text = parts[textPartIndex].text 
+            ? `${parts[textPartIndex].text}\n\nСсылаюсь на: ${annotationsText}`
+            : `Расскажи подробнее про: ${annotationsText}`;
+        } else {
+          // Если нет текстовой части, добавляем новую
+          parts.unshift({ text: `Расскажи подробнее про: ${annotationsText}` });
+        }
+      }
+
       for (const toolCall of message.toolCalls || []) {
         parts.push({
           functionCall: {

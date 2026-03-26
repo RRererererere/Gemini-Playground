@@ -5,10 +5,11 @@ import {
   Send, Square, Paperclip, X, FileText, Image as ImageIcon,
   Volume2, Braces, Plus, ArrowRight, Video
 } from 'lucide-react';
-import type { AttachedFile, CanvasElement } from '@/types';
+import type { AttachedFile, CanvasElement, AnnotationReference } from '@/types';
+import { generateImageId } from '@/lib/imageId';
 
 interface ChatInputProps {
-  onSend: (text: string, files: AttachedFile[]) => void;
+  onSend: (text: string, files: AttachedFile[], annotationRefs?: AnnotationReference[]) => void;
   onStop: () => void;
   onAddUserMessage: () => void;
   isStreaming: boolean;
@@ -19,6 +20,7 @@ interface ChatInputProps {
   onRun: () => void;
   pendingCanvasElement?: CanvasElement | null;
   onCanvasElementConsumed?: () => void;
+  onAnnotationClick?: (text: string) => void;
 }
 
 const ACCEPTED_TYPES = {
@@ -218,17 +220,41 @@ function FileChip({ file, onRemove }: { file: AttachedFile; onRemove: () => void
   );
 }
 
+// Цвета для типов аннотаций
+const annotationColors: Record<string, string> = {
+  highlight: '#FBBF24',
+  pointer: '#60A5FA',
+  warning: '#F87171',
+  success: '#4ADE80',
+  info: '#A78BFA'
+};
+
 export default function ChatInput({
   onSend, onStop, isStreaming, disabled,
   canContinue, onContinue, canRun, onRun, onAddUserMessage,
-  pendingCanvasElement, onCanvasElementConsumed
+  pendingCanvasElement, onCanvasElementConsumed, onAnnotationClick
 }: ChatInputProps) {
   const [text, setText] = useState('');
   const [files, setFiles] = useState<AttachedFile[]>([]);
+  const [annotationRefs, setAnnotationRefs] = useState<AnnotationReference[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [canvasPreview, setCanvasPreview] = useState<CanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Expose addAnnotationRef to parent via callback
+  useEffect(() => {
+    if (onAnnotationClick) {
+      // Store addAnnotationRef in a way parent can access it
+      (window as any).__chatInputAddAnnotation = (annotationRef: AnnotationReference) => {
+        setAnnotationRefs(prev => [...prev, annotationRef]);
+        textareaRef.current?.focus();
+      };
+    }
+    return () => {
+      delete (window as any).__chatInputAddAnnotation;
+    };
+  }, [onAnnotationClick]);
 
   useEffect(() => {
     if (pendingCanvasElement) {
@@ -313,7 +339,7 @@ export default function ChatInput({
         : undefined;
 
       return {
-        id: Math.random().toString(36).slice(2),
+        id: finalMimeType.startsWith('image/') ? generateImageId() : Math.random().toString(36).slice(2),
         name: file.name,
         mimeType: finalMimeType,
         size: processedFile.size,
@@ -332,6 +358,23 @@ export default function ChatInput({
     const valid = results.filter(Boolean) as AttachedFile[];
     setFiles(prev => [...prev, ...valid].slice(0, 10)); // max 10 files
   }, [processFile]);
+
+  const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData.items);
+    const imageItems = items.filter(item => item.type.startsWith('image/'));
+    
+    if (imageItems.length === 0) return; // обычный текст — не перехватываем
+    
+    e.preventDefault(); // предотвращаем вставку base64 текста в textarea
+    
+    const files = imageItems
+      .map(item => item.getAsFile())
+      .filter(Boolean) as File[];
+    
+    if (files.length > 0) {
+      await handleFiles(files);
+    }
+  }, [handleFiles]);
 
   useEffect(() => {
     const handleMobileDrop = (e: any) => {
@@ -353,7 +396,7 @@ export default function ChatInput({
 
   const handleSend = () => {
     if (isStreaming) return;
-    if (!text.trim() && files.length === 0 && !canvasPreview) return;
+    if (!text.trim() && files.length === 0 && !canvasPreview && annotationRefs.length === 0) return;
     if (disabled) return;
 
     let finalText = text;
@@ -363,7 +406,7 @@ export default function ChatInput({
       if (canvasPreview.type === 'drag-image' && canvasPreview.dataURL) {
         const base64Data = canvasPreview.dataURL.split(',')[1];
         additionalFiles.push({
-          id: Math.random().toString(36).slice(2),
+          id: generateImageId(),
           type: 'image',
           mimeType: 'image/png',
           data: base64Data,
@@ -376,9 +419,10 @@ export default function ChatInput({
       setCanvasPreview(null);
     }
 
-    onSend(finalText.trim(), additionalFiles);
+    onSend(finalText.trim(), additionalFiles, annotationRefs.length > 0 ? annotationRefs : undefined);
     setText('');
     setFiles([]);
+    setAnnotationRefs([]);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -419,7 +463,7 @@ export default function ChatInput({
     handleFiles(e.dataTransfer.files);
   };
 
-  const hasContent = text.trim().length > 0 || files.length > 0 || canvasPreview !== null;
+  const hasContent = text.trim().length > 0 || files.length > 0 || canvasPreview !== null || annotationRefs.length > 0;
 
   return (
     <div className="px-4 pb-4 pt-2">
@@ -444,6 +488,46 @@ export default function ChatInput({
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
       >
+        {/* Annotation reference markers */}
+        {annotationRefs.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-3 pt-3">
+            {annotationRefs.map(ref => (
+              <div
+                key={ref.id}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all group hover:scale-105"
+                style={{
+                  backgroundColor: `${ref.color}15`,
+                  borderColor: ref.color,
+                  boxShadow: `0 0 8px ${ref.color}40`
+                }}
+              >
+                <div
+                  className="w-4 h-4 rounded-full border-2 flex items-center justify-center text-[9px] font-bold"
+                  style={{
+                    borderColor: ref.color,
+                    color: ref.color
+                  }}
+                >
+                  @
+                </div>
+                <span className="text-xs font-medium" style={{ color: ref.color }}>
+                  {ref.annotation.label}
+                </span>
+                <span className="text-[10px] opacity-60" style={{ color: ref.color }}>
+                  · {ref.imageName}
+                </span>
+                <button
+                  onClick={() => setAnnotationRefs(prev => prev.filter(r => r.id !== ref.id))}
+                  className="ml-1 opacity-60 hover:opacity-100 transition-opacity"
+                  style={{ color: ref.color }}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* File chips */}
         {files.length > 0 && (
           <div className="flex flex-wrap gap-2 px-3 pt-3">
@@ -478,6 +562,7 @@ export default function ChatInput({
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder={disabled ? 'Добавьте API ключ для начала…' : 'Сообщение Gemini… (Enter — отправить, Shift+Enter — новая строка)'}
           disabled={disabled || isStreaming}
           rows={1}
@@ -570,7 +655,7 @@ export default function ChatInput({
       </div>
 
       <p className="text-center text-[11px] text-[var(--text-dim)] mt-2 input-hint">
-        Shift+Enter — новая строка · Перетащите файлы для прикрепления
+        Shift+Enter — новая строка · Перетащите или вставьте (Ctrl+V) изображения
       </p>
     </div>
   );

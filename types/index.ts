@@ -102,6 +102,7 @@ export interface Message {
   kind?: 'tool_response' | 'bridge_data'; // добавили bridge_data
   parts: Part[];
   files?: AttachedFile[];
+  annotationRefs?: AnnotationReference[]; // ссылки на аннотации для отображения
   skillArtifacts?: SkillArtifact[]; // результаты работы скиллов
   toolCalls?: ToolCall[];
   toolResponses?: ToolResponse[];
@@ -131,7 +132,7 @@ export interface Message {
 // Артефакт скилла (импортируется из lib/skills/types.ts в рантайме)
 export interface SkillArtifact {
   id: string;
-  type: 'image' | 'video' | 'audio' | 'document' | 'code' | 'table' | 'chart' | 'text' | 'custom';
+  type: 'image' | 'video' | 'audio' | 'document' | 'code' | 'table' | 'chart' | 'text' | 'custom' | 'annotated_image';
   label?: string;
   data: 
     | { kind: 'base64'; mimeType: string; base64: string }
@@ -139,11 +140,35 @@ export interface SkillArtifact {
     | { kind: 'text'; content: string; language?: string }
     | { kind: 'json'; value: unknown }
     | { kind: 'blob'; blob: Blob; mimeType: string }
-    | { kind: 'stored'; stored: 'idb' }; // большой артефакт в IndexedDB
+    | { kind: 'stored'; stored: 'idb' } // большой артефакт в IndexedDB
+    | { kind: 'annotations'; sourceImageId: string; annotations: AnnotationItem[] }; // аннотированное изображение
   sendToGemini?: boolean;
   downloadable?: boolean;
   filename?: string;
   skillId?: string;
+}
+
+// Annotation types for image analyser
+export type AnnotationType = 'highlight' | 'pointer' | 'warning' | 'success' | 'info';
+export type ArrowDirection = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'none';
+
+export interface AnnotationItem {
+  x1_pct: number;
+  y1_pct: number;
+  x2_pct: number;
+  y2_pct: number;
+  label: string;
+  type: AnnotationType;
+  arrow_direction?: ArrowDirection;
+}
+
+// Ссылка на аннотацию в тексте сообщения
+export interface AnnotationReference {
+  id: string; // уникальный ID ссылки
+  imageId: string; // ID изображения (file ID)
+  imageName: string; // имя файла для отображения
+  annotation: AnnotationItem; // сама аннотация
+  color: string; // цвет маркера (соответствует типу аннотации)
 }
 
 // Вызов skill tool для отображения в чате

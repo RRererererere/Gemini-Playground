@@ -1,19 +1,23 @@
 'use client';
 
-import type { SkillArtifact } from '@/types';
-import { useState } from 'react';
+import type { SkillArtifact, AnnotationItem } from '@/types';
+import { useState, useEffect } from 'react';
 import { Download, X, ZoomIn, ChevronLeft, ChevronRight, FileText } from 'lucide-react';
+import ImageLightbox from './ImageLightbox';
+import AnnotationOverlay from './AnnotationOverlay';
 
 interface Props {
   artifact: SkillArtifact;
+  onAnnotationClick?: (annotation: AnnotationItem) => void;
 }
 
 interface GroupProps {
   artifacts: SkillArtifact[];
+  onAnnotationClick?: (annotation: AnnotationItem) => void;
 }
 
 // Группировка артефактов по типу для красивого отображения
-export function SkillArtifactsGroup({ artifacts }: GroupProps) {
+export function SkillArtifactsGroup({ artifacts, onAnnotationClick }: GroupProps) {
   // Группируем изображения вместе
   const images = artifacts.filter(a => a.type === 'image');
   const others = artifacts.filter(a => a.type !== 'image');
@@ -22,22 +26,24 @@ export function SkillArtifactsGroup({ artifacts }: GroupProps) {
     <>
       {images.length > 0 && (
         images.length === 1 ? (
-          <SkillArtifactRenderer artifact={images[0]} />
+          <SkillArtifactRenderer artifact={images[0]} onAnnotationClick={onAnnotationClick} />
         ) : (
-          <ImageGallery artifacts={images} />
+          <ImageGallery artifacts={images} onAnnotationClick={onAnnotationClick} />
         )
       )}
       {others.map(artifact => (
-        <SkillArtifactRenderer key={artifact.id} artifact={artifact} />
+        <SkillArtifactRenderer key={artifact.id} artifact={artifact} onAnnotationClick={onAnnotationClick} />
       ))}
     </>
   );
 }
 
-export function SkillArtifactRenderer({ artifact }: Props) {
+export function SkillArtifactRenderer({ artifact, onAnnotationClick }: Props) {
   switch (artifact.type) {
     case 'image':
-      return <ArtifactImage artifact={artifact} />;
+      return <ArtifactImage artifact={artifact} onAnnotationClick={onAnnotationClick} />;
+    case 'annotated_image':
+      return <ArtifactAnnotatedImage artifact={artifact} onAnnotationClick={onAnnotationClick} />;
     case 'video':
       return <ArtifactVideo artifact={artifact} />;
     case 'audio':
@@ -59,7 +65,7 @@ export function SkillArtifactRenderer({ artifact }: Props) {
 // Image Gallery - для множественных изображений
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ImageGallery({ artifacts }: GroupProps) {
+function ImageGallery({ artifacts, onAnnotationClick }: GroupProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isZoomed, setIsZoomed] = useState(false);
 
@@ -73,6 +79,11 @@ function ImageGallery({ artifacts }: GroupProps) {
   const goNext = () => setSelectedIndex((selectedIndex + 1) % artifacts.length);
   const goPrev = () => setSelectedIndex((selectedIndex - 1 + artifacts.length) % artifacts.length);
 
+  const metadata = currentArtifact.data.kind === 'base64' ? {
+    type: currentArtifact.data.mimeType,
+    size: currentArtifact.data.base64 ? Math.round((currentArtifact.data.base64.length * 3) / 4) : undefined
+  } : undefined;
+
   return (
     <div className="my-3">
       {currentArtifact.label && (
@@ -80,53 +91,50 @@ function ImageGallery({ artifacts }: GroupProps) {
       )}
       
       {/* Main image */}
-      <div className="relative inline-block max-w-full">
+      <div className="relative inline-block max-w-full group">
         <img
           src={src}
           alt={currentArtifact.label || 'Artifact'}
-          className="max-w-full h-auto rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+          className="max-w-full max-h-[200px] h-auto rounded-xl cursor-zoom-in transition-all duration-200"
+          style={{
+            border: '1.5px solid rgba(255, 255, 255, 0.08)',
+            boxShadow: `
+              0 0 0 1px rgba(255,255,255,0.08),
+              0 0 0 2px rgba(255,255,255,0.04),
+              inset 0 0 0 1px rgba(255,255,255,0.06)
+            `
+          }}
           onClick={() => setIsZoomed(true)}
         />
         
-        {/* Controls overlay */}
-        <div className="absolute inset-0 flex items-center justify-between p-2 opacity-0 hover:opacity-100 transition-opacity">
-          {artifacts.length > 1 && (
-            <>
-              <button
-                onClick={(e) => { e.stopPropagation(); goPrev(); }}
-                className="bg-black/70 hover:bg-black/90 text-white p-2 rounded-full transition-colors"
-              >
-                <ChevronLeft size={20} />
-              </button>
-              <button
-                onClick={(e) => { e.stopPropagation(); goNext(); }}
-                className="bg-black/70 hover:bg-black/90 text-white p-2 rounded-full transition-colors"
-              >
-                <ChevronRight size={20} />
-              </button>
-            </>
-          )}
-        </div>
-
-        {/* Action buttons */}
-        <div className="absolute top-2 right-2 flex gap-2">
-          <button
-            onClick={(e) => { e.stopPropagation(); setIsZoomed(true); }}
-            className="bg-black/70 hover:bg-black/90 text-white p-2 rounded-lg transition-colors"
-            title="Увеличить"
-          >
-            <ZoomIn size={16} />
-          </button>
-          {currentArtifact.downloadable !== false && (
+        {/* Navigation arrows */}
+        {artifacts.length > 1 && (
+          <div className="absolute inset-0 flex items-center justify-between p-2 opacity-0 group-hover:opacity-100 transition-opacity">
             <button
-              onClick={(e) => { e.stopPropagation(); downloadArtifact(currentArtifact); }}
-              className="bg-black/70 hover:bg-black/90 text-white p-2 rounded-lg transition-colors"
-              title="Скачать"
+              onClick={(e) => { e.stopPropagation(); goPrev(); }}
+              className="bg-black/70 hover:bg-black/90 text-white p-2 rounded-full transition-colors"
             >
-              <Download size={16} />
+              <ChevronLeft size={20} />
             </button>
-          )}
-        </div>
+            <button
+              onClick={(e) => { e.stopPropagation(); goNext(); }}
+              className="bg-black/70 hover:bg-black/90 text-white p-2 rounded-full transition-colors"
+            >
+              <ChevronRight size={20} />
+            </button>
+          </div>
+        )}
+
+        {/* Download button */}
+        {currentArtifact.downloadable !== false && (
+          <button
+            onClick={(e) => { e.stopPropagation(); downloadArtifact(currentArtifact); }}
+            className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 text-white p-1.5 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+            title="Скачать"
+          >
+            <Download size={14} />
+          </button>
+        )}
 
         {/* Counter */}
         {artifacts.length > 1 && (
@@ -163,49 +171,15 @@ function ImageGallery({ artifacts }: GroupProps) {
         </div>
       )}
 
-      {/* Zoom modal */}
+      {/* Zoom with ImageLightbox */}
       {isZoomed && (
-        <div
-          className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-4"
-          onClick={() => setIsZoomed(false)}
-        >
-          <button
-            onClick={() => setIsZoomed(false)}
-            className="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg transition-colors"
-          >
-            <X size={24} />
-          </button>
-          
-          {artifacts.length > 1 && (
-            <>
-              <button
-                onClick={(e) => { e.stopPropagation(); goPrev(); }}
-                className="absolute left-4 bg-white/10 hover:bg-white/20 text-white p-3 rounded-full transition-colors"
-              >
-                <ChevronLeft size={32} />
-              </button>
-              <button
-                onClick={(e) => { e.stopPropagation(); goNext(); }}
-                className="absolute right-4 bg-white/10 hover:bg-white/20 text-white p-3 rounded-full transition-colors"
-              >
-                <ChevronRight size={32} />
-              </button>
-            </>
-          )}
-
-          <img 
-            src={src} 
-            alt={currentArtifact.label || 'Artifact'} 
-            className="max-w-full max-h-full object-contain"
-            onClick={(e) => e.stopPropagation()}
-          />
-
-          {artifacts.length > 1 && (
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-white/10 text-white px-4 py-2 rounded-full text-sm">
-              {selectedIndex + 1} / {artifacts.length}
-            </div>
-          )}
-        </div>
+        <ImageLightbox
+          src={src}
+          alt={currentArtifact.label || 'Artifact'}
+          fileName={currentArtifact.filename}
+          metadata={metadata}
+          onClose={() => setIsZoomed(false)}
+        />
       )}
     </div>
   );
@@ -215,7 +189,7 @@ function ImageGallery({ artifacts }: GroupProps) {
 // Image
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ArtifactImage({ artifact }: Props) {
+function ArtifactImage({ artifact, onAnnotationClick }: Props) {
   const [isZoomed, setIsZoomed] = useState(false);
   
   const src = artifact.data.kind === 'base64'
@@ -226,58 +200,241 @@ function ArtifactImage({ artifact }: Props) {
 
   if (!src) return null;
 
+  // Извлекаем метаданные если есть
+  const metadata = artifact.data.kind === 'base64' ? {
+    type: artifact.data.mimeType,
+    size: artifact.data.base64 ? Math.round((artifact.data.base64.length * 3) / 4) : undefined
+  } : undefined;
+
   return (
     <div className="my-3">
       {artifact.label && (
         <div className="text-xs text-zinc-400 mb-2">{artifact.label}</div>
       )}
-      <div className="relative inline-block">
+      <div className="relative inline-block group">
         <img
           src={src}
           alt={artifact.label || 'Artifact'}
-          className="max-w-full h-auto rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+          className="max-w-full max-h-[200px] h-auto rounded-xl cursor-zoom-in transition-all duration-200"
+          style={{
+            border: '1.5px solid rgba(255, 255, 255, 0.08)',
+            boxShadow: `
+              0 0 0 1px rgba(255,255,255,0.08),
+              0 0 0 2px rgba(255,255,255,0.04),
+              inset 0 0 0 1px rgba(255,255,255,0.06)
+            `
+          }}
           onClick={() => setIsZoomed(true)}
         />
         
-        {/* Action buttons */}
-        <div className="absolute top-2 right-2 flex gap-2">
+        {/* Hover overlay with zoom icon */}
+        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+          <div className="bg-black/60 backdrop-blur-sm text-white px-3 py-1.5 rounded-full text-xs flex items-center gap-1.5">
+            <ZoomIn size={14} />
+            <span>Увеличить</span>
+          </div>
+        </div>
+
+        {/* Download button */}
+        {artifact.downloadable !== false && (
           <button
-            onClick={(e) => { e.stopPropagation(); setIsZoomed(true); }}
-            className="bg-black/70 hover:bg-black/90 text-white p-2 rounded-lg transition-colors"
-            title="Увеличить"
+            onClick={(e) => { e.stopPropagation(); downloadArtifact(artifact); }}
+            className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 text-white p-1.5 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+            title="Скачать"
           >
-            <ZoomIn size={16} />
+            <Download size={14} />
           </button>
-          {artifact.downloadable !== false && (
-            <button
-              onClick={(e) => { e.stopPropagation(); downloadArtifact(artifact); }}
-              className="bg-black/70 hover:bg-black/90 text-white p-2 rounded-lg transition-colors"
-              title="Скачать"
-            >
-              <Download size={16} />
-            </button>
-          )}
+        )}
+      </div>
+
+      {isZoomed && (
+        <ImageLightbox
+          src={src}
+          alt={artifact.label || 'Artifact'}
+          fileName={artifact.filename}
+          metadata={metadata}
+          onClose={() => setIsZoomed(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Annotated Image
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ArtifactAnnotatedImage({ artifact, onAnnotationClick }: Props) {
+  const [isZoomed, setIsZoomed] = useState(false);
+  const [imgDimensions, setImgDimensions] = useState({ width: 0, height: 0 });
+  const [sourceImage, setSourceImage] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const imgRef = useState<HTMLImageElement | null>(null)[0];
+  
+  if (artifact.data.kind !== 'annotations') return null;
+
+  const { sourceImageId, annotations } = artifact.data;
+
+  useEffect(() => {
+    async function loadSourceImage() {
+      try {
+        // Импортируем loadFileData динамически
+        const { loadFileData } = await import('@/lib/fileStorage');
+        
+        // Загружаем из IndexedDB
+        const base64Data = await loadFileData(sourceImageId);
+        
+        if (base64Data) {
+          // Определяем MIME type (по умолчанию image/png)
+          const mimeType = base64Data.startsWith('/9j/') ? 'image/jpeg' 
+                         : base64Data.startsWith('iVBOR') ? 'image/png'
+                         : base64Data.startsWith('R0lGOD') ? 'image/gif'
+                         : base64Data.startsWith('UklGR') ? 'image/webp'
+                         : 'image/png';
+          
+          setSourceImage(`data:${mimeType};base64,${base64Data}`);
+        } else {
+          console.warn('Source image not found in IndexedDB:', sourceImageId);
+        }
+      } catch (err) {
+        console.error('Failed to load source image:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadSourceImage();
+  }, [sourceImageId]);
+
+  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    // Используем clientWidth/clientHeight — реальный размер в DOM
+    setImgDimensions({ width: img.clientWidth, height: img.clientHeight });
+  };
+
+  if (loading) {
+    return (
+      <div className="my-3 p-4 bg-zinc-800/50 rounded-lg text-zinc-400 text-sm flex items-center gap-2">
+        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-zinc-400"></div>
+        Загрузка изображения...
+      </div>
+    );
+  }
+
+  if (!sourceImage) {
+    return (
+      <div className="my-3 p-4 bg-zinc-800/50 rounded-lg text-zinc-400 text-sm">
+        Исходное изображение не найдено (ID: {sourceImageId})
+      </div>
+    );
+  }
+
+  return (
+    <div className="my-3">
+      {artifact.label && (
+        <div className="text-xs text-zinc-400 mb-2">{artifact.label}</div>
+      )}
+      <div className="relative inline-block group">
+        <img
+          src={sourceImage}
+          alt={artifact.label || 'Annotated image'}
+          className="max-w-full max-h-[400px] h-auto rounded-xl cursor-zoom-in block"
+          style={{
+            border: '1.5px solid rgba(255, 255, 255, 0.08)',
+            boxShadow: `
+              0 0 0 1px rgba(255,255,255,0.08),
+              0 0 0 2px rgba(255,255,255,0.04),
+              inset 0 0 0 1px rgba(255,255,255,0.06)
+            `
+          }}
+          onLoad={handleImageLoad}
+          onClick={() => setIsZoomed(true)}
+        />
+        
+        {/* Annotations overlay — positioned absolutely over the image */}
+        {imgDimensions.width > 0 && (
+          <div 
+            className="absolute top-0 left-0 pointer-events-none"
+            style={{
+              width: `${imgDimensions.width}px`,
+              height: `${imgDimensions.height}px`
+            }}
+          >
+            <AnnotationOverlay
+              annotations={annotations}
+              imageWidth={imgDimensions.width}
+              imageHeight={imgDimensions.height}
+              onAnnotationClick={(ann) => {
+                if (onAnnotationClick) {
+                  // Создаем полный контекст аннотации
+                  const annotationColors: Record<string, string> = {
+                    highlight: '#FBBF24',
+                    pointer: '#60A5FA',
+                    warning: '#F87171',
+                    success: '#4ADE80',
+                    info: '#A78BFA'
+                  };
+                  
+                  const annotationRef: import('@/types').AnnotationReference = {
+                    id: Math.random().toString(36).slice(2),
+                    imageId: sourceImageId,
+                    imageName: artifact.filename || artifact.label || 'analyzed-image.png',
+                    annotation: ann,
+                    color: annotationColors[ann.type] || '#60A5FA'
+                  };
+                  
+                  if ((window as any).__chatInputAddAnnotation) {
+                    (window as any).__chatInputAddAnnotation(annotationRef);
+                  }
+                }
+              }}
+            />
+          </div>
+        )}
+
+        {/* Hover hint */}
+        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+          <div className="bg-black/60 backdrop-blur-sm text-white px-3 py-1.5 rounded-full text-xs flex items-center gap-1.5">
+            <ZoomIn size={14} />
+            <span>Увеличить</span>
+          </div>
         </div>
       </div>
 
       {isZoomed && (
-        <div
-          className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-4"
-          onClick={() => setIsZoomed(false)}
-        >
-          <button
-            onClick={() => setIsZoomed(false)}
-            className="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white p-2 rounded-lg transition-colors"
-          >
-            <X size={24} />
-          </button>
-          <img 
-            src={src} 
-            alt={artifact.label || 'Artifact'} 
-            className="max-w-full max-h-full object-contain"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
+        <ImageLightbox
+          src={sourceImage}
+          alt={artifact.label || 'Annotated image'}
+          imageId={sourceImageId}
+          fileName={artifact.filename || artifact.label || 'analyzed-image.png'}
+          annotations={annotations}
+          onAnnotationClick={(ann) => {
+            setIsZoomed(false);
+            if (onAnnotationClick) {
+              // Создаем полный контекст аннотации
+              const annotationColors: Record<string, string> = {
+                highlight: '#FBBF24',
+                pointer: '#60A5FA',
+                warning: '#F87171',
+                success: '#4ADE80',
+                info: '#A78BFA'
+              };
+              
+              const annotationRef: import('@/types').AnnotationReference = {
+                id: Math.random().toString(36).slice(2),
+                imageId: sourceImageId,
+                imageName: artifact.filename || artifact.label || 'analyzed-image.png',
+                annotation: ann,
+                color: annotationColors[ann.type] || '#60A5FA'
+              };
+              
+              if ((window as any).__chatInputAddAnnotation) {
+                (window as any).__chatInputAddAnnotation(annotationRef);
+              }
+            }
+          }}
+          onClose={() => setIsZoomed(false)}
+        />
       )}
     </div>
   );
