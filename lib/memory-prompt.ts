@@ -85,44 +85,36 @@ export function buildMemoryPrompt(
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // Правила сохранения изображений
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  parts.push('### Правила сохранения изображений:');
+  parts.push('### ⚠️ КРИТИЧЕСКИ ВАЖНО - Сохранение изображений:');
   parts.push('');
-  parts.push('При получении изображения ВСЕГДА оценивай его тип:');
+  parts.push('Когда пользователь присылает фото с ИМЕНЕМ человека/места/объекта:');
+  parts.push('→ ОБЯЗАТЕЛЬНО вызови save_image_memory(image_id, description, tags, entities, scope)');
   parts.push('');
-  parts.push('**Тип A (СОХРАНЯТЬ через save_image_memory):**');
-  parts.push('- Фото человека с именем или контекстом ("это моя подруга Маша")');
-  parts.push('- Логотип, бренд, референс');
-  parts.push('- Место, объект с идентификацией ("наш офис", "мой кот")');
-  parts.push('- Любое изображение которое понадобится в будущем');
-  parts.push('- Когда создаёшь аннотации которые важны для будущего');
+  parts.push('Примеры ОБЯЗАТЕЛЬНОГО вызова:');
+  parts.push('- "Это моя подруга Маша" → save_image_memory(img_1, "Девушка Маша...", ["person","female","friend"], ["Маша"], "global")');
+  parts.push('- "Запомни этот логотип Nike" → save_image_memory(img_1, "Логотип Nike...", ["logo","brand"], ["Nike"], "global")');
+  parts.push('- "Это наш офис" → save_image_memory(img_1, "Офис пользователя...", ["office","place"], [], "global")');
   parts.push('');
-  parts.push('**Тип B (НЕ СОХРАНЯТЬ):**');
-  parts.push('- Скриншот интерфейса с вопросом "куда нажать"');
-  parts.push('- Фото ошибки/бага для разовой помощи');
-  parts.push('- Временный черновик');
-  parts.push('- Абстрактная картинка без контекста');
-  parts.push('- Просто "посмотри на это" без запроса на запоминание');
+  parts.push('НЕ вызывай только для скриншотов интерфейса или временных задач.');
   parts.push('');
-  parts.push('Если Тип A — вызывай save_image_memory (fire-and-forget, продолжай текст в том же turn).');
+  parts.push('⚠️ FIRE-AND-FORGET: Вызови и СРАЗУ продолжай текст. НЕ жди ответа!');
   parts.push('');
   
   parts.push('### КРИТИЧЕСКИ ВАЖНО - КАК РАБОТАЮТ ИНСТРУМЕНТЫ ПАМЯТИ:');
   parts.push('');
-  parts.push('Memory tools (save_memory, update_memory, forget_memory, save_image_memory) работают по принципу "fire-and-forget":');
-  parts.push('1. Ты вызываешь функцию → она выполняется МГНОВЕННО и МОЛЧА на клиенте');
-  parts.push('2. Ты НЕ получишь functionResponse - его вообще нет');
-  parts.push('3. Ты ДОЛЖЕН продолжить генерацию текста В ТОМ ЖЕ turn');
-  parts.push('4. Считай что функция ВСЕГДА выполняется успешно');
+  parts.push('Memory tools (save_memory, update_memory, forget_memory, save_image_memory):');
+  parts.push('1. Вызови функцию через functionCall');
+  parts.push('2. Система выполнит её МГНОВЕННО на клиенте');
+  parts.push('3. Ты получишь functionResponse с { success: true }');
+  parts.push('4. ПОСЛЕ получения ответа продолжи генерацию текста');
   parts.push('');
   parts.push('ПРАВИЛЬНО:');
-  parts.push('  Один turn: functionCall(save_memory) + text("Приятно познакомиться, Дима!")');
-  parts.push('  Один turn: functionCall(save_image_memory) + text("Запомнил фото Маши!")');
+  parts.push('  Turn 1: functionCall(save_memory)');
+  parts.push('  Turn 2: [получаешь response] + text("Приятно познакомиться, Дима!")');
   parts.push('');
   parts.push('НЕПРАВИЛЬНО:');
-  parts.push('  Turn 1: functionCall(save_memory) [стоп]');
-  parts.push('  Turn 2: text("Приятно...") ❌');
+  parts.push('  Turn 1: text("Приятно познакомиться!") БЕЗ вызова save_memory');
   parts.push('');
-  parts.push('Gemini API поддерживает несколько parts в одном candidate - используй это!');
   parts.push('НЕ упоминай явно что ты что-то сохранил - просто используй память естественно.');
 
   const usedMemoryIds = relevant.map(m => m.id);

@@ -146,6 +146,24 @@ export async function saveImageMemory(data: {
     console.log('[image-memory] Exact duplicate found, incrementing mentions');
     exactDuplicate.mentions++;
     exactDuplicate.updated_at = Date.now();
+    
+    // Если новый scope = global, обновляем (global важнее local)
+    if (data.scope === 'global' && exactDuplicate.scope === 'local') {
+      console.log('[image-memory] Upgrading scope from local to global');
+      exactDuplicate.scope = 'global';
+    }
+    
+    // Обновляем description, tags, entities если они изменились
+    if (data.description && data.description !== exactDuplicate.description) {
+      exactDuplicate.description = data.description;
+    }
+    if (data.tags && data.tags.length > 0) {
+      exactDuplicate.tags = Array.from(new Set([...exactDuplicate.tags, ...data.tags]));
+    }
+    if (data.entities && data.entities.length > 0) {
+      exactDuplicate.entities = Array.from(new Set([...exactDuplicate.entities, ...data.entities]));
+    }
+    
     saveImageMemoryIndex(index);
     
     // Возвращаем существующий
@@ -175,6 +193,12 @@ export async function saveImageMemory(data: {
       similar.entities = Array.from(new Set([...similar.entities, ...data.entities]));
       similar.mentions++;
       similar.updated_at = Date.now();
+      
+      // Если новый scope = global, обновляем (global важнее local)
+      if (data.scope === 'global' && similar.scope === 'local') {
+        console.log('[image-memory] Upgrading scope from local to global (similar image)');
+        similar.scope = 'global';
+      }
       
       if (data.annotations) {
         similar.annotations = data.annotations;

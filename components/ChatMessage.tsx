@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { Message, AttachedFile, Part, DeepThinkAnalysis, BridgePayload } from '@/types';
 import MemoryPill from './MemoryPill';
+import ImageMemoryPill from './ImageMemoryPill';
 import { SkillArtifactsGroup } from './SkillArtifactRenderer';
 import AnnotationRefDisplay from './AnnotationRefDisplay';
 import ImageLightbox from './ImageLightbox';
@@ -1745,18 +1746,32 @@ export default function ChatMessage({
             {/* Memory Operations */}
             {!isUser && message.memoryOperations && message.memoryOperations.length > 0 && (
               <>
-                {message.memoryOperations.map((op, idx) => (
-                  <MemoryPill
-                    key={`${message.id}-mem-${idx}`}
-                    operation={op.type}
-                    scope={op.scope}
-                    fact={op.fact}
-                    oldFact={op.oldFact}
-                    category={op.category}
-                    confidence={op.confidence}
-                    reason={op.reason}
-                  />
-                ))}
+                {message.memoryOperations.map((op, idx) => {
+                  if (op.type === 'save_image') {
+                    return (
+                      <ImageMemoryPill
+                        key={`${message.id}-mem-${idx}`}
+                        scope={op.scope}
+                        description={op.description || ''}
+                        tags={op.tags || []}
+                        entities={op.entities || []}
+                        thumbnailBase64={op.thumbnailBase64}
+                      />
+                    );
+                  }
+                  return (
+                    <MemoryPill
+                      key={`${message.id}-mem-${idx}`}
+                      operation={op.type}
+                      scope={op.scope}
+                      fact={op.fact}
+                      oldFact={op.oldFact}
+                      category={op.category}
+                      confidence={op.confidence}
+                      reason={op.reason}
+                    />
+                  );
+                })}
               </>
             )}
 

@@ -114,29 +114,34 @@ export async function computePerceptualHash(base64: string, mimeType: string): P
 }
 
 /**
- * Упрощённая 2D DCT для 32x32 изображения
+ * Быстрая 2D DCT для 32x32 изображения
+ * Использует разделимость DCT: DCT2D = DCT1D(DCT1D(image)^T)^T
+ * Сложность: O(N³) вместо O(N⁴)
  */
 function compute2DDCT(pixels: Float64Array, size: number): Float64Array {
-  const dct = new Float64Array(size * size);
-  const sqrt2 = Math.sqrt(2);
-  const sqrtN = Math.sqrt(size);
-  
-  for (let v = 0; v < size; v++) {
+  // Шаг 1: DCT по строкам
+  const temp = new Float64Array(size * size);
+  for (let y = 0; y < size; y++) {
     for (let u = 0; u < size; u++) {
       let sum = 0;
-      
-      for (let y = 0; y < size; y++) {
-        for (let x = 0; x < size; x++) {
-          const pixel = pixels[y * size + x];
-          const cosU = Math.cos(((2 * x + 1) * u * Math.PI) / (2 * size));
-          const cosV = Math.cos(((2 * y + 1) * v * Math.PI) / (2 * size));
-          sum += pixel * cosU * cosV;
-        }
+      for (let x = 0; x < size; x++) {
+        sum += pixels[y * size + x] * Math.cos(((2 * x + 1) * u * Math.PI) / (2 * size));
       }
-      
-      const cu = u === 0 ? 1 / sqrtN : sqrt2 / sqrtN;
-      const cv = v === 0 ? 1 / sqrtN : sqrt2 / sqrtN;
-      dct[v * size + u] = cu * cv * sum;
+      const cu = u === 0 ? Math.sqrt(1 / size) : Math.sqrt(2 / size);
+      temp[y * size + u] = cu * sum;
+    }
+  }
+  
+  // Шаг 2: DCT по столбцам
+  const dct = new Float64Array(size * size);
+  for (let u = 0; u < size; u++) {
+    for (let v = 0; v < size; v++) {
+      let sum = 0;
+      for (let y = 0; y < size; y++) {
+        sum += temp[y * size + u] * Math.cos(((2 * y + 1) * v * Math.PI) / (2 * size));
+      }
+      const cv = v === 0 ? Math.sqrt(1 / size) : Math.sqrt(2 / size);
+      dct[v * size + u] = cv * sum;
     }
   }
   

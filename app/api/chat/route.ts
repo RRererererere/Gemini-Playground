@@ -228,11 +228,13 @@ export async function POST(request: NextRequest) {
 
     // Добавляем инструменты памяти (они уже в правильном формате)
     if (Array.isArray(memoryTools) && memoryTools.length > 0) {
+      console.log('[API] Received memoryTools:', memoryTools.map((t: any) => t.name));
       if (!requestBody.tools) {
         requestBody.tools = [{ functionDeclarations: [] }];
       }
       // Добавляем инструменты памяти к существующим
       requestBody.tools[0].functionDeclarations.push(...memoryTools);
+      console.log('[API] Total tools after adding memory:', requestBody.tools[0].functionDeclarations.length);
     }
 
     // Режим размышлений (актуально в основном для Gemini 2.x/3.x).

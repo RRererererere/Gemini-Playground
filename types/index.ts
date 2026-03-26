@@ -221,7 +221,7 @@ export interface SavedChat {
 
 // Операция с памятью для отображения в чате
 export interface MemoryOperation {
-  type: 'save' | 'update' | 'forget';
+  type: 'save' | 'update' | 'forget' | 'save_image';
   scope: 'local' | 'global';
   fact?: string;
   oldFact?: string;
@@ -229,6 +229,11 @@ export interface MemoryOperation {
   confidence?: number;
   reason?: string;
   memoryId?: string;
+  // Для save_image
+  description?: string;
+  tags?: string[];
+  entities?: string[];
+  thumbnailBase64?: string;
 }
 
 // Сохранённый системный промпт

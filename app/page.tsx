@@ -6,6 +6,8 @@ import ChatMessage from '@/components/ChatMessage';
 import ChatInput from '@/components/ChatInput';
 import { ToolBuilderModal } from '@/components/ToolBuilder';
 import MemoryModal from '@/components/MemoryModal';
+import MemoryPill from '@/components/MemoryPill';
+import ImageMemoryPill from '@/components/ImageMemoryPill';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,
@@ -706,6 +708,11 @@ export default function Home() {
             includeThoughts: deepThinkState.enabled === true,
           }),
         });
+        
+        // Debug: проверяем что IMAGE_MEMORY_TOOLS отправляются
+        if (memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS) {
+          console.log('[DEBUG] Sending IMAGE_MEMORY_TOOLS:', IMAGE_MEMORY_TOOLS.map(t => t.name));
+        }
 
         if (!response.ok) {
           setError(`API error: ${response.status}`);
@@ -728,8 +735,12 @@ export default function Home() {
         });
         
         // attachedFiles для доступа к файлам
-        const attachedFiles = history
-          .filter(m => m.role === 'user' && m.files && m.files.length > 0)
+        // ВАЖНО: включаем файлы из history И из текущего сообщения
+        const allMessagesWithFiles = [
+          ...history.filter(m => m.role === 'user' && m.files && m.files.length > 0),
+        ];
+        
+        const attachedFiles = allMessagesWithFiles
           .flatMap(m => m.files!)
           .map(f => ({
             id: f.id,
@@ -1132,6 +1143,7 @@ export default function Home() {
               // Обработка инструментов визуальной памяти
               // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
               else if (memoryEnabled && (name === 'save_image_memory' || name === 'search_image_memories' || name === 'recall_image_memory')) {
+                console.log('[IMAGE MEMORY] Tool called:', name, 'args:', args);
                 // Лимит вызовов за turn
                 if (memoryCallsThisTurn >= MAX_MEMORY_CALLS) continue;
                 memoryCallsThisTurn++;
@@ -1173,7 +1185,8 @@ export default function Home() {
                         scope: args.scope,
                         chatId: currentChatId || '',
                         messageContext,
-                        annotations: args.save_annotations ? undefined : undefined, // TODO: получить текущие аннотации
+                        // TODO: получить текущие аннотации из состояния если args.save_annotations === true
+                        annotations: args.save_annotations ? [] : undefined,
                         relatedMemoryIds: args.related_memory_ids || []
                       });
                       
@@ -1210,6 +1223,29 @@ export default function Home() {
                       
                       imageMemoryResult = { success: true, id: memory.id };
                       console.log('[image-memory] Saved:', memory.id);
+                      
+                      // Добавляем memory operation для отображения в чате
+                      const memoryOp: import('@/types').MemoryOperation = {
+                        type: 'save_image',
+                        scope: memory.scope,
+                        description: memory.description,
+                        tags: memory.tags,
+                        entities: memory.entities,
+                        thumbnailBase64: memory.thumbnailBase64,
+                        memoryId: memory.id,
+                      };
+                      
+                      // Добавляем к текущему сообщению модели
+                      setMessages(prev => prev.map(m => 
+                        m.id === targetMessageId
+                          ? { ...m, memoryOperations: [...(m.memoryOperations || []), memoryOp] }
+                          : m
+                      ));
+                      
+                      // Диспатчим событие для обновления UI
+                      window.dispatchEvent(new CustomEvent('imageMemorySaved', { 
+                        detail: { id: memory.id, scope: memory.scope } 
+                      }));
                     }
                   } catch (e) {
                     console.error('[image-memory] Save error:', e);
