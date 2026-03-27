@@ -115,6 +115,20 @@ export interface Message {
   deepThinking?: string;   // размышления DeepThink (фиолетовые)
   deepThinkAnalysis?: DeepThinkAnalysis; // результат анализа DeepThink (редактируемый)
   deepThinkError?: string; // ошибка при выполнении анализа
+  preflightImageSearch?: {
+    found: boolean;
+    memories: Array<{
+      id: string;
+      description: string;
+      tags: string[];
+      entities: string[];
+      thumbnailBase64: string;
+      score?: number;
+    }>;
+    entities: string[];
+    query: string;
+    confidence: number;
+  }; // результат preflight поиска изображений
   isBlocked?: boolean;     // заблокировано системами безопасности
   blockReason?: string;    // причина блокировки
   finishReason?: string;   // причина завершения

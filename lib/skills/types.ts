@@ -171,6 +171,19 @@ export interface Skill {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Skill Customization — настройки описания и промптов
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SkillCustomization {
+  /** Кастомное описание скилла (переопределяет дефолтное) */
+  customDescription?: string;
+  /** Кастомный системный промпт (переопределяет onSystemPrompt) */
+  customSystemPrompt?: string;
+  /** Кастомные описания инструментов (ключ = имя инструмента) */
+  customToolDescriptions?: Record<string, string>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Registry — что хранится в localStorage
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -179,6 +192,8 @@ export interface InstalledSkillRecord {
   installedAt: number;
   enabled: boolean;
   config: Record<string, string>;
+  /** Кастомизация описаний и промптов */
+  customization?: SkillCustomization;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

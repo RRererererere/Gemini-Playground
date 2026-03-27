@@ -70,6 +70,7 @@ export interface ImageMemory {
 // Метаданные без blob — живут в localStorage
 export type ImageMemoryMeta = Omit<ImageMemory, 'fullImageKey'> & {
   hasFull: boolean;
+  score?: number; // Опциональный score для результатов поиска
 };
 
 const INDEX_KEY = 'image_memory_index';
@@ -412,7 +413,7 @@ export function searchImageMemories(
     .filter(s => s.score > 0)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
-    .map(s => s.mem);
+    .map(s => ({ ...s.mem, score: s.score }));
 }
 
 /**

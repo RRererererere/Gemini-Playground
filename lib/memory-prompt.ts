@@ -51,29 +51,25 @@ export function buildMemoryPrompt(
   }
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  // Визуальная память
+  // Визуальная память — инструкции по использованию
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  if (relevantImages.length > 0) {
-    parts.push('### Визуальная память:');
-    parts.push('');
-    parts.push('У тебя есть доступ к сохранённым изображениям:');
-    parts.push('');
-    
-    relevantImages.forEach(mem => {
-      const entityStr = mem.entities.length > 0 ? mem.entities.join(', ') : 'Изображение';
-      parts.push(`- **${entityStr}** (ID: ${mem.id})`);
-      parts.push(`  ${mem.description}`);
-      parts.push(`  Теги: ${mem.tags.join(', ')}`);
-      if (mem.mentions > 0) {
-        parts.push(`  Использовано: ${mem.mentions} раз`);
-      }
-      parts.push('');
-    });
-    
-    parts.push('Используй `recall_image_memory(id)` чтобы вспомнить изображение.');
-    parts.push('Используй `search_image_memories(query)` для поиска по описанию.');
-    parts.push('');
-  }
+  parts.push('### Визуальная память:');
+  parts.push('');
+  parts.push('У тебя есть доступ к сохранённым изображениям через функции:');
+  parts.push('');
+  parts.push('**search_image_memories(query)** — ищет изображения по описанию/тегам/именам');
+  parts.push('  Возвращает список с ID, описанием, тегами, entities, mentions');
+  parts.push('  Используй для поиска: "Маша", "логотип Nike", "офис"');
+  parts.push('');
+  parts.push('**recall_image_memory(id)** — загружает полное изображение по ID');
+  parts.push('  Используй после search чтобы получить саму картинку');
+  parts.push('');
+  parts.push('**Workflow:**');
+  parts.push('1. search_image_memories("Маша") → получаешь список результатов');
+  parts.push('2. Смотришь описание, теги, entities, mentions');
+  parts.push('3. Если нужно больше контекста — вызови search с другим query');
+  parts.push('4. recall_image_memory(id) → загружаешь нужное изображение');
+  parts.push('');
 
   parts.push('### Как использовать инструменты памяти:');
   parts.push('- save_memory → когда узнаёшь что-то важное и долгосрочное о пользователе');
@@ -96,6 +92,24 @@ export function buildMemoryPrompt(
   parts.push('- "Это наш офис" → save_image_memory(img_1, "Офис пользователя...", ["office","place"], [], "global")');
   parts.push('');
   parts.push('НЕ вызывай только для скриншотов интерфейса или временных задач.');
+  parts.push('');
+  parts.push('### ⚠️ КРИТИЧЕСКИ ВАЖНО - Поиск изображений:');
+  parts.push('');
+  parts.push('Когда пользователь спрашивает про человека/объект/место:');
+  parts.push('→ СНАЧАЛА вызови search_image_memories(query) чтобы найти что есть в памяти');
+  parts.push('→ Посмотри результаты: описание, теги, entities, mentions');
+  parts.push('→ Если нужно больше контекста — вызови search с другим query');
+  parts.push('→ Когда нашёл нужное — вызови recall_image_memory(id)');
+  parts.push('');
+  parts.push('Примеры:');
+  parts.push('User: "Покажи фото Маши"');
+  parts.push('  1. search_image_memories("Маша") → [{id: "abc", entities: ["Маша"], description: "..."}]');
+  parts.push('  2. recall_image_memory("abc") → получаешь изображение');
+  parts.push('');
+  parts.push('User: "Что я тебе рассказывал про Машу?"');
+  parts.push('  1. search_image_memories("Маша") → смотришь что есть');
+  parts.push('  2. Если нужно — recall_image_memory(id)');
+  parts.push('  3. Отвечаешь на основе найденного');
   parts.push('');
   parts.push('⚠️ FIRE-AND-FORGET: Вызови и СРАЗУ продолжай текст. НЕ жди ответа!');
   parts.push('');
@@ -128,6 +142,8 @@ export function buildMemoryPrompt(
 }
 
 // Инкремент mentions после использования в промпте
+// ВАЖНО: Теперь mentions инкрементится только при реальном использовании (recall_image_memory),
+// а не при простом попадании в prompt. Это делает метрику честной.
 export function markMemoriesUsed(
   memoryIds: string[], 
   imageMemoryIds: string[], 
@@ -136,7 +152,5 @@ export function markMemoriesUsed(
   if (memoryIds.length > 0) {
     incrementMentions(memoryIds, chatId);
   }
-  if (imageMemoryIds.length > 0) {
-    incrementImageMemoryMentions(imageMemoryIds);
-  }
+  // imageMemoryIds НЕ инкрементим здесь — только при реальном recall
 }

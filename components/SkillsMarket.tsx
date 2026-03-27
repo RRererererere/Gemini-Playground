@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { X, Download, Settings, Trash2, Check, Search, Package, Sparkles } from 'lucide-react';
+import { X, Download, Settings, Trash2, Check, Search, Package, Sparkles, Upload } from 'lucide-react';
 import type { Skill, InstalledSkillRecord, SkillConfigField } from '@/lib/skills';
 import {
   getSkillCatalog,
@@ -61,57 +61,90 @@ function ConfigModal({
   onSave: (config: Record<string, string>) => void;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<'config' | 'prompt'>('config');
+  const [tab, setTab] = useState<'config' | 'prompt' | 'tools'>('config');
   const [values, setValues] = useState<Record<string, string>>(() => getSkillConfig(skill.id));
   
-  // Prompt state
-  const [customPrompt, setCustomPrompt] = useState<string>('');
-  const [hasCustomPrompt, setHasCustomPrompt] = useState(false);
-  const [defaultPrompt, setDefaultPrompt] = useState<string>('');
+  // Customization state
+  const [customDescription, setCustomDescription] = useState('');
+  const [customSystemPrompt, setCustomSystemPrompt] = useState('');
+  const [customToolDescriptions, setCustomToolDescriptions] = useState<Record<string, string>>({});
 
   const fields = skill.configSchema ?? [];
 
-  // Load prompt on mount
+  // Load customization on mount
   useEffect(() => {
-    const { getSkillPrompt } = require('@/lib/storage');
-    const custom = getSkillPrompt(skill.id);
+    const { getSkillCustomization } = require('@/lib/skills/registry');
+    const customization = getSkillCustomization(skill.id);
     
-    // Get default prompt from skill
-    const ctx = {
-      chatId: '',
-      messages: [],
-      storage: {
-        get: () => null,
-        set: () => {},
-        getJSON: () => null,
-        setJSON: () => {},
-        remove: () => {},
-      },
-      emit: () => {},
-    };
-    const defaultP = skill.onSystemPrompt?.(ctx as any) || '';
-    
-    setDefaultPrompt(defaultP);
-    if (custom) {
-      setCustomPrompt(custom);
-      setHasCustomPrompt(true);
+    if (customization) {
+      setCustomDescription(customization.customDescription || '');
+      setCustomSystemPrompt(customization.customSystemPrompt || '');
+      setCustomToolDescriptions(customization.customToolDescriptions || {});
     } else {
-      setCustomPrompt(defaultP);
-      setHasCustomPrompt(false);
+      // Load default system prompt
+      const ctx = {
+        chatId: '',
+        messages: [],
+        attachedFiles: [],
+        config: {},
+        storage: {
+          get: () => null,
+          set: () => {},
+          getJSON: () => null,
+          setJSON: () => {},
+          remove: () => {},
+        },
+        emit: () => {},
+      };
+      const defaultPrompt = skill.onSystemPrompt?.(ctx as any) || '';
+      setCustomSystemPrompt(defaultPrompt);
     }
   }, [skill]);
 
-  const handleSavePrompt = () => {
-    const { saveSkillPrompt } = require('@/lib/storage');
-    saveSkillPrompt(skill.id, customPrompt);
-    setHasCustomPrompt(true);
+  const handleSaveCustomization = () => {
+    const { saveSkillCustomization } = require('@/lib/skills/registry');
+    saveSkillCustomization(skill.id, {
+      customDescription: customDescription.trim() || undefined,
+      customSystemPrompt: customSystemPrompt.trim() || undefined,
+      customToolDescriptions: Object.keys(customToolDescriptions).length > 0 
+        ? customToolDescriptions 
+        : undefined,
+    });
   };
 
-  const handleResetPrompt = () => {
-    const { resetSkillPrompt } = require('@/lib/storage');
-    resetSkillPrompt(skill.id);
-    setCustomPrompt(defaultPrompt);
-    setHasCustomPrompt(false);
+  const handleResetCustomization = () => {
+    if (confirm('Сбросить все кастомизации к значениям по умолчанию?')) {
+      const { resetSkillCustomization } = require('@/lib/skills/registry');
+      resetSkillCustomization(skill.id);
+      setCustomDescription('');
+      setCustomSystemPrompt('');
+      setCustomToolDescriptions({});
+      
+      // Reload default prompt
+      const ctx = {
+        chatId: '',
+        messages: [],
+        attachedFiles: [],
+        config: {},
+        storage: {
+          get: () => null,
+          set: () => {},
+          getJSON: () => null,
+          setJSON: () => {},
+          remove: () => {},
+        },
+        emit: () => {},
+      };
+      const defaultPrompt = skill.onSystemPrompt?.(ctx as any) || '';
+      setCustomSystemPrompt(defaultPrompt);
+    }
+  };
+
+  const updateToolDescription = (toolName: string, value: string) => {
+    setCustomToolDescriptions(prev => ({
+      ...prev,
+      [toolName]: value
+    }));
   };
 
   return (
@@ -156,6 +189,16 @@ function ConfigModal({
           >
             📝 Промпт
           </button>
+          <button
+            onClick={() => setTab('tools')}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+              tab === 'tools'
+                ? 'bg-white text-black'
+                : 'text-[var(--text-dim)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            🔧 Инструменты ({skill.tools.length})
+          </button>
         </div>
 
         <div className="flex-1 overflow-y-auto p-6">
@@ -197,24 +240,68 @@ function ConfigModal({
                 ))}
               </div>
             )
+          ) : tab === 'prompt' ? (
+            <div className="flex flex-col h-full space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">
+                  Описание скилла
+                </label>
+                <div className="p-3 bg-[var(--surface-2)] rounded-xl text-xs text-[var(--text-muted)] mb-2 border border-[var(--border)]">
+                  По умолчанию: {skill.description}
+                </div>
+                <textarea
+                  value={customDescription}
+                  onChange={(e) => setCustomDescription(e.target.value)}
+                  placeholder="Оставьте пустым для использования дефолтного описания..."
+                  className="w-full h-20 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none resize-none"
+                />
+              </div>
+              
+              <div className="flex-1 flex flex-col">
+                <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">
+                  Системный промпт
+                </label>
+                <textarea
+                  value={customSystemPrompt}
+                  onChange={(e) => setCustomSystemPrompt(e.target.value)}
+                  className="flex-1 w-full min-h-[300px] rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4 text-sm text-[var(--text-primary)] font-mono focus:border-[var(--border-strong)] focus:outline-none resize-none"
+                  placeholder="Системный промпт для скилла..."
+                />
+                <div className="mt-2 text-xs text-[var(--text-dim)]">
+                  {customSystemPrompt.length} символов
+                </div>
+              </div>
+            </div>
           ) : (
-            <div className="flex flex-col h-full">
-              <div className="mb-3">
-                <p className="text-sm text-[var(--text-muted)] mb-2">
-                  {hasCustomPrompt 
-                    ? '✅ Используется кастомный промпт'
-                    : '📄 Используется дефолтный промпт'}
-                </p>
-              </div>
-              <textarea
-                value={customPrompt}
-                onChange={(e) => setCustomPrompt(e.target.value)}
-                className="flex-1 w-full min-h-[300px] rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4 text-sm text-[var(--text-primary)] font-mono focus:border-[var(--border-strong)] focus:outline-none resize-none"
-                placeholder="Системный промпт для скилла..."
-              />
-              <div className="mt-3 text-xs text-[var(--text-dim)]">
-                {customPrompt.length} символов
-              </div>
+            <div className="space-y-4">
+              {skill.tools.map((tool) => (
+                <div key={tool.name} className="border border-[var(--border)] rounded-xl p-4 bg-[var(--surface-2)]">
+                  <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">
+                    {tool.name}
+                  </h3>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-[var(--text-muted)] mb-1">
+                        Описание по умолчанию
+                      </label>
+                      <div className="p-2 bg-[var(--surface-1)] rounded-lg text-xs text-[var(--text-dim)] max-h-32 overflow-y-auto border border-[var(--border)]">
+                        {tool.description}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-[var(--text-muted)] mb-1">
+                        Кастомное описание
+                      </label>
+                      <textarea
+                        value={customToolDescriptions[tool.name] || ''}
+                        onChange={(e) => updateToolDescription(tool.name, e.target.value)}
+                        placeholder="Оставьте пустым для использования дефолтного..."
+                        className="w-full h-24 px-3 py-2 bg-[var(--surface-1)] border border-[var(--border)] rounded-lg text-xs text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none resize-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -237,19 +324,20 @@ function ConfigModal({
             </>
           ) : (
             <>
-              {hasCustomPrompt && (
-                <button
-                  onClick={handleResetPrompt}
-                  className="flex-1 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-400 transition-colors hover:bg-red-500/20"
-                >
-                  Восстановить дефолтный
-                </button>
-              )}
               <button
-                onClick={handleSavePrompt}
+                onClick={handleResetCustomization}
+                className="flex-1 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-400 transition-colors hover:bg-red-500/20"
+              >
+                Сбросить к умолчаниям
+              </button>
+              <button
+                onClick={() => {
+                  handleSaveCustomization();
+                  onClose();
+                }}
                 className="flex-1 rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90"
               >
-                Сохранить промпт
+                Сохранить кастомизацию
               </button>
             </>
           )}
@@ -426,6 +514,41 @@ export function SkillsMarket({
     onSkillsChanged();
   };
 
+  const handleExportSettings = () => {
+    const { exportSkillsSettings } = require('@/lib/skills/registry');
+    const data = exportSkillsSettings();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `skills-settings-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportSettings = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        const { importSkillsSettings } = require('@/lib/skills/registry');
+        const result = importSkillsSettings(data);
+        alert(`Импортировано: ${result.success} скиллов\nОшибок: ${result.failed}`);
+        refresh();
+        onSkillsChanged();
+      } catch (err) {
+        alert(`Ошибка импорта: ${err}`);
+      }
+    };
+    input.click();
+  };
+
   // Group by category for browse tab
   const byCategory = filteredCatalog.reduce<Record<string, Skill[]>>((acc, skill) => {
     const cat = skill.category;
@@ -450,12 +573,28 @@ export function SkillsMarket({
                 {activeCount > 0 ? `${activeCount} ${activeCount === 1 ? 'скилл активен' : 'скиллов активно'}` : 'Расширяйте возможности модели'}
               </p>
             </div>
-            <button
-              onClick={onClose}
-              className="flex h-9 w-9 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]"
-            >
-              <X size={16} />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleExportSettings}
+                className="flex h-9 w-9 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]"
+                title="Экспортировать настройки"
+              >
+                <Download size={16} />
+              </button>
+              <button
+                onClick={handleImportSettings}
+                className="flex h-9 w-9 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]"
+                title="Импортировать настройки"
+              >
+                <Upload size={16} />
+              </button>
+              <button
+                onClick={onClose}
+                className="flex h-9 w-9 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]"
+              >
+                <X size={16} />
+              </button>
+            </div>
           </div>
 
           {/* Tabs */}

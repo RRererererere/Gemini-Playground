@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react';
 import { Download, X, ZoomIn, ChevronLeft, ChevronRight, FileText } from 'lucide-react';
 import ImageLightbox from './ImageLightbox';
 import AnnotationOverlay from './AnnotationOverlay';
+import { VideoFrameIndicator } from './VideoFrameIndicator';
 
 interface Props {
   artifact: SkillArtifact;
@@ -206,10 +207,24 @@ function ArtifactImage({ artifact, onAnnotationClick }: Props) {
     size: artifact.data.base64 ? Math.round((artifact.data.base64.length * 3) / 4) : undefined
   } : undefined;
 
+  // Проверяем, является ли это кадром из видео (по label)
+  const isVideoFrame = artifact.label?.includes('Frame from') || artifact.label?.includes('Кадр из');
+  const videoFrameMatch = artifact.label?.match(/Frame from (.+?) at ([\d.]+)s/);
+  const videoSource = videoFrameMatch?.[1];
+  const timestampSeconds = videoFrameMatch?.[2] ? parseFloat(videoFrameMatch[2]) : undefined;
+
   return (
     <div className="my-3">
-      {artifact.label && (
+      {artifact.label && !isVideoFrame && (
         <div className="text-xs text-zinc-400 mb-2">{artifact.label}</div>
+      )}
+      {isVideoFrame && videoSource && timestampSeconds !== undefined && (
+        <div className="mb-2">
+          <VideoFrameIndicator 
+            videoSource={videoSource}
+            timestampSeconds={timestampSeconds}
+          />
+        </div>
       )}
       <div className="relative inline-block group">
         <img

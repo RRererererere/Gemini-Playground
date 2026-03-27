@@ -8,6 +8,7 @@ import { ToolBuilderModal } from '@/components/ToolBuilder';
 import MemoryModal from '@/components/MemoryModal';
 import MemoryPill from '@/components/MemoryPill';
 import ImageMemoryPill from '@/components/ImageMemoryPill';
+import ImageMemoryRecallPill from '@/components/ImageMemoryRecallPill';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,

@@ -7,7 +7,7 @@ import type {
   GeminiToolDeclaration,
   AttachedFileRef,
 } from './types';
-import { isSkillActive, getSkillConfig, createSkillStorage } from './registry';
+import { isSkillActive, getSkillConfig, createSkillStorage, getSkillCustomization } from './registry';
 import { BUILT_IN_SKILLS } from './built-in';
 import { loadFileData } from '@/lib/fileStorage';
 import { loadHFSpaceSkills } from './hf-space';
@@ -243,13 +243,21 @@ export function buildSkillsSystemPrompt(
 
   for (const skill of Array.from(SKILL_CATALOG.values())) {
     if (!isSkillActive(skill.id)) continue;
-    if (!skill.onSystemPrompt) continue;
 
     const ctx = createContext(skill, chatId, messages, onUIEvent);
+    const customization = getSkillCustomization(skill.id);
+
     try {
-      const injection = skill.onSystemPrompt(ctx);
-      if (injection?.trim()) {
-        parts.push(`\n\n[${skill.name}]\n${injection.trim()}`);
+      // Используем кастомный системный промпт если есть
+      if (customization?.customSystemPrompt?.trim()) {
+        parts.push(`\n\n[${skill.name}]\n${customization.customSystemPrompt.trim()}`);
+      } 
+      // Иначе вызываем onSystemPrompt если есть
+      else if (skill.onSystemPrompt) {
+        const injection = skill.onSystemPrompt(ctx);
+        if (injection?.trim()) {
+          parts.push(`\n\n[${skill.name}]\n${injection.trim()}`);
+        }
       }
     } catch (err) {
       console.error(`[Skill ${skill.id}] onSystemPrompt error:`, err);
@@ -267,7 +275,19 @@ export function collectSkillTools(): GeminiToolDeclaration[] {
   const declarations: GeminiToolDeclaration[] = [];
   for (const skill of Array.from(SKILL_CATALOG.values())) {
     if (!isSkillActive(skill.id)) continue;
-    declarations.push(...skill.tools);
+    
+    const customization = getSkillCustomization(skill.id);
+    
+    // Применяем кастомные описания инструментов если есть
+    const tools = skill.tools.map(tool => {
+      const customDesc = customization?.customToolDescriptions?.[tool.name];
+      if (customDesc?.trim()) {
+        return { ...tool, description: customDesc };
+      }
+      return tool;
+    });
+    
+    declarations.push(...tools);
   }
   return declarations;
 }

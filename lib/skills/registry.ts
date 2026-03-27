@@ -90,6 +90,93 @@ export function getSkillConfig(id: string): Record<string, string> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Кастомизация скиллов (описания и промпты)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Получить кастомизацию скилла */
+export function getSkillCustomization(id: string) {
+  return getInstalledSkill(id)?.customization ?? null;
+}
+
+/** Сохранить кастомизацию скилла */
+export function saveSkillCustomization(id: string, customization: import('./types').SkillCustomization): void {
+  const registry = readRegistry();
+  if (!registry[id]) return;
+  registry[id].customization = customization;
+  writeRegistry(registry);
+}
+
+/** Сбросить кастомизацию скилла к дефолтным значениям */
+export function resetSkillCustomization(id: string): void {
+  const registry = readRegistry();
+  if (!registry[id]) return;
+  delete registry[id].customization;
+  writeRegistry(registry);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Экспорт/импорт настроек
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SkillsExport {
+  version: string;
+  exportedAt: number;
+  skills: Array<{
+    id: string;
+    enabled: boolean;
+    config: Record<string, string>;
+    customization?: import('./types').SkillCustomization;
+  }>;
+}
+
+/** Экспортировать все настройки скиллов */
+export function exportSkillsSettings(): SkillsExport {
+  const skills = getInstalledSkills();
+  return {
+    version: '1.0.0',
+    exportedAt: Date.now(),
+    skills: skills.map(s => ({
+      id: s.id,
+      enabled: s.enabled,
+      config: s.config,
+      customization: s.customization,
+    })),
+  };
+}
+
+/** Импортировать настройки скиллов */
+export function importSkillsSettings(data: SkillsExport): { success: number; failed: number } {
+  let success = 0;
+  let failed = 0;
+
+  for (const skillData of data.skills) {
+    try {
+      // Установить скилл если не установлен
+      const existing = getInstalledSkill(skillData.id);
+      if (!existing) {
+        installSkill(skillData.id);
+      }
+
+      // Применить настройки
+      setSkillEnabled(skillData.id, skillData.enabled);
+      if (Object.keys(skillData.config).length > 0) {
+        saveSkillConfig(skillData.id, skillData.config);
+      }
+      if (skillData.customization) {
+        saveSkillCustomization(skillData.id, skillData.customization);
+      }
+
+      success++;
+    } catch (err) {
+      console.error(`Failed to import skill ${skillData.id}:`, err);
+      failed++;
+    }
+  }
+
+  return { success, failed };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Изолированное хранилище для каждого скилла
 // ─────────────────────────────────────────────────────────────────────────────
 

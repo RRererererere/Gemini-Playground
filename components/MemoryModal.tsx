@@ -6,6 +6,7 @@ import type { Memory, MemoryScope, MemoryCategory } from '@/lib/memory-store';
 import { getMemories, updateMemory, forgetMemory } from '@/lib/memory-store';
 import { getImageMemoryIndex, forgetImageMemory, type ImageMemoryMeta } from '@/lib/image-memory-store';
 import MemoryGraph from './MemoryGraph';
+import ImageMemoryDetailModal from './ImageMemoryDetailModal';
 
 interface MemoryModalProps {
   open: boolean;
@@ -47,6 +48,8 @@ export default function MemoryModal({ open, onClose, chatId }: MemoryModalProps)
   const [memories, setMemories] = useState<Memory[]>([]);
   const [imageMemories, setImageMemories] = useState<ImageMemoryMeta[]>([]);
   const [showImages, setShowImages] = useState(true);
+  const [selectedImageMemoryId, setSelectedImageMemoryId] = useState<string | null>(null);
+  const [imageSearchQuery, setImageSearchQuery] = useState('');
 
   const loadMemories = () => {
     const mems = getMemories(activeTab, activeTab === 'local' ? chatId : undefined);
@@ -115,6 +118,17 @@ export default function MemoryModal({ open, onClose, chatId }: MemoryModalProps)
 
     return result;
   }, [memories, searchQuery, categoryFilter, sortMode]);
+
+  const filteredImageMemories = useMemo(() => {
+    if (!imageSearchQuery.trim()) return imageMemories;
+    
+    const q = imageSearchQuery.toLowerCase();
+    return imageMemories.filter(img =>
+      img.description.toLowerCase().includes(q) ||
+      img.tags.some(tag => tag.toLowerCase().includes(q)) ||
+      img.entities.some(entity => entity.toLowerCase().includes(q))
+    );
+  }, [imageMemories, imageSearchQuery]);
 
   const handleDelete = (id: string) => {
     forgetMemory(id, activeTab, activeTab === 'local' ? chatId : undefined);
@@ -226,16 +240,30 @@ export default function MemoryModal({ open, onClose, chatId }: MemoryModalProps)
         {/* Filters (только для списка) */}
         {viewMode === 'list' && (
           <div className="flex-shrink-0 border-b border-[var(--border)] px-6 py-3 space-y-3">
-            {/* Search */}
-            <div className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Поиск по тексту..."
-                className="w-full pl-9 pr-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
-              />
+            {/* Search - две строки для текстовой и визуальной памяти */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Поиск текстовой памяти..."
+                  className="w-full pl-9 pr-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
+                />
+              </div>
+              {showImages && (
+                <div className="relative">
+                  <ImageIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
+                  <input
+                    type="text"
+                    value={imageSearchQuery}
+                    onChange={e => setImageSearchQuery(e.target.value)}
+                    placeholder="Поиск изображений..."
+                    className="w-full pl-9 pr-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
+                  />
+                </div>
+              )}
             </div>
 
             {/* Category chips */}
@@ -321,13 +349,15 @@ export default function MemoryModal({ open, onClose, chatId }: MemoryModalProps)
                   <div>
                     <h3 className="text-xs font-medium text-[var(--text-muted)] mb-3 flex items-center gap-2">
                       <ImageIcon size={14} />
-                      Визуальная память ({imageMemories.length})
+                      Визуальная память ({filteredImageMemories.length})
+                      {imageSearchQuery && ` из ${imageMemories.length}`}
                     </h3>
                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                      {imageMemories.map(img => (
+                      {filteredImageMemories.map(img => (
                         <div
                           key={img.id}
-                          className="group relative rounded-xl border border-[var(--border)] bg-[var(--surface-2)] overflow-hidden hover:border-[var(--border-strong)] transition-all"
+                          className="group relative rounded-xl border border-[var(--border)] bg-[var(--surface-2)] overflow-hidden hover:border-[var(--border-strong)] transition-all cursor-pointer"
+                          onClick={() => setSelectedImageMemoryId(img.id)}
                         >
                           <div className="aspect-square relative">
                             <img
@@ -353,11 +383,13 @@ export default function MemoryModal({ open, onClose, chatId }: MemoryModalProps)
                               </div>
                             </div>
                             <button
-                              onClick={async () => {
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (!confirm('Удалить это изображение из памяти?')) return;
                                 await forgetImageMemory(img.id);
                                 loadMemories();
                               }}
-                              className="absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-lg bg-black/50 text-white opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-all"
+                              className="absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-lg bg-black/50 text-white opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-all z-10"
                             >
                               <Trash2 size={12} />
                             </button>
@@ -486,6 +518,18 @@ export default function MemoryModal({ open, onClose, chatId }: MemoryModalProps)
           )}
         </div>
       </div>
+      
+      {/* Image Memory Detail Modal */}
+      {selectedImageMemoryId && (
+        <ImageMemoryDetailModal
+          memoryId={selectedImageMemoryId}
+          onClose={() => setSelectedImageMemoryId(null)}
+          onDelete={() => {
+            setSelectedImageMemoryId(null);
+            loadMemories();
+          }}
+        />
+      )}
     </div>
   );
 }

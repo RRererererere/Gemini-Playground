@@ -16,6 +16,7 @@ import {
 import type { Message, AttachedFile, Part, DeepThinkAnalysis, BridgePayload } from '@/types';
 import MemoryPill from './MemoryPill';
 import ImageMemoryPill from './ImageMemoryPill';
+import ImageMemoryRecallPill from './ImageMemoryRecallPill';
 import { SkillArtifactsGroup } from './SkillArtifactRenderer';
 import AnnotationRefDisplay from './AnnotationRefDisplay';
 import ImageLightbox from './ImageLightbox';

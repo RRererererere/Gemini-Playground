@@ -7,7 +7,7 @@ import type { ZoomRegion, CropResult } from './types';
 /**
  * Generate 4-character image ID
  */
-function generateImageId(): string {
+export function generateImageId(): string {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   let id = '';
   for (let i = 0; i < 4; i++) {

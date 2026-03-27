@@ -5,6 +5,7 @@
 import type { Skill, SkillContext, SkillToolResult } from '@/lib/skills/types';
 import type { ZoomJob, ZoomRegion } from './types';
 import { cropAndScale } from './cropper';
+import { loadUniversalImage, hasUniversalImage } from '@/lib/universal-image-store';
 
 const SKILL: Skill = {
   id: 'image_analyser',
@@ -199,52 +200,29 @@ async function handleZoomRegion(args: any, ctx: SkillContext): Promise<SkillTool
       };
     }
 
-    // Find all images in message history
-    const images = ctx.messages
-      .filter(m => m.role === 'user' && m.files && m.files.length > 0)
-      .flatMap(m => m.files!.filter(f => f.mimeType.startsWith('image/')))
-      .reverse(); // Most recent first
-
-    if (images.length === 0) {
-      return {
-        mode: 'respond',
-        response: { error: 'No images found in chat history' }
-      };
-    }
-
-    // Find target image by ID or index
-    let targetImage: typeof images[0] | undefined;
+    // Определяем ID изображения
+    let imageId: string;
     let imageIdentifier: string;
-
+    
     // Try image_id first (preferred)
     if (args.image_id) {
-      const imageId = String(args.image_id);
+      imageId = String(args.image_id);
       imageIdentifier = imageId;
       
       // Check if it's an alias (img_1, img_2, etc.)
       const fileId = ctx.imageAliases?.get(imageId);
-      
       if (fileId) {
-        targetImage = images.find(img => img.id === fileId);
-      } else {
-        // Maybe it's a direct file ID
-        targetImage = images.find(img => img.id === imageId);
-      }
-      
-      if (!targetImage) {
-        const availableAliases = ctx.imageAliases 
-          ? Array.from(ctx.imageAliases.keys()).join(', ')
-          : 'none';
-        return {
-          mode: 'respond',
-          response: { 
-            error: `Image "${imageId}" not found. Available images: ${availableAliases}` 
-          }
-        };
+        imageId = fileId;
       }
     }
     // Fallback to image_index (deprecated)
     else if (args.image_index !== undefined) {
+      // Find images in chat history for index lookup
+      const images = ctx.messages
+        .filter(m => m.role === 'user' && m.files && m.files.length > 0)
+        .flatMap(m => m.files!.filter(f => f.mimeType.startsWith('image/')))
+        .reverse();
+      
       const index = Number(args.image_index);
       imageIdentifier = `index ${index}`;
       
@@ -256,7 +234,7 @@ async function handleZoomRegion(args: any, ctx: SkillContext): Promise<SkillTool
           }
         };
       }
-      targetImage = images[index];
+      imageId = images[index].id;
     }
     // No identifier provided
     else {
@@ -267,28 +245,37 @@ async function handleZoomRegion(args: any, ctx: SkillContext): Promise<SkillTool
         }
       };
     }
-
-    // Get image data (might be in memory or IndexedDB)
-    let base64Data = targetImage.data;
-    if (!base64Data) {
-      // Try to load from IndexedDB via attachedFiles
-      const attachedFile = ctx.attachedFiles.find(f => f.id === targetImage.id);
-      if (attachedFile) {
-        base64Data = await attachedFile.getData();
-      }
-    }
-
-    if (!base64Data) {
+    
+    // Проверяем существует ли изображение в универсальном хранилище
+    if (!hasUniversalImage(imageId)) {
+      const availableAliases = ctx.imageAliases 
+        ? Array.from(ctx.imageAliases.keys()).join(', ')
+        : 'none';
       return {
         mode: 'respond',
-        response: { error: 'Failed to load image data' }
+        response: { 
+          error: `Image "${imageIdentifier}" not found in storage. Available images: ${availableAliases}` 
+        }
       };
     }
+    
+    // Загружаем изображение из универсального хранилища
+    const imageData = await loadUniversalImage(imageId);
+    
+    if (!imageData) {
+      return {
+        mode: 'respond',
+        response: { error: 'Failed to load image data from storage' }
+      };
+    }
+    
+    const base64Data = imageData.base64;
+    const mimeType = imageData.image.mimeType;
 
     // Crop and scale
     const result = await cropAndScale(
       base64Data,
-      targetImage.mimeType,
+      mimeType,
       job.region,
       job.scale
     );
@@ -405,34 +392,34 @@ async function handleAnnotateRegions(args: any, ctx: SkillContext): Promise<Skil
       ann.y2_pct = y2;
     }
 
-    // Find target image
-    const images = ctx.messages
-      .filter(m => m.role === 'user' && m.files && m.files.length > 0)
-      .flatMap(m => m.files!.filter(f => f.mimeType.startsWith('image/')))
-      .reverse();
-
-    if (images.length === 0) {
-      return {
-        mode: 'respond',
-        response: { error: 'No images found in chat history' }
-      };
-    }
-
+    // Определяем ID изображения
+    let resolvedImageId = imageId;
+    
     // Check if it's an alias
     const fileId = ctx.imageAliases?.get(imageId);
-    const targetImage = fileId 
-      ? images.find(img => img.id === fileId)
-      : images.find(img => img.id === imageId);
-
-    if (!targetImage) {
+    if (fileId) {
+      resolvedImageId = fileId;
+    }
+    
+    // Проверяем существует ли изображение
+    if (!hasUniversalImage(resolvedImageId)) {
       const availableAliases = ctx.imageAliases 
         ? Array.from(ctx.imageAliases.keys()).join(', ')
         : 'none';
       return {
         mode: 'respond',
         response: { 
-          error: `Image "${imageId}" not found. Available images: ${availableAliases}` 
+          error: `Image "${imageId}" not found in storage. Available images: ${availableAliases}` 
         }
+      };
+    }
+    
+    // Загружаем метаданные для имени файла
+    const imageData = await loadUniversalImage(resolvedImageId);
+    if (!imageData) {
+      return {
+        mode: 'respond',
+        response: { error: 'Failed to load image metadata' }
       };
     }
 
@@ -440,10 +427,10 @@ async function handleAnnotateRegions(args: any, ctx: SkillContext): Promise<Skil
     const artifact = {
       id: `annotated_${Date.now()}`,
       type: 'annotated_image' as const,
-      label: `📍 Annotated: ${targetImage.name}`,
+      label: `📍 Annotated: ${imageId}`,
       data: {
         kind: 'annotations' as const,
-        sourceImageId: targetImage.id,
+        sourceImageId: resolvedImageId,
         annotations: annotations.map(ann => ({
           x1_pct: Number(ann.x1_pct),
           y1_pct: Number(ann.y1_pct),
