@@ -51,21 +51,12 @@ export function findImageInMessages(
   // Reverse to get most recent first
   allImages.reverse();
   
-  // Step 2: Try to match by ID or alias
+  // Step 2: Try to match by ID or index
   if (typeof imageIdentifier === 'string') {
     // Try direct file ID match
     for (const image of allImages) {
       if (image.id === imageIdentifier) {
         return image;
-      }
-    }
-    
-    // Try alias match (img_1, img_2, etc.)
-    const aliasMatch = imageIdentifier.match(/^img_(\d+)$/);
-    if (aliasMatch) {
-      const index = parseInt(aliasMatch[1], 10) - 1;
-      if (index >= 0 && index < allImages.length) {
-        return allImages[index];
       }
     }
   } else if (typeof imageIdentifier === 'number') {

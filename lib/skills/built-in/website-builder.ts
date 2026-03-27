@@ -321,11 +321,11 @@ When user sends you images in chat, you can use them on the website!
 🎯 HOW TO USE IMAGES:
 
 1. Check "Available Images" section in your context — it lists all images with their IDs
-   Example: "img_1: photo.jpg", "img_2: logo.png"
+   Example: "ph_abc123: photo.jpg", "ph_xyz789: logo.png"
 
 2. Use special attribute \`data-image-id\` in your HTML:
    \`\`\`html
-   <img data-image-id="img_1" alt="Description" class="w-full">
+   <img data-image-id="ph_abc123" alt="Description" class="w-full">
    \`\`\`
 
 3. Add this script ONCE at the end of <body> to auto-load all images:
@@ -367,7 +367,7 @@ When user sends you images in chat, you can use them on the website!
 
 📋 EXAMPLES:
 
-User sends photo.jpg → You see "img_1: photo.jpg" in context
+User sends photo.jpg → You see "ph_abc123: photo.jpg" in context
 \`\`\`html
 <!DOCTYPE html>
 <html>
@@ -377,7 +377,7 @@ User sends photo.jpg → You see "img_1: photo.jpg" in context
 <body>
   <!-- Hero section with user's photo -->
   <div class="hero">
-    <img data-image-id="img_1" alt="Hero image" class="w-full h-96 object-cover">
+    <img data-image-id="ph_abc123" alt="Hero image" class="w-full h-96 object-cover">
     <h1>Welcome!</h1>
   </div>
   
@@ -415,9 +415,9 @@ User sends photo.jpg → You see "img_1: photo.jpg" in context
 Multiple images (gallery):
 \`\`\`html
 <div class="grid grid-cols-3 gap-4">
-  <img data-image-id="img_1" alt="Photo 1" class="rounded-lg">
-  <img data-image-id="img_2" alt="Photo 2" class="rounded-lg">
-  <img data-image-id="img_3" alt="Photo 3" class="rounded-lg">
+  <img data-image-id="ph_abc123" alt="Photo 1" class="rounded-lg">
+  <img data-image-id="ph_def456" alt="Photo 2" class="rounded-lg">
+  <img data-image-id="ph_ghi789" alt="Photo 3" class="rounded-lg">
 </div>
 
 <!-- Script loads all images automatically -->

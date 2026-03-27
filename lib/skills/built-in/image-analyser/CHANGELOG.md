@@ -4,9 +4,9 @@
 
 ### Added
 
-- **Image ID parameter**: New `image_id` parameter for referencing images by alias (e.g., `img_1`, `img_2`)
-- **Image aliases**: Automatic generation of short, stable aliases for all images in chat
-- **Image context**: System prompt now includes list of available images with their aliases
+- **Image ID parameter**: New `image_id` parameter for referencing images by their real file ID (e.g., `ph_abc123`)
+- **Direct ID access**: Images are now referenced by their actual file IDs instead of temporary aliases
+- **Image context**: System prompt now includes list of available images with their IDs
 - **Better error messages**: Shows available image aliases when image not found
 
 ### Changed

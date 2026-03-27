@@ -16,7 +16,6 @@ export interface ImageInfo {
  */
 export function collectImages(messages: Message[]): ImageInfo[] {
   const images: ImageInfo[] = [];
-  let counter = 1;
   
   messages
     .filter(m => m.role === 'user' && m.files && m.files.length > 0)
@@ -25,11 +24,10 @@ export function collectImages(messages: Message[]): ImageInfo[] {
         .filter(f => f.mimeType.startsWith('image/'))
         .forEach(f => {
           images.push({
-            alias: `img_${counter}`,
+            alias: f.id, // Используем реальный ID файла
             filename: f.name,
             id: f.id
           });
-          counter++;
         });
     });
   
@@ -51,8 +49,8 @@ export function buildImageContext(messages: Message[]): string {
 
 You have access to the following images in this conversation:
 
-${images.map(img => `- **${img.alias}**: ${img.filename}`).join('\n')}
+${images.map(img => `- **${img.id}**: ${img.filename}`).join('\n')}
 
-When using the zoom_region tool, you can reference images by their alias (e.g., "img_1") using the image_id parameter, or by index (0 = most recent) using the deprecated image_index parameter.
+When using the zoom_region tool, reference images by their ID (e.g., "${images[0]?.id || 'ph_abc123'}") using the image_id parameter, or by index (0 = most recent) using the deprecated image_index parameter.
 `;
 }

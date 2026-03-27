@@ -132,7 +132,7 @@ export const IMAGE_MEMORY_TOOLS = [
 - Временный черновик
 
 Параметры:
-- image_id: ID изображения из чата ("img_1", "img_2", ...)
+- image_id: ID изображения из чата (реальный ID файла, например "ph_lqk7a3f9")
 - description: Детальное описание (внешность, контекст, особенности)
 - tags: 3-8 тегов ["person", "female", "friend", "dark_hair"]
 - entities: Имена людей, бренды, места ["Маша", "Nike"]
@@ -142,7 +142,7 @@ export const IMAGE_MEMORY_TOOLS = [
       properties: {
         image_id: {
           type: 'string',
-          description: 'ID изображения из чата (например, "img_1", "img_2")'
+          description: 'ID изображения из чата (реальный ID файла)'
         },
         description: {
           type: 'string',

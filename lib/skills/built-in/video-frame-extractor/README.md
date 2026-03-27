@@ -62,7 +62,7 @@ AI вызывает:
 
 AI вызывает:
 1. extract_video_frame(video_identifier="video_1", timestamp_seconds=30, reason="Табличка на 0:30")
-2. zoom_region(image_identifier="img_5", region={x1: 40, y1: 30, x2: 60, y2: 50}, scale=4, reason="Увеличить табличку")
+2. zoom_region(image_identifier="frame_001", region={x1: 40, y1: 30, x2: 60, y2: 50}, scale=4, reason="Увеличить табличку")
 
 Результат:
 - Кадр извлечён

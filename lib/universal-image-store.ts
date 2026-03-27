@@ -2,7 +2,7 @@
  * Universal Image Store
  * 
  * Единое хранилище для ВСЕХ изображений в системе:
- * - Изображения из чата (img_1, img_2...)
+ * - Изображения из чата (ph_abc123, ph_def456...)
  * - Кадры из видео (frame_001, frame_002...)
  * - Recalled изображения из памяти (img_mem_xyz)
  * - Артефакты от скиллов
@@ -17,7 +17,7 @@ import { saveFileData, loadFileData, deleteFileData } from './fileStorage';
 export type ImageSource = 'chat' | 'video' | 'memory' | 'skill' | 'recalled' | 'temp';
 
 export interface UniversalImage {
-  id: string;              // Уникальный ID (img_1, frame_001, img_mem_xyz)
+  id: string;              // Уникальный ID (ph_abc123, frame_001, img_mem_xyz)
   source: ImageSource;     // Откуда изображение
   mimeType: string;
   width: number;

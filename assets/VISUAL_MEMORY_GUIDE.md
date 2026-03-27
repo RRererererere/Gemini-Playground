@@ -177,7 +177,7 @@ User: "Покажи всех моих друзей"
 ```
 User: [прикрепляет фото] "Это моя подруга Катя"
   → Model: save_image_memory(
-      image_id="img_1",
+      image_id="ph_abc123",
       description="Девушка Катя, подруга пользователя",
       tags=["person", "female", "friend"],
       entities=["Катя"],

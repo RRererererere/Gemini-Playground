@@ -39,7 +39,7 @@ IMPORTANT: Always call this when user asks about specific parts of an image or w
         properties: {
           image_id: {
             type: 'string',
-            description: 'ID or alias of the image to zoom (e.g., "img_1", "img_2"). Check "Available Images" section in context for valid aliases.'
+            description: 'ID of the image to zoom (e.g., "ph_abc123"). Check "Available Images" section in context for valid IDs.'
           },
           image_index: {
             type: 'number',
@@ -97,7 +97,7 @@ Each annotation shows a labeled badge at the bottom of the region.`,
         properties: {
           image_id: {
             type: 'string',
-            description: 'ID or alias of the image to annotate (e.g., "img_1", "img_2")'
+            description: 'ID of the image to annotate (e.g., "ph_abc123")'
           },
           annotations: {
             type: 'array',
@@ -209,7 +209,7 @@ async function handleZoomRegion(args: any, ctx: SkillContext): Promise<SkillTool
       imageId = String(args.image_id);
       imageIdentifier = imageId;
       
-      // Check if it's an alias (img_1, img_2, etc.)
+      // Check if it's a direct ID match
       const fileId = ctx.imageAliases?.get(imageId);
       if (fileId) {
         imageId = fileId;

@@ -91,8 +91,8 @@ async function compressImage(file: File, maxSizeMB: number = 3.5): Promise<File>
         const ctx = canvas.getContext('2d');
         ctx?.drawImage(img, 0, 0, width, height);
         
-        // Пробуем разные уровни качества
-        let quality = 0.9;
+        // Используем высокое качество (0.95) с минимальным порогом 0.85
+        let quality = 0.95;
         const tryCompress = () => {
           canvas.toBlob(
             (blob) => {
@@ -101,9 +101,9 @@ async function compressImage(file: File, maxSizeMB: number = 3.5): Promise<File>
                 return;
               }
               
-              // Если размер все еще большой и качество можно снизить
-              if (blob.size > maxSizeMB * 1024 * 1024 && quality > 0.3) {
-                quality -= 0.1;
+              // Если размер все еще большой и качество можно снизить (но не ниже 0.85)
+              if (blob.size > maxSizeMB * 1024 * 1024 && quality > 0.85) {
+                quality -= 0.05;
                 tryCompress();
                 return;
               }

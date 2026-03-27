@@ -87,9 +87,9 @@ export function buildMemoryPrompt(
   parts.push('→ ОБЯЗАТЕЛЬНО вызови save_image_memory(image_id, description, tags, entities, scope)');
   parts.push('');
   parts.push('Примеры ОБЯЗАТЕЛЬНОГО вызова:');
-  parts.push('- "Это моя подруга Маша" → save_image_memory(img_1, "Девушка Маша...", ["person","female","friend"], ["Маша"], "global")');
-  parts.push('- "Запомни этот логотип Nike" → save_image_memory(img_1, "Логотип Nike...", ["logo","brand"], ["Nike"], "global")');
-  parts.push('- "Это наш офис" → save_image_memory(img_1, "Офис пользователя...", ["office","place"], [], "global")');
+  parts.push('- "Это моя подруга Маша" → save_image_memory(ph_abc123, "Девушка Маша...", ["person","female","friend"], ["Маша"], "global")');
+  parts.push('- "Запомни этот логотип Nike" → save_image_memory(ph_def456, "Логотип Nike...", ["logo","brand"], ["Nike"], "global")');
+  parts.push('- "Это наш офис" → save_image_memory(ph_ghi789, "Офис пользователя...", ["office","place"], [], "global")');
   parts.push('');
   parts.push('НЕ вызывай только для скриншотов интерфейса или временных задач.');
   parts.push('');

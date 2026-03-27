@@ -83,7 +83,7 @@ function createContext(
     }
   }));
 
-  // Генерируем алиасы для изображений (img_1, img_2, ...)
+  // Создаем маппинг ID изображений для прямого доступа
   const imageAliases = createImageAliases(messages);
 
   return {
@@ -97,10 +97,9 @@ function createContext(
   };
 }
 
-/** Создаёт алиасы img_1, img_2 для всех изображений в чате */
+/** Создаёт алиасы для изображений (теперь ID → ID маппинг для обратной совместимости) */
 function createImageAliases(messages: Message[]): Map<string, string> {
   const aliases = new Map<string, string>();
-  let counter = 1;
   
   messages
     .filter(m => m.role === 'user' && m.files && m.files.length > 0)
@@ -108,8 +107,8 @@ function createImageAliases(messages: Message[]): Map<string, string> {
       m.files!
         .filter(f => f.mimeType.startsWith('image/'))
         .forEach(f => {
-          aliases.set(`img_${counter}`, f.id);
-          counter++;
+          // Маппинг ID → ID (для прямого доступа)
+          aliases.set(f.id, f.id);
         });
     });
   

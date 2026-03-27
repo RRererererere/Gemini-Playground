@@ -285,7 +285,7 @@ export interface ZoomRegion {
 
 // ImageAnalysisMetadata - metadata for zoom operations
 export interface ImageAnalysisMetadata {
-  imageIdentifier: string; // "img_1" or file ID
+  imageIdentifier: string; // file ID (e.g., "ph_abc123")
   reason: string; // Why this region was zoomed
   scale: string; // "3x", "4x", etc.
   originalSize: string; // "1920×1080px"

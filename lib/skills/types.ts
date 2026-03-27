@@ -60,7 +60,7 @@ export interface SkillContext {
   storage: SkillStorage;
   /** Эмитить UI событие */
   emit: (event: SkillUIEvent) => void;
-  /** Алиасы изображений (img_1 -> file.id) для удобной ссылки */
+  /** Алиасы изображений (ID -> file.id маппинг) для удобной ссылки */
   imageAliases?: Map<string, string>;
 }
 
