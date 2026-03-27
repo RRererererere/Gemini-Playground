@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import {
@@ -488,7 +490,8 @@ function StreamingText({
   if (!isStreaming || !isLast) {
     return (
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
         components={{
           code({ node, className, children, ...props }: any) {
             const isInline = !className;
@@ -518,7 +521,8 @@ function StreamingText({
     <>
       {oldText && (
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
+          remarkPlugins={[remarkGfm, remarkMath]}
+          rehypePlugins={[rehypeKatex]}
           components={{
             code({ node, className, children, ...props }: any) {
               const isInline = !className;
@@ -639,7 +643,8 @@ function ThinkingBlock({ thinking, isStreaming }: { thinking: string; isStreamin
           ) : (
             <div className={translatedText ? 'animate-text-appear' : ''}>
               <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkMath]}
+                rehypePlugins={[rehypeKatex]}
                 components={{
                   code({ node, className, children, ...props }: any) {
                     return <code className={className} {...props}>{children}</code>;
@@ -744,7 +749,8 @@ function DeepThinkingBlock({ thinking, isStreaming }: { thinking: string; isStre
           ) : (
             <div className={`text-xs text-purple-300/90 leading-relaxed ${translatedText ? 'animate-text-appear' : ''}`}>
               <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkMath]}
+                rehypePlugins={[rehypeKatex]}
                 components={{
                   code({ node, className, children, ...props }: any) {
                     return <code className={className} {...props}>{children}</code>;

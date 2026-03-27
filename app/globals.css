@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import 'katex/dist/katex.min.css';
 
 :root {
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
@@ -459,5 +460,105 @@ input[type='range']::-moz-range-thumb {
   /* Убираем подсказку на мобилке */
   .input-hint {
     display: none;
+  }
+}
+
+/* ==================== KATEX (LaTeX Math) ==================== */
+/* Стили для математических формул в темной теме */
+.katex {
+  font-size: 1.05em;
+  color: var(--text-primary);
+}
+
+.katex-display {
+  margin: 1em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.5em 0;
+}
+
+.katex-display > .katex {
+  display: inline-block;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* Inline math */
+.katex-inline {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Цвета для темной темы */
+.katex .mord,
+.katex .mop,
+.katex .mbin,
+.katex .mrel,
+.katex .mopen,
+.katex .mclose,
+.katex .mpunct,
+.katex .minner {
+  color: var(--text-primary);
+}
+
+/* Операторы и функции */
+.katex .mop {
+  color: #61afef;
+}
+
+/* Переменные */
+.katex .mord.mathnormal {
+  color: #e5c07b;
+}
+
+/* Числа */
+.katex .mord.mtight {
+  color: #d19a66;
+}
+
+/* Скобки и разделители */
+.katex .mopen,
+.katex .mclose,
+.katex .mfrac > span {
+  color: #c678dd;
+}
+
+/* Корни и радикалы */
+.katex .sqrt > .root {
+  color: #98c379;
+}
+
+/* Улучшенная читаемость в блоках кода */
+.prose-gem .katex {
+  font-size: 1em;
+}
+
+/* Скроллбар для длинных формул */
+.katex-display::-webkit-scrollbar {
+  height: 6px;
+}
+
+.katex-display::-webkit-scrollbar-track {
+  background: var(--surface-2);
+  border-radius: 3px;
+}
+
+.katex-display::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+
+.katex-display::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Адаптация для мобильных устройств */
+@media (max-width: 768px) {
+  .katex {
+    font-size: 0.95em;
+  }
+  
+  .katex-display {
+    font-size: 0.9em;
   }
 }

@@ -300,8 +300,8 @@ export function ChatSidebar({
               </p>
             </div>
           ) : (
-            <div className="space-y-2">
-              {savedChats.map(chat => {
+            <div className="space-y-1.5">
+              {[...savedChats].reverse().map(chat => {
                 const isActive = chat.id === currentChatId;
 
                 return (
@@ -311,31 +311,29 @@ export function ChatSidebar({
                       onLoadChat(chat);
                       onClose?.();
                     }}
-                    className={`group flex w-full items-start gap-3 rounded-[22px] border px-4 py-3 cursor-pointer transition-all ${
+                    className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 cursor-pointer transition-all ${
                       isActive
-                        ? 'border-[var(--border-strong)] bg-[linear-gradient(180deg,rgba(255,255,255,0.09),rgba(255,255,255,0.04))] shadow-[0_18px_40px_rgba(0,0,0,0.26)]'
-                        : 'border-[var(--border)] bg-[var(--surface-1)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)]'
+                        ? 'bg-white/[0.08] text-white'
+                        : 'text-[var(--text-muted)] hover:bg-white/[0.04] hover:text-[var(--text-primary)]'
                     }`}
                   >
-                    <div className={`mt-1 h-2.5 w-2.5 flex-shrink-0 rounded-full ${isActive ? 'bg-white shadow-[0_0_14px_rgba(255,255,255,0.45)]' : 'bg-[var(--surface-4)]'}`} />
+                    <MessageSquare size={14} className={`flex-shrink-0 ${isActive ? 'text-white' : 'text-[var(--text-dim)]'}`} />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-[13px] font-medium text-[var(--text-primary)]">{chat.title}</p>
-                      <p className="mt-1 text-[11px] text-[var(--text-dim)]">
-                        {chat.messages.length} сообщ. • {formatDate(chat.updatedAt)}
+                      <p className="truncate text-[13px] font-medium">{chat.title}</p>
+                      <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">
+                        {chat.messages.length} • {formatDate(chat.updatedAt)}
                       </p>
                     </div>
-                    <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                      <button
-                        onClick={event => {
-                          event.stopPropagation();
-                          onDeleteChat(chat.id);
-                        }}
-                        className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:bg-red-500/10 hover:text-[var(--gem-red)]"
-                        title="Удалить чат"
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
+                    <button
+                      onClick={event => {
+                        event.stopPropagation();
+                        onDeleteChat(chat.id);
+                      }}
+                      className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] group-hover:opacity-100"
+                      title="Удалить чат"
+                    >
+                      <Trash2 size={12} />
+                    </button>
                   </div>
                 );
               })}
