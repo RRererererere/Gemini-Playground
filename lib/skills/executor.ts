@@ -91,7 +91,7 @@ function createContext(
     messages,
     attachedFiles,
     config: getSkillConfig(skill.id),
-    storage: createSkillStorage(skill.id),
+    storage: createSkillStorage(skill.id, chatId),
     emit: emitter,
     imageAliases,
   };

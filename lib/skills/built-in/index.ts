@@ -8,6 +8,7 @@ import { websiteBuilderSkill } from './website-builder';
 import { officeExportSkill } from './office-export';
 import imageAnalyserSkill from './image-analyser';
 import { videoFrameExtractorSkill } from './video-frame-extractor/skill';
+import fileEditorSkill from './file-editor';
 import type { Skill } from '../types';
 
 export const BUILT_IN_SKILLS: Skill[] = [
@@ -21,6 +22,7 @@ export const BUILT_IN_SKILLS: Skill[] = [
   officeExportSkill,
   imageAnalyserSkill,
   videoFrameExtractorSkill,
+  fileEditorSkill,
 ];
 
-export { datetimeSkill, calculatorSkill, urlReaderSkill, notesSkill, qrGeneratorSkill, tableGeneratorSkill, websiteBuilderSkill, officeExportSkill, imageAnalyserSkill, videoFrameExtractorSkill };
+export { datetimeSkill, calculatorSkill, urlReaderSkill, notesSkill, qrGeneratorSkill, tableGeneratorSkill, websiteBuilderSkill, officeExportSkill, imageAnalyserSkill, videoFrameExtractorSkill, fileEditorSkill };

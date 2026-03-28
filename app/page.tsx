@@ -17,9 +17,10 @@ import {
 // @ts-ignore
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
 import LivePreviewPanel from '@/components/LivePreviewPanel';
+import FileEditorCanvas from '@/components/FileEditorCanvas';
 import { useDeepThink } from '@/lib/useDeepThink';
 import DeepThinkToggle from '@/components/DeepThinkToggle';
-import type { ChatTool, Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis, ToolResponse, SavedSystemPrompt, SkillArtifact, CanvasElement, WebsiteType } from '@/types';
+import type { ChatTool, Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis, ToolResponse, SavedSystemPrompt, SkillArtifact, CanvasElement, WebsiteType, OpenFile, FileDiffOp } from '@/types';
 import {
   loadApiKeys, saveApiKeys, isRateLimitError,
 } from '@/lib/apiKeyManager';
@@ -172,6 +173,12 @@ export default function Home() {
   const [showLiveCanvas, setShowLiveCanvas] = useState(false);
   const [liveCode, setLiveCode] = useState('');
   const [websiteType, setWebsiteType] = useState<WebsiteType>(null);
+  
+  // File Editor state
+  const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
+  const [activeFileId, setActiveFileId] = useState<string | null>(null);
+  const [showFileEditor, setShowFileEditor] = useState(false);
+  const [pendingEdits, setPendingEdits] = useState<Map<string, FileDiffOp[]>>(new Map());
   
   // Mobile canvas state: 'hidden' | 'sheet' (55%) | 'fullscreen'
   type MobileCanvasState = 'hidden' | 'sheet' | 'fullscreen';
@@ -444,6 +451,78 @@ export default function Home() {
     };
   }, [messages, systemPrompt, model, selectedApiKey, countTokens, isStreaming, skillsRevision]);
 
+  // ============ FILE EDITOR SYNC ============
+  // Синхронизация openFiles с file-editor skill storage
+  useEffect(() => {
+    if (!currentChatId) return;
+    
+    // Ключ с привязкой к чату: skill_data_{skillId}_{chatId}_{key}
+    const storageKey = `skill_data_file-editor_${currentChatId}_file_editor_open_files`;
+    
+    const syncFiles = () => {
+      const stored = localStorage.getItem(storageKey);
+      if (stored) {
+        try {
+          const files = JSON.parse(stored) as OpenFile[];
+          console.log('[FILE EDITOR SYNC] Found files in storage:', files.length, files.map(f => f.name));
+          setOpenFiles(prev => {
+            // Проверяем, изменились ли файлы
+            if (JSON.stringify(prev) !== JSON.stringify(files)) {
+              console.log('[FILE EDITOR SYNC] Files changed, updating state');
+              if (files.length > 0) {
+                setShowFileEditor(true);
+                console.log('[FILE EDITOR SYNC] Opening FileEditor');
+                if (!activeFileId && files.length > 0) {
+                  setActiveFileId(files[0].id);
+                  console.log('[FILE EDITOR SYNC] Setting active file:', files[0].id);
+                }
+              } else {
+                // Если файлов нет, закрываем редактор
+                setShowFileEditor(false);
+                setActiveFileId(null);
+              }
+              return files;
+            }
+            return prev;
+          });
+        } catch (e) {
+          console.error('[FILE EDITOR SYNC] Failed to load open files:', e);
+        }
+      } else {
+        // Если нет файлов в storage, очищаем state
+        if (openFiles.length > 0) {
+          console.log('[FILE EDITOR SYNC] No files in storage, clearing state');
+          setOpenFiles([]);
+          setShowFileEditor(false);
+          setActiveFileId(null);
+        }
+      }
+    };
+    
+    // Синхронизируем сразу
+    syncFiles();
+    
+    // И каждые 500ms проверяем изменения
+    const interval = setInterval(syncFiles, 500);
+    
+    return () => clearInterval(interval);
+  }, [currentChatId, activeFileId, openFiles.length]);
+
+  // Автоматически открываем FileEditor когда прикрепляется code-файл или текстовый файл
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage?.role === 'user' && lastMessage.files) {
+      const editableFiles = lastMessage.files.filter(f => 
+        (f.mimeType.startsWith('text/') || f.mimeType === 'application/json') &&
+        !openFiles.some(of => of.id === f.id)
+      );
+      
+      if (editableFiles.length > 0) {
+        setShowFileEditor(true);
+      }
+    }
+  }, [messages, openFiles]);
+
   // ============ SAVE CHAT ============
   const saveCurrentChat = useCallback(async (msgs: Message[], title?: string, updateCurrentId: boolean = true) => {
     if (msgs.length === 0) return;
@@ -634,7 +713,7 @@ export default function Home() {
       let accumulatedToolCalls: any[] = [];
       let accumulatedToolResponses: any[] = [];
       let memoryCallsThisTurn = 0;
-      const MAX_MEMORY_CALLS = 3;
+      const MAX_MEMORY_CALLS = 100; // Увеличен лимит до 100
       let shouldContinueLoop = true;
       
       while (shouldContinueLoop) {
@@ -736,12 +815,9 @@ export default function Home() {
         });
         
         // attachedFiles для доступа к файлам
-        // ВАЖНО: включаем файлы из history И из текущего сообщения
-        const allMessagesWithFiles = [
-          ...history.filter(m => m.role === 'user' && m.files && m.files.length > 0),
-        ];
-        
-        const attachedFiles = allMessagesWithFiles
+        // ВАЖНО: history уже включает текущее user-сообщение с файлами
+        const attachedFiles = history
+          .filter(m => m.role === 'user' && m.files && m.files.length > 0)
           .flatMap(m => m.files!)
           .map(f => ({
             id: f.id,
@@ -749,10 +825,15 @@ export default function Home() {
             mimeType: f.mimeType,
             size: f.size,
             getData: async () => {
+              // ФИКС: Сначала проверяем f.data (может быть в памяти)
               if (f.data) return f.data;
               // Загрузить из IndexedDB если нет в памяти
               const { loadFileData } = await import('@/lib/fileStorage');
-              return await loadFileData(f.id) || '';
+              const loaded = await loadFileData(f.id);
+              if (!loaded) {
+                console.error(`[attachedFiles] Failed to load file data for ${f.id}`);
+              }
+              return loaded || '';
             }
           }));
 
@@ -1157,10 +1238,13 @@ export default function Home() {
                     const imageId = args.image_id;
                     const fileId = imageAliases.get(imageId) || imageId;
                     
+                    console.log('[save_image_memory] Looking for image:', { imageId, fileId, availableFiles: attachedFiles.map(f => f.id) });
+                    
                     // Получить файл из attachedFiles
                     const file = attachedFiles.find(f => f.id === fileId);
                     if (!file) {
-                      imageMemoryResult = { success: false, error: 'Image not found' };
+                      console.error('[save_image_memory] Image not found:', { imageId, fileId, availableFiles: attachedFiles.map(f => f.id) });
+                      imageMemoryResult = { success: false, error: `Image not found: ${imageId}. Available: ${attachedFiles.map(f => f.id).join(', ')}` };
                     } else {
                       const base64 = await file.getData();
                       
@@ -1471,7 +1555,11 @@ export default function Home() {
     // Текст остается как есть, аннотации сохраняем отдельно
     const userParts: Part[] = [];
     if (text) userParts.push({ text });
-    files.forEach(f => userParts.push({ inlineData: { mimeType: f.mimeType, data: f.data } }));
+    
+    // Добавляем файлы (они уже в base64 после обработки в ChatInput)
+    files.forEach(f => {
+      userParts.push({ inlineData: { mimeType: f.mimeType, data: f.data } });
+    });
 
     const userMsg: Message = {
       id: generateId(),
@@ -1665,6 +1753,108 @@ export default function Home() {
       return next;
     });
   }, []);
+
+  // ============ FILE EDITOR HANDLERS ============
+  const handleAcceptEdits = useCallback((fileId: string) => {
+    setOpenFiles(prev => prev.map(f => {
+      if (f.id !== fileId) return f;
+      // Принимаем изменения - очищаем isDirty если контент совпадает с оригиналом
+      return {
+        ...f,
+        isDirty: f.content !== f.originalContent
+      };
+    }));
+    setPendingEdits(prev => {
+      const next = new Map(prev);
+      next.delete(fileId);
+      return next;
+    });
+  }, []);
+
+  const handleRejectEdits = useCallback((fileId: string) => {
+    setOpenFiles(prev => prev.map(f => {
+      if (f.id !== fileId) return f;
+      // Отменяем изменения - возвращаем к последнему сохранённому состоянию
+      const lastHistory = f.history[f.history.length - 1];
+      return {
+        ...f,
+        content: lastHistory ? lastHistory.content : f.originalContent,
+        isDirty: lastHistory ? true : false
+      };
+    }));
+    setPendingEdits(prev => {
+      const next = new Map(prev);
+      next.delete(fileId);
+      return next;
+    });
+  }, []);
+
+  const handleManualEdit = useCallback((fileId: string, newContent: string) => {
+    setOpenFiles(prev => prev.map(f => {
+      if (f.id !== fileId) return f;
+      return {
+        ...f,
+        content: newContent,
+        isDirty: newContent !== f.originalContent
+      };
+    }));
+  }, []);
+
+  const handleDownloadFile = useCallback((fileId: string) => {
+    const file = openFiles.find(f => f.id === fileId);
+    if (!file) return;
+    
+    const blob = new Blob([file.content], { type: file.mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [openFiles]);
+
+  const handleRevertFile = useCallback((fileId: string) => {
+    setOpenFiles(prev => prev.map(f => {
+      if (f.id !== fileId) return f;
+      return {
+        ...f,
+        content: f.originalContent,
+        isDirty: false
+      };
+    }));
+  }, []);
+
+  const handleCloseFile = useCallback((fileId: string) => {
+    if (!currentChatId) return;
+    
+    // Удаляем файл из state
+    setOpenFiles(prev => {
+      const updated = prev.filter(f => f.id !== fileId);
+      
+      // Обновляем localStorage
+      const storageKey = `skill_data_file-editor_${currentChatId}_file_editor_open_files`;
+      if (updated.length > 0) {
+        localStorage.setItem(storageKey, JSON.stringify(updated));
+      } else {
+        localStorage.removeItem(storageKey);
+      }
+      
+      return updated;
+    });
+    
+    // Если закрыли активный файл, переключаемся на другой
+    if (activeFileId === fileId) {
+      const remaining = openFiles.filter(f => f.id !== fileId);
+      if (remaining.length > 0) {
+        setActiveFileId(remaining[0].id);
+      } else {
+        setActiveFileId(null);
+        setShowFileEditor(false);
+      }
+    }
+  }, [currentChatId, activeFileId, openFiles]);
 
   const handleEditDeepThinkAnalysis = useCallback((id: string, analysis: DeepThinkAnalysis) => {
     // Найти сообщение и перегенерировать с новым анализом
@@ -2099,6 +2289,23 @@ export default function Home() {
               <MonitorPlay size={13} />
               <span className="hidden md:block">Canvas</span>
             </button>
+            {openFiles.length > 0 && (
+              <button
+                onClick={() => setShowFileEditor(prev => !prev)}
+                className={`flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-all ${
+                  showFileEditor
+                    ? 'border-[var(--border-strong)] bg-[var(--surface-3)] text-[var(--text-primary)]'
+                    : 'border-transparent text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
+                }`}
+                title="File Editor"
+              >
+                <span className="text-sm">📝</span>
+                <span className="hidden md:block">Editor</span>
+                {openFiles.some(f => f.isDirty) && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
+                )}
+              </button>
+            )}
             <div className="w-[1px] h-4 bg-[var(--border)] mx-1 hidden sm:block" />
             
             <button
@@ -2243,49 +2450,78 @@ export default function Home() {
         )}
 
         {/* Desktop: обычная панель */}
-        {!isMobile && showLiveCanvas && (
+        {!isMobile && (showLiveCanvas || showFileEditor) && (
           <Panel 
              defaultSize={50} 
              minSize={30} 
              className="flex flex-col min-w-0 border-l border-[var(--border)] overflow-hidden bg-[var(--surface-1)]"
           >
-             <LivePreviewPanel 
-               ref={livePreviewRef}
-               code={liveCode}
-               websiteType={websiteType}
-               isStreaming={isStreaming}
-               onClose={() => setShowLiveCanvas(false)} 
-               onElementSelected={(element) => {
-                 setPendingCanvasElement(element);
-               }}
-               onAIDataReceived={async (bridgeData) => {
-                 // 🔥 GEMINI BRIDGE — данные от сайта → AI
-                 
-                 // Создаем красивое сообщение с bridgeData
-                 const newUserMsg: Message = {
-                   id: generateId(),
-                   role: 'user',
-                   kind: 'bridge_data',
-                   parts: [{ text: `Данные от сайта (${bridgeData.eventType})` }],
-                   bridgeData: bridgeData,
-                 };
-                 
-                 setMessages(prev => [...prev, newUserMsg]);
-                 
-                 // Отправляем в AI
-                 const assistantMsg: Message = {
-                   id: generateId(),
-                   role: 'model',
-                   parts: [],
-                   isStreaming: true,
-                 };
-                 
-                 setMessages(prev => [...prev, assistantMsg]);
-                 
-                 // Вызываем streamGeneration с актуальной историей из ref (избегаем stale closure)
-                 await streamGeneration([...messagesRef.current, newUserMsg], assistantMsg.id, false);
-               }}
-             />
+            {/* Вертикальный split для LivePreview и FileEditor */}
+            <PanelGroup direction="vertical" className="h-full">
+              {showLiveCanvas && (
+                <>
+                  <Panel defaultSize={showFileEditor ? 50 : 100} minSize={30}>
+                    <LivePreviewPanel 
+                      ref={livePreviewRef}
+                      code={liveCode}
+                      websiteType={websiteType}
+                      isStreaming={isStreaming}
+                      onClose={() => setShowLiveCanvas(false)} 
+                      onElementSelected={(element) => {
+                        setPendingCanvasElement(element);
+                      }}
+                      onAIDataReceived={async (bridgeData) => {
+                        // 🔥 GEMINI BRIDGE — данные от сайта → AI
+                        
+                        // Создаем красивое сообщение с bridgeData
+                        const newUserMsg: Message = {
+                          id: generateId(),
+                          role: 'user',
+                          kind: 'bridge_data',
+                          parts: [{ text: `Данные от сайта (${bridgeData.eventType})` }],
+                          bridgeData: bridgeData,
+                        };
+                        
+                        setMessages(prev => [...prev, newUserMsg]);
+                        
+                        // Отправляем в AI
+                        const assistantMsg: Message = {
+                          id: generateId(),
+                          role: 'model',
+                          parts: [],
+                          isStreaming: true,
+                        };
+                        
+                        setMessages(prev => [...prev, assistantMsg]);
+                        
+                        // Вызываем streamGeneration с актуальной историей из ref (избегаем stale closure)
+                        await streamGeneration([...messagesRef.current, newUserMsg], assistantMsg.id, false);
+                      }}
+                    />
+                  </Panel>
+                  {showFileEditor && (
+                    <PanelResizeHandle className="h-1 bg-[var(--border-subtle)] hover:bg-[var(--border-strong)] transition-colors cursor-row-resize" />
+                  )}
+                </>
+              )}
+              
+              {showFileEditor && (
+                <Panel defaultSize={showLiveCanvas ? 50 : 100} minSize={30}>
+                  <FileEditorCanvas
+                    openFiles={openFiles}
+                    activeFileId={activeFileId}
+                    pendingEdits={pendingEdits}
+                    onAccept={handleAcceptEdits}
+                    onReject={handleRejectEdits}
+                    onManualEdit={handleManualEdit}
+                    onFileSelect={setActiveFileId}
+                    onDownload={handleDownloadFile}
+                    onRevert={handleRevertFile}
+                    onClose={handleCloseFile}
+                  />
+                </Panel>
+              )}
+            </PanelGroup>
           </Panel>
         )}
 

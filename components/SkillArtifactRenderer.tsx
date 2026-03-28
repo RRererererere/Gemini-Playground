@@ -564,13 +564,43 @@ function ArtifactCode({ artifact }: Props) {
 function ArtifactText({ artifact }: Props) {
   if (artifact.data.kind !== 'text') return null;
 
+  const [expanded, setExpanded] = useState(false);
+  const content = artifact.data.content;
+  const lines = content.split('\n');
+  const isLong = lines.length > 10 || content.length > 500;
+  
+  const preview = isLong && !expanded 
+    ? lines.slice(0, 10).join('\n') + (lines.length > 10 ? '\n...' : '')
+    : content;
+
   return (
     <div className="my-3">
-      {artifact.label && (
-        <div className="text-xs text-zinc-400 mb-2">{artifact.label}</div>
-      )}
-      <div className="bg-zinc-800/50 p-3 rounded-lg text-sm whitespace-pre-wrap border border-zinc-700/50">
-        {artifact.data.content}
+      <div className="flex items-center justify-between mb-2">
+        {artifact.label && (
+          <div className="text-xs text-zinc-400">{artifact.label}</div>
+        )}
+        <div className="flex items-center gap-2">
+          {isLong && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded-lg transition-colors"
+            >
+              {expanded ? 'Свернуть' : `Показать всё (${lines.length} строк)`}
+            </button>
+          )}
+          {artifact.downloadable !== false && (
+            <button
+              onClick={() => downloadArtifact(artifact)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded-lg transition-colors"
+            >
+              <Download size={14} />
+              Скачать
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="bg-zinc-800/50 p-3 rounded-lg text-sm whitespace-pre-wrap border border-zinc-700/50 font-mono max-h-[400px] overflow-y-auto">
+        {preview}
       </div>
     </div>
   );

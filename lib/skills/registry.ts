@@ -180,8 +180,10 @@ export function importSkillsSettings(data: SkillsExport): { success: number; fai
 // Изолированное хранилище для каждого скилла
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function createSkillStorage(skillId: string) {
-  const prefix = `skill_data_${skillId}_`;
+export function createSkillStorage(skillId: string, chatId?: string) {
+  const prefix = chatId 
+    ? `skill_data_${skillId}_${chatId}_`
+    : `skill_data_${skillId}_`;
 
   return {
     get(key: string): string | null {

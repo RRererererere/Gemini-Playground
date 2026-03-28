@@ -293,3 +293,32 @@ export interface ImageAnalysisMetadata {
   scaledSize: string; // "1920×1080px"
   timestamp?: number; // When analysis was performed
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// File Editor Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Открытый файл в редакторе
+export interface OpenFile {
+  id: string;           // уникальный ID
+  name: string;         // "App.tsx", "styles.css"
+  language: string;     // "typescript", "python", "html" etc
+  content: string;      // ТЕКУЩЕЕ содержимое (not base64!)
+  originalContent: string; // оригинал для diff/reset
+  mimeType: string;
+  isDirty: boolean;     // есть ли несохранённые правки
+  history: FileHistoryEntry[]; // история правок
+}
+
+export interface FileHistoryEntry {
+  timestamp: number;
+  content: string;
+  description: string; // "Added logging to handleClick"
+}
+
+export interface FileDiffOp {
+  type: 'search_replace';
+  search: string;       // что ищем (может быть неточным — fuzzy)
+  replace: string;      // на что меняем
+  description?: string; // что это за правка
+}

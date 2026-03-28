@@ -45,6 +45,28 @@ const ACCEPTED_TYPES = {
   'video/3gpp2': ['.3g2'],
   'text/plain': ['.txt'],
   'application/json': ['.json'],
+  // Code files
+  'text/typescript': ['.ts', '.tsx'],
+  'text/javascript': ['.js', '.jsx', '.mjs', '.cjs'],
+  'text/python': ['.py'],
+  'text/css': ['.css', '.scss', '.sass', '.less'],
+  'text/html': ['.html', '.htm'],
+  'text/markdown': ['.md', '.mdx'],
+  'text/yaml': ['.yaml', '.yml'],
+  'text/x-rust': ['.rs'],
+  'text/x-go': ['.go'],
+  'text/x-java': ['.java'],
+  'text/x-c': ['.c', '.cpp', '.h', '.hpp'],
+  'text/x-shellscript': ['.sh', '.bash'],
+  'text/x-toml': ['.toml'],
+  'text/x-env': ['.env.example'],
+  'text/xml': ['.xml', '.svg'],
+  'text/x-php': ['.php'],
+  'text/x-ruby': ['.rb'],
+  'text/x-swift': ['.swift'],
+  'text/x-kotlin': ['.kt', '.kts'],
+  'text/x-sql': ['.sql'],
+  'application/x-ndjson': ['.ndjson'],
 };
 
 // Максимальный размер файла в байтах (3.5MB для безопасности, учитывая лимит Vercel 4.5MB)
@@ -60,6 +82,17 @@ function fileToBase64(file: File): Promise<string> {
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
+  });
+}
+
+function fileToText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve(reader.result as string);
+    };
+    reader.onerror = reject;
+    reader.readAsText(file, 'UTF-8');
   });
 }
 
@@ -278,7 +311,14 @@ export default function ChatInput({
     const mimeType = file.type || 'text/plain';
     const accepted = Object.keys(ACCEPTED_TYPES);
 
-    if (!accepted.includes(mimeType) && !lowerName.endsWith('.txt') && !lowerName.endsWith('.json') && !lowerName.endsWith('.pdf')) {
+    // Определяем является ли файл code-файлом
+    const isCodeFile = Object.entries(ACCEPTED_TYPES).some(([mime, exts]) => 
+      mime.startsWith('text/') && 
+      !['text/plain', 'application/pdf'].includes(mime) &&
+      exts.some(ext => lowerName.endsWith(ext))
+    );
+
+    if (!accepted.includes(mimeType) && !lowerName.endsWith('.txt') && !lowerName.endsWith('.json') && !lowerName.endsWith('.pdf') && !isCodeFile) {
       return null;
     }
 
@@ -295,11 +335,68 @@ export default function ChatInput({
     if (lowerName.endsWith('.webm') && !mimeType.startsWith('video/')) finalMimeType = 'video/webm';
     if (lowerName.endsWith('.3gp')) finalMimeType = 'video/3gpp';
     if (lowerName.endsWith('.3g2')) finalMimeType = 'video/3gpp2';
+    
+    // Code file MIME types
+    if (lowerName.endsWith('.ts') || lowerName.endsWith('.tsx')) finalMimeType = 'text/typescript';
+    if (lowerName.endsWith('.js') || lowerName.endsWith('.jsx') || lowerName.endsWith('.mjs') || lowerName.endsWith('.cjs')) finalMimeType = 'text/javascript';
+    if (lowerName.endsWith('.py')) finalMimeType = 'text/python';
+    if (lowerName.endsWith('.css') || lowerName.endsWith('.scss') || lowerName.endsWith('.sass') || lowerName.endsWith('.less')) finalMimeType = 'text/css';
+    if (lowerName.endsWith('.html') || lowerName.endsWith('.htm')) finalMimeType = 'text/html';
+    if (lowerName.endsWith('.md') || lowerName.endsWith('.mdx')) finalMimeType = 'text/markdown';
+    if (lowerName.endsWith('.yaml') || lowerName.endsWith('.yml')) finalMimeType = 'text/yaml';
+    if (lowerName.endsWith('.rs')) finalMimeType = 'text/x-rust';
+    if (lowerName.endsWith('.go')) finalMimeType = 'text/x-go';
+    if (lowerName.endsWith('.java')) finalMimeType = 'text/x-java';
+    if (lowerName.endsWith('.c') || lowerName.endsWith('.cpp') || lowerName.endsWith('.h') || lowerName.endsWith('.hpp')) finalMimeType = 'text/x-c';
+    if (lowerName.endsWith('.sh') || lowerName.endsWith('.bash')) finalMimeType = 'text/x-shellscript';
+    if (lowerName.endsWith('.toml')) finalMimeType = 'text/x-toml';
+    if (lowerName.endsWith('.env.example')) finalMimeType = 'text/x-env';
+    if (lowerName.endsWith('.xml') || lowerName.endsWith('.svg')) finalMimeType = 'text/xml';
+    if (lowerName.endsWith('.php')) finalMimeType = 'text/x-php';
+    if (lowerName.endsWith('.rb')) finalMimeType = 'text/x-ruby';
+    if (lowerName.endsWith('.swift')) finalMimeType = 'text/x-swift';
+    if (lowerName.endsWith('.kt') || lowerName.endsWith('.kts')) finalMimeType = 'text/x-kotlin';
+    if (lowerName.endsWith('.sql')) finalMimeType = 'text/x-sql';
 
     try {
       let processedFile = file;
       
-      // Проверяем размер файла
+      // Code files и text files читаем как текст, затем конвертируем в base64
+      const isTextFile = finalMimeType.startsWith('text/') || finalMimeType === 'application/json';
+      
+      if (isTextFile) {
+        // Читаем как текст
+        const text = await fileToText(file);
+        
+        // Проверяем размер (для текстовых файлов лимит выше)
+        if (text.length > 100000) { // ~100KB текста
+          alert(`Файл слишком большой (${(text.length / 1024).toFixed(1)}KB текста). Максимум: 100KB`);
+          return null;
+        }
+        
+        // Конвертируем в base64 для API
+        let base64Data: string;
+        try {
+          base64Data = btoa(unescape(encodeURIComponent(text)));
+        } catch (e) {
+          console.error('Failed to encode text to base64:', e);
+          // Fallback через TextEncoder
+          const encoder = new TextEncoder();
+          const bytes = encoder.encode(text);
+          base64Data = btoa(String.fromCharCode.apply(null, Array.from(bytes)));
+        }
+        
+        return {
+          id: Math.random().toString(36).slice(2),
+          name: file.name,
+          mimeType: finalMimeType,
+          size: text.length,
+          data: base64Data, // храним как base64 для API
+          // Для code файлов не создаём previewUrl
+        };
+      }
+      
+      // Проверяем размер файла для бинарных файлов
       if (file.size > MAX_FILE_SIZE) {
         // Для изображений пробуем сжать
         if (finalMimeType.startsWith('image/')) {
@@ -586,7 +683,7 @@ export default function ChatInput({
               ref={fileInputRef}
               type="file"
               multiple
-              accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.mp3,.wav,.ogg,.m4a,.weba,.mp4,.mpeg,.mpg,.mov,.avi,.flv,.mkv,.webm,.3gp,.3g2,.txt,.json"
+              accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.mp3,.wav,.ogg,.m4a,.weba,.mp4,.mpeg,.mpg,.mov,.avi,.flv,.mkv,.webm,.3gp,.3g2,.txt,.json,.ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.css,.scss,.sass,.less,.html,.htm,.md,.mdx,.yaml,.yml,.rs,.go,.java,.c,.cpp,.h,.hpp,.sh,.bash,.toml,.xml,.svg,.php,.rb,.swift,.kt,.kts,.sql"
               className="hidden"
               onChange={e => e.target.files && handleFiles(e.target.files)}
             />
