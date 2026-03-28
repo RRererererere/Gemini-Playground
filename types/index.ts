@@ -141,6 +141,8 @@ export interface Message {
   errorRetryAfterMs?: number; // absolute timestamp when retry becomes available
   // UI helper: force-open editor for user prompt
   forceEdit?: boolean;
+  // Arena: ID агента-отправителя (только в Arena режиме для model-сообщений)
+  arenaAgentId?: string;
 }
 
 // Артефакт скилла (импортируется из lib/skills/types.ts в рантайме)

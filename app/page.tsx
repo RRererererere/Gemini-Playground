@@ -12,7 +12,7 @@ import ImageMemoryRecallPill from '@/components/ImageMemoryRecallPill';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,
-  Save, X, ArrowDown, RefreshCw, MonitorPlay
+  Save, X, ArrowDown, RefreshCw, MonitorPlay, Zap
 } from 'lucide-react';
 // @ts-ignore
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
@@ -20,6 +20,10 @@ import LivePreviewPanel from '@/components/LivePreviewPanel';
 import FileEditorCanvas from '@/components/FileEditorCanvas';
 import { useDeepThink } from '@/lib/useDeepThink';
 import DeepThinkToggle from '@/components/DeepThinkToggle';
+import AgentMessageHeader from '@/components/AgentMessageHeader';
+import ArenaInputBar from '@/components/ArenaInputBar';
+import ArenaAgentsSidebar from '@/components/ArenaAgentsSidebar';
+import { useArena } from '@/lib/useArena';
 import type { ChatTool, Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis, ToolResponse, SavedSystemPrompt, SkillArtifact, CanvasElement, WebsiteType, OpenFile, FileDiffOp } from '@/types';
 import {
   loadApiKeys, saveApiKeys, isRateLimitError,
@@ -135,6 +139,9 @@ export default function Home() {
   const [model, setModel] = useState<string>('');
   const [models, setModels] = useState<GeminiModel[]>([]);
 
+  // Arena mode — start 'chat' to match SSR, restore in useEffect
+  const [appMode, setAppMode] = useState<'chat' | 'arena'>('chat');
+
   // Settings
   const [systemPrompt, setSystemPrompt] = useState<string>('');
   const [tools, setTools] = useState<ChatTool[]>([]);
@@ -223,6 +230,18 @@ export default function Home() {
   const selectedApiKeyEntry = apiKeys[activeKeyIndex] || null;
   const selectedApiKey = selectedApiKeyEntry?.key || '';
   const selectedApiKeySuffix = getApiKeySuffix(selectedApiKeyEntry?.key);
+
+  // Arena hook
+  const arena = useArena(apiKeys, models, model);
+
+  // Restore & persist appMode
+  useEffect(() => {
+    const saved = localStorage.getItem('gemini_app_mode') as 'chat' | 'arena' | null;
+    if (saved === 'arena') setAppMode('arena');
+  }, []);
+  useEffect(() => {
+    localStorage.setItem('gemini_app_mode', appMode);
+  }, [appMode]);
 
   // Keep messagesRef in sync with messages state
   useEffect(() => {
@@ -2117,6 +2136,30 @@ export default function Home() {
     onSkillsChanged: () => setSkillsRevision(r => r + 1),
   };
 
+  // Common arena sidebar props
+  const chatSidebarArenaProps = {
+    appMode,
+    onAppModeChange: setAppMode,
+    arenaSessions: arena.sessions,
+    activeArenaSessionId: arena.activeSessionId,
+    onLoadArenaSession: arena.loadSession,
+    onNewArenaSession: arena.createSession,
+    onDeleteArenaSession: arena.deleteSession,
+  };
+
+  // Messages to display: in arena mode use arena session messages
+  const displayMessages = appMode === 'arena'
+    ? (arena.activeSession?.messages ?? [])
+    : messages;
+
+  const arenaVisibleMessages = useMemo(
+    () => displayMessages.filter(message => {
+      if (message.kind === 'tool_response') return false;
+      return true;
+    }),
+    [displayMessages]
+  );
+
   return (
     <div className="fixed inset-0 flex overflow-hidden bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06),transparent_24%),var(--surface-0)]">
 
@@ -2131,6 +2174,7 @@ export default function Home() {
               onNewChat={handleNewChat}
               onDeleteChat={handleDeleteSavedChat}
               onClose={() => setChatSidebarOpen(false)}
+              {...chatSidebarArenaProps}
             />
           </div>
         </div>
@@ -2140,10 +2184,27 @@ export default function Home() {
         <div className="sidebar-mobile-overlay sidebar-mobile-overlay-right" onClick={(e) => { if (e.target === e.currentTarget) setSettingsSidebarOpen(false); }}>
           <div className="sidebar-backdrop" />
           <div className="sidebar-panel">
-            <SettingsSidebar
-              {...settingsSidebarProps}
-              onClose={() => setSettingsSidebarOpen(false)}
-            />
+            {appMode === 'arena' ? (
+              <ArenaAgentsSidebar
+                session={arena.activeSession}
+                models={models}
+                globalApiKeys={apiKeys}
+                savedChats={savedChats}
+                onUpdateAgent={arena.updateAgent}
+                onAddAgent={arena.addAgent}
+                onRemoveAgent={arena.removeAgent}
+                responseMode={arena.activeSession?.responseMode ?? 'auto'}
+                onToggleMode={arena.toggleResponseMode}
+                onImportChat={arena.importChatAsSession}
+                onUpdateSessionPrompt={arena.updateSessionSystemPrompt}
+                onClose={() => setSettingsSidebarOpen(false)}
+              />
+            ) : (
+              <SettingsSidebar
+                {...settingsSidebarProps}
+                onClose={() => setSettingsSidebarOpen(false)}
+              />
+            )}
           </div>
         </div>
       )}
@@ -2157,6 +2218,7 @@ export default function Home() {
               onLoadChat={handleLoadChat}
               onNewChat={handleNewChat}
               onDeleteChat={handleDeleteSavedChat}
+              {...chatSidebarArenaProps}
             />
           </div>
         </div>
@@ -2215,7 +2277,17 @@ export default function Home() {
               <PanelLeft size={15} />
             </button>
             <div className="flex items-center gap-2 min-w-0">
-              {chatTitle ? (
+              {appMode === 'arena' && (
+                <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-full flex-shrink-0">
+                  <Zap size={9} />
+                  Arena
+                </span>
+              )}
+              {appMode === 'arena' ? (
+                <span className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px] md:max-w-xs">
+                  {arena.activeSession?.title || 'Новая арена'}
+                </span>
+              ) : chatTitle ? (
                 <span className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px] md:max-w-xs">
                   {chatTitle}
                 </span>
@@ -2246,13 +2318,15 @@ export default function Home() {
               onClick={toggleSettingsSidebar}
               className={`flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-all ${
                 settingsSidebarOpen
-                  ? 'border-[var(--border-strong)] bg-[var(--surface-3)] text-[var(--text-primary)]'
+                  ? appMode === 'arena'
+                    ? 'border-amber-400/30 bg-amber-400/10 text-amber-400'
+                    : 'border-[var(--border-strong)] bg-[var(--surface-3)] text-[var(--text-primary)]'
                   : 'border-transparent text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
               }`}
-              title="Настройки"
+              title={appMode === 'arena' ? 'Агенты' : 'Настройки'}
             >
-              <SlidersHorizontal size={13} />
-              <span className="hidden md:block">Настройки</span>
+              {appMode === 'arena' ? <Zap size={13} /> : <SlidersHorizontal size={13} />}
+              <span className="hidden md:block">{appMode === 'arena' ? 'Агенты' : 'Настройки'}</span>
             </button>
             <div className="w-[1px] h-4 bg-[var(--border)] mx-1 hidden sm:block" />
             
@@ -2335,63 +2409,88 @@ export default function Home() {
           className="flex-1 overflow-y-auto chat-messages-area px-4 py-6 relative"
           onScroll={handleScroll}
         >
-          {messages.length === 0 ? (
-            <EmptyState 
-              hasApiKey={hasKeys} 
-              hasModel={!!model} 
-              apiKeysCount={apiKeys.length} 
-              onSuggestionClick={(text) => handleSend(text, [])}
-            />
+          {(appMode === 'arena' ? (arena.activeSession?.messages ?? []) : messages).length === 0 ? (
+            appMode === 'arena' ? (
+              <ArenaEmptyState
+                hasSession={!!arena.activeSession}
+                agentCount={arena.activeSession?.agents.length ?? 0}
+                onCreateSession={arena.createSession}
+              />
+            ) : (
+              <EmptyState 
+                hasApiKey={hasKeys} 
+                hasModel={!!model} 
+                apiKeysCount={apiKeys.length} 
+                onSuggestionClick={(text) => handleSend(text, [])}
+              />
+            )
           ) : (
             <div className="max-w-3xl mx-auto space-y-5">
-              {visibleMessages.map((message, idx) => (
-                <ChatMessage
-                  key={message.id}
-                  message={message}
-                  index={idx}
-                  isLast={idx === visibleMessages.length - 1}
-                  isStreaming={isStreaming && message.id === streamingId}
-                  canRegenerate={hasApiAndModel && !isStreaming}
-                  onEdit={handleEdit}
-                  onDelete={handleDelete}
-                  onRegenerate={handleRegenerate}
-                  onContinue={handleContinue}
-                  onSubmitToolResults={handleSubmitToolResults}
-                  onEditPreviousUserMessage={forceEditPreviousUserMessage}
-                  onClearForceEdit={clearForceEdit}
-                  onEditDeepThinkAnalysis={handleEditDeepThinkAnalysis}
-                  onPlayHTML={(html) => {
-                    setLiveCode(html);
-                    setShowLiveCanvas(true);
-                  }}
-                  onAnnotationClick={(annotation) => {
-                    // Находим изображение для этой аннотации
-                    const imageFile = message.files?.find(f => f.mimeType.startsWith('image/'));
-                    if (!imageFile) return;
-                    
-                    // Получаем цвет для типа аннотации
-                    const annotationColors: Record<string, string> = {
-                      highlight: '#FBBF24',
-                      pointer: '#60A5FA',
-                      warning: '#F87171',
-                      success: '#4ADE80',
-                      info: '#A78BFA'
-                    };
-                    
-                    const annotationRef: import('@/types').AnnotationReference = {
-                      id: Math.random().toString(36).slice(2),
-                      imageId: imageFile.id,
-                      imageName: imageFile.name,
-                      annotation: annotation,
-                      color: annotationColors[annotation.type] || '#60A5FA'
-                    };
-                    
-                    if ((window as any).__chatInputAddAnnotation) {
-                      (window as any).__chatInputAddAnnotation(annotationRef);
-                    }
-                  }}
-                />
-              ))}
+              {(appMode === 'arena' ? arenaVisibleMessages : visibleMessages).map((message, idx) => {
+                const msgList = appMode === 'arena' ? arenaVisibleMessages : visibleMessages;
+                return (
+                  <div key={message.id}>
+                    {/* Arena: agent header above model messages */}
+                    {appMode === 'arena' && message.role === 'model' && message.arenaAgentId && (
+                      <AgentMessageHeader
+                        agent={arena.activeSession?.agents.find(a => a.id === message.arenaAgentId)}
+                      />
+                    )}
+                    <ChatMessage
+                      message={message}
+                      index={idx}
+                      isLast={idx === msgList.length - 1}
+                      isStreaming={appMode === 'arena'
+                        ? (arena.isStreaming && message.isStreaming === true)
+                        : (isStreaming && message.id === streamingId)
+                      }
+                      canRegenerate={appMode === 'arena' ? false : (hasApiAndModel && !isStreaming)}
+                      onEdit={appMode === 'arena'
+                        ? (id: string, newParts: Part[]) => arena.editMessage(id, newParts)
+                        : handleEdit
+                      }
+                      onDelete={appMode === 'arena'
+                        ? (id: string) => arena.deleteMessage(id)
+                        : handleDelete
+                      }
+                      onRegenerate={appMode === 'arena' ? () => {} : handleRegenerate}
+                      onContinue={appMode === 'arena' ? () => {} : handleContinue}
+                      onSubmitToolResults={appMode === 'arena' ? () => {} : handleSubmitToolResults}
+                      onEditPreviousUserMessage={appMode === 'arena' ? () => {} : forceEditPreviousUserMessage}
+                      onClearForceEdit={appMode === 'arena' ? () => {} : clearForceEdit}
+                      onEditDeepThinkAnalysis={appMode === 'arena' ? () => {} : handleEditDeepThinkAnalysis}
+                      onPlayHTML={(html) => {
+                        setLiveCode(html);
+                        setShowLiveCanvas(true);
+                      }}
+                      onAnnotationClick={(annotation) => {
+                        const imageFile = message.files?.find(f => f.mimeType.startsWith('image/'));
+                        if (!imageFile) return;
+                        
+                        const annotationColors: Record<string, string> = {
+                          highlight: '#FBBF24',
+                          pointer: '#60A5FA',
+                          warning: '#F87171',
+                          success: '#4ADE80',
+                          info: '#A78BFA'
+                        };
+                        
+                        const annotationRef: import('@/types').AnnotationReference = {
+                          id: Math.random().toString(36).slice(2),
+                          imageId: imageFile.id,
+                          imageName: imageFile.name,
+                          annotation: annotation,
+                          color: annotationColors[annotation.type] || '#60A5FA'
+                        };
+                        
+                        if ((window as any).__chatInputAddAnnotation) {
+                          (window as any).__chatInputAddAnnotation(annotationRef);
+                        }
+                      }}
+                    />
+                  </div>
+                );
+              })}
               <div ref={chatEndRef} />
             </div>
           )}
@@ -2422,26 +2521,42 @@ export default function Home() {
 
         {/* Input */}
         <div className="flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper">
-          <div className="px-4 mb-2 flex items-center justify-end">
-            <DeepThinkToggle
-              state={deepThinkState}
-              onToggle={toggleDeepThink}
-            />
-          </div>
+          {appMode === 'chat' && (
+            <div className="px-4 mb-2 flex items-center justify-end">
+              <DeepThinkToggle
+                state={deepThinkState}
+                onToggle={toggleDeepThink}
+              />
+            </div>
+          )}
           <ChatInput
-            onSend={handleSend}
-            onStop={handleStop}
-            onAddUserMessage={handleAddUserMessage}
-            isStreaming={isStreaming}
-            disabled={!hasApiAndModel}
-            canContinue={canContinue}
-            onContinue={handleContinue}
-            canRun={messages.length > 0 && !isStreaming && hasApiAndModel}
-            onRun={handleRegenerate}
+            onSend={appMode === 'arena'
+              ? (text, files) => arena.sendUserMessage(text, files)
+              : handleSend
+            }
+            onStop={appMode === 'arena' ? arena.stopStreaming : handleStop}
+            onAddUserMessage={appMode === 'arena' ? () => {} : handleAddUserMessage}
+            isStreaming={appMode === 'arena' ? arena.isStreaming : isStreaming}
+            disabled={appMode === 'arena' ? !arena.activeSession : !hasApiAndModel}
+            canContinue={appMode === 'arena' ? false : canContinue}
+            onContinue={appMode === 'arena' ? () => {} : handleContinue}
+            canRun={appMode === 'arena' ? false : (messages.length > 0 && !isStreaming && hasApiAndModel)}
+            onRun={appMode === 'arena' ? () => {} : handleRegenerate}
             pendingCanvasElement={pendingCanvasElement}
             onCanvasElementConsumed={() => setPendingCanvasElement(null)}
             onAnnotationClick={() => {}}
           />
+          {/* Arena Input Bar */}
+          {appMode === 'arena' && arena.activeSession && (
+            <ArenaInputBar
+              agents={arena.activeSession.agents}
+              isStreaming={arena.isStreaming}
+              streamingAgentId={arena.streamingAgentId}
+              responseMode={arena.activeSession.responseMode}
+              onTriggerAgent={arena.triggerAgent}
+              onToggleMode={arena.toggleResponseMode}
+            />
+          )}
         </div>
         </Panel>
 
@@ -2628,7 +2743,23 @@ export default function Home() {
       {!isMobile && (
         <div className="flex-shrink-0 overflow-hidden border-l border-[var(--border-subtle)] transition-[width,opacity] duration-300 ease-out" style={settingsSidebarStyle}>
           <div className="h-full w-[360px]">
-            <SettingsSidebar {...settingsSidebarProps} />
+            {appMode === 'arena' ? (
+              <ArenaAgentsSidebar
+                session={arena.activeSession}
+                models={models}
+                globalApiKeys={apiKeys}
+                savedChats={savedChats}
+                onUpdateAgent={arena.updateAgent}
+                onAddAgent={arena.addAgent}
+                onRemoveAgent={arena.removeAgent}
+                responseMode={arena.activeSession?.responseMode ?? 'auto'}
+                onToggleMode={arena.toggleResponseMode}
+                onImportChat={arena.importChatAsSession}
+                onUpdateSessionPrompt={arena.updateSessionSystemPrompt}
+              />
+            ) : (
+              <SettingsSidebar {...settingsSidebarProps} />
+            )}
           </div>
         </div>
       )}
@@ -2876,7 +3007,50 @@ function EmptyState({ hasApiKey, hasModel, apiKeysCount, onSuggestionClick }: { 
   );
 }
 
+function ArenaEmptyState({ hasSession, agentCount, onCreateSession }: { hasSession: boolean; agentCount: number; onCreateSession: () => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-center px-4">
+      <div className="w-14 h-14 rounded-2xl bg-[linear-gradient(135deg,#fbbf24,#f59e0b)] flex items-center justify-center mb-6">
+        <Zap size={24} className="text-black" />
+      </div>
 
+      <h2 className="text-2xl font-semibold text-white mb-2 tracking-tight">Multi-AI Arena</h2>
+      <p className="text-[var(--text-muted)] max-w-sm leading-relaxed text-sm">
+        {!hasSession
+          ? 'Создайте сессию, чтобы начать мультиагентное обсуждение'
+          : `${agentCount} агентов готовы к обсуждению. Напишите сообщение для начала.`
+        }
+      </p>
+
+      {!hasSession && (
+        <button
+          onClick={onCreateSession}
+          className="mt-6 flex items-center gap-2 px-5 py-2.5 bg-[linear-gradient(135deg,#fbbf24,#f59e0b)] text-black text-sm font-semibold rounded-xl hover:opacity-90 transition-opacity"
+        >
+          <Zap size={16} />
+          Создать сессию
+        </button>
+      )}
+
+      {hasSession && (
+        <div className="mt-8 grid grid-cols-1 gap-2 max-w-sm w-full">
+          {[
+            { label: '🎯 Дебаты', text: 'Обсудите плюсы и минусы удалённой работы.' },
+            { label: '🧠 Мозговой штурм', text: 'Предложите идеи для мобильного приложения.' },
+            { label: '📊 Анализ', text: 'Какие технологии будут доминировать через 5 лет?' },
+          ].map(s => (
+            <div key={s.label}
+              className="text-left text-sm text-[var(--text-dim)] bg-[var(--surface-2)] border border-amber-400/15 hover:border-amber-400/30 hover:text-[var(--text-primary)] rounded-xl px-4 py-3 cursor-default transition-all group"
+            >
+              <span className="font-medium text-[var(--text-muted)] group-hover:text-[var(--text-primary)] transition-colors">{s.label}</span>
+              <p className="mt-0.5 text-[var(--text-dim)] group-hover:text-[var(--text-muted)] transition-colors text-xs">{s.text}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 
 

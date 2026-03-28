@@ -243,13 +243,33 @@ export function ChatSidebar({
   onNewChat,
   onDeleteChat,
   onClose,
-}: Pick<SidebarSharedProps, 'savedChats' | 'currentChatId' | 'onLoadChat' | 'onNewChat' | 'onDeleteChat' | 'onClose'>) {
+  // Arena props
+  appMode,
+  onAppModeChange,
+  arenaSessions,
+  activeArenaSessionId,
+  onLoadArenaSession,
+  onNewArenaSession,
+  onDeleteArenaSession,
+}: Pick<SidebarSharedProps, 'savedChats' | 'currentChatId' | 'onLoadChat' | 'onNewChat' | 'onDeleteChat' | 'onClose'> & {
+  appMode?: 'chat' | 'arena';
+  onAppModeChange?: (mode: 'chat' | 'arena') => void;
+  arenaSessions?: Array<{ id: string; title: string; agents: any[]; messages: any[]; createdAt: number; updatedAt: number }>;
+  activeArenaSessionId?: string | null;
+  onLoadArenaSession?: (id: string) => void;
+  onNewArenaSession?: () => void;
+  onDeleteArenaSession?: (id: string) => void;
+}) {
   const formatDate = (ts: number) => new Date(ts).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  const isArena = appMode === 'arena';
 
   return (
     <SidebarShell
-      title="Чаты"
-      subtitle="История диалогов и быстрый переход между ветками разговора."
+      title={isArena ? 'Arena' : 'Чаты'}
+      subtitle={isArena
+        ? 'Multi-AI сессии — несколько агентов обсуждают одну тему.'
+        : 'История диалогов и быстрый переход между ветками разговора.'
+      }
       icon={MessageSquare}
       onClose={onClose}
       borderClassName="border-r border-[var(--border)]"
@@ -258,92 +278,196 @@ export function ChatSidebar({
           <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-1)] px-4 py-3">
             <div className="mb-1 flex items-center justify-between">
               <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Локально</span>
-              <span className="text-xs font-mono text-[var(--text-primary)]">{savedChats.length}</span>
+              <span className="text-xs font-mono text-[var(--text-primary)]">
+                {isArena ? (arenaSessions?.length ?? 0) : savedChats.length}
+              </span>
             </div>
             <p className="text-xs leading-relaxed text-[var(--text-muted)]">
-              Все сохранённые диалоги остаются под рукой и не смешиваются с настройками.
+              {isArena
+                ? 'Arena-сессии хранятся отдельно от обычных чатов.'
+                : 'Все сохранённые диалоги остаются под рукой и не смешиваются с настройками.'
+              }
             </p>
           </div>
         </div>
       }
     >
       <div className="flex h-full min-h-0 flex-col">
-        <div className="px-5 pt-5">
+        {/* Pill switcher — Chat / Arena */}
+        {onAppModeChange && (
+          <div className="px-5 pt-4 pb-1">
+            <div className="flex bg-[var(--surface-3)] p-0.5 rounded-lg">
+              <button
+                onClick={() => onAppModeChange('chat')}
+                className={`flex-1 text-center py-1.5 text-xs font-medium rounded-md transition-all ${
+                  appMode === 'chat'
+                    ? 'bg-[var(--surface-4)] text-[var(--text-primary)] shadow-sm'
+                    : 'text-[var(--text-dim)] hover:text-[var(--text-muted)]'
+                }`}
+              >
+                💬 Чат
+              </button>
+              <button
+                onClick={() => onAppModeChange('arena')}
+                className={`flex-1 text-center py-1.5 text-xs font-medium rounded-md transition-all ${
+                  appMode === 'arena'
+                    ? 'bg-amber-400/15 text-amber-400 shadow-sm'
+                    : 'text-[var(--text-dim)] hover:text-[var(--text-muted)]'
+                }`}
+              >
+                ⚡ Arena
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* New button */}
+        <div className="px-5 pt-4">
           <button
             onClick={() => {
-              onNewChat();
+              if (isArena) {
+                onNewArenaSession?.();
+              } else {
+                onNewChat();
+              }
               onClose?.();
             }}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3.5 text-sm font-semibold text-black transition-all hover:opacity-90 active:scale-[0.99]"
+            className={`flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-sm font-semibold transition-all hover:opacity-90 active:scale-[0.99] ${
+              isArena
+                ? 'bg-[linear-gradient(135deg,#fbbf24,#f59e0b)] text-black'
+                : 'bg-white text-black'
+            }`}
           >
             <Plus size={16} />
-            Новый чат
+            {isArena ? 'Новая арена' : 'Новый чат'}
           </button>
         </div>
 
+        {/* Section header */}
         <div className="px-5 pb-3 pt-5">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-dim)]">История</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-dim)]">
+            {isArena ? 'Сессии' : 'История'}
+          </p>
           <p className="mt-1 text-xs text-[var(--text-muted)]">
-            {savedChats.length > 0 ? `${savedChats.length} сохранённых диалогов` : 'Пока пусто'}
+            {isArena
+              ? (arenaSessions && arenaSessions.length > 0 ? `${arenaSessions.length} сессий` : 'Пока пусто')
+              : (savedChats.length > 0 ? `${savedChats.length} сохранённых диалогов` : 'Пока пусто')
+            }
           </p>
         </div>
 
+        {/* List */}
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-          {savedChats.length === 0 ? (
-            <div className="mx-2 rounded-[24px] border border-dashed border-[var(--border)] bg-[var(--surface-1)] px-5 py-8 text-center">
-              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--surface-2)] text-[var(--text-muted)]">
-                <MessageSquare size={18} />
+          {isArena ? (
+            /* Arena sessions list */
+            (!arenaSessions || arenaSessions.length === 0) ? (
+              <div className="mx-2 rounded-[24px] border border-dashed border-amber-400/20 bg-[var(--surface-1)] px-5 py-8 text-center">
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-400">
+                  <span className="text-xl">⚡</span>
+                </div>
+                <p className="text-sm font-medium text-[var(--text-primary)]">Нет Arena-сессий</p>
+                <p className="mt-2 text-xs leading-relaxed text-[var(--text-muted)]">
+                  Создайте новую сессию, чтобы запустить мультиагентное обсуждение.
+                </p>
               </div>
-              <p className="text-sm font-medium text-[var(--text-primary)]">Нет сохранённых чатов</p>
-              <p className="mt-2 text-xs leading-relaxed text-[var(--text-muted)]">
-                Начните новый диалог, и он появится здесь отдельной карточкой.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              {[...savedChats].reverse().map(chat => {
-                const isActive = chat.id === currentChatId;
-
-                return (
-                  <div
-                    key={chat.id}
-                    onClick={() => {
-                      onLoadChat(chat);
-                      onClose?.();
-                    }}
-                    className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 cursor-pointer transition-all ${
-                      isActive
-                        ? 'bg-white/[0.08] text-white'
-                        : 'text-[var(--text-muted)] hover:bg-white/[0.04] hover:text-[var(--text-primary)]'
-                    }`}
-                  >
-                    <MessageSquare size={14} className={`flex-shrink-0 ${isActive ? 'text-white' : 'text-[var(--text-dim)]'}`} />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[13px] font-medium">{chat.title}</p>
-                      <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">
-                        {chat.messages.length} • {formatDate(chat.updatedAt)}
-                      </p>
-                    </div>
-                    <button
-                      onClick={event => {
-                        event.stopPropagation();
-                        onDeleteChat(chat.id);
+            ) : (
+              <div className="space-y-1.5">
+                {[...arenaSessions].reverse().map(session => {
+                  const isActive = session.id === activeArenaSessionId;
+                  return (
+                    <div
+                      key={session.id}
+                      onClick={() => {
+                        onLoadArenaSession?.(session.id);
+                        onClose?.();
                       }}
-                      className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] group-hover:opacity-100"
-                      title="Удалить чат"
+                      className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 cursor-pointer transition-all ${
+                        isActive
+                          ? 'bg-amber-400/[0.08] text-amber-200'
+                          : 'text-[var(--text-muted)] hover:bg-white/[0.04] hover:text-[var(--text-primary)]'
+                      }`}
                     >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
+                      <span className={`flex-shrink-0 text-sm ${isActive ? 'text-amber-400' : 'text-[var(--text-dim)]'}`}>⚡</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-medium">{session.title}</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">
+                          {session.agents?.length ?? 0} агентов • {session.messages?.length ?? 0} сообщ. • {formatDate(session.updatedAt)}
+                        </p>
+                      </div>
+                      <button
+                        onClick={event => {
+                          event.stopPropagation();
+                          onDeleteArenaSession?.(session.id);
+                        }}
+                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] group-hover:opacity-100"
+                        title="Удалить сессию"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          ) : (
+            /* Original chat list */
+            savedChats.length === 0 ? (
+              <div className="mx-2 rounded-[24px] border border-dashed border-[var(--border)] bg-[var(--surface-1)] px-5 py-8 text-center">
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--surface-2)] text-[var(--text-muted)]">
+                  <MessageSquare size={18} />
+                </div>
+                <p className="text-sm font-medium text-[var(--text-primary)]">Нет сохранённых чатов</p>
+                <p className="mt-2 text-xs leading-relaxed text-[var(--text-muted)]">
+                  Начните новый диалог, и он появится здесь отдельной карточкой.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {[...savedChats].reverse().map(chat => {
+                  const isActive = chat.id === currentChatId;
+
+                  return (
+                    <div
+                      key={chat.id}
+                      onClick={() => {
+                        onLoadChat(chat);
+                        onClose?.();
+                      }}
+                      className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 cursor-pointer transition-all ${
+                        isActive
+                          ? 'bg-white/[0.08] text-white'
+                          : 'text-[var(--text-muted)] hover:bg-white/[0.04] hover:text-[var(--text-primary)]'
+                      }`}
+                    >
+                      <MessageSquare size={14} className={`flex-shrink-0 ${isActive ? 'text-white' : 'text-[var(--text-dim)]'}`} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-medium">{chat.title}</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">
+                          {chat.messages.length} • {formatDate(chat.updatedAt)}
+                        </p>
+                      </div>
+                      <button
+                        onClick={event => {
+                          event.stopPropagation();
+                          onDeleteChat(chat.id);
+                        }}
+                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] group-hover:opacity-100"
+                        title="Удалить чат"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )
           )}
         </div>
       </div>
     </SidebarShell>
   );
 }
+
 
 export function SettingsSidebar({
   apiKeys,
