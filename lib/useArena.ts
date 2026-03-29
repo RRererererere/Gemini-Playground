@@ -84,6 +84,30 @@ export function useArena(globalApiKeys: ApiKeyEntry[], models: GeminiModel[], gl
     setActiveArenaSessionId(id);
   }, []);
 
+  const branchSession = useCallback((messageId: string) => {
+    if (!activeSession) return null;
+    const msgIdx = activeSession.messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return null;
+    
+    // Копируем сообщения до указанного (включительно)
+    const branchMessages = activeSession.messages.slice(0, msgIdx + 1).map(m => ({ ...m }));
+    
+    const session: ArenaSession = {
+      ...activeSession,
+      id: generateId(),
+      title: `${activeSession.title} (Ветка)`,
+      messages: branchMessages,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    
+    saveArenaSession(session);
+    setSessions(prev => [...prev, session]);
+    setActiveSessionIdState(session.id);
+    setActiveArenaSessionId(session.id);
+    return session;
+  }, [activeSession]);
+
   const deleteSession = useCallback((id: string) => {
     deleteArenaSessionStorage(id);
     setSessions(prev => prev.filter(s => s.id !== id));
@@ -208,6 +232,72 @@ export function useArena(globalApiKeys: ApiKeyEntry[], models: GeminiModel[], gl
     setIsStreaming(false);
     setStreamingAgentId(null);
   }, []);
+
+  const continueAgentStream = useCallback(async (messageId: string) => {
+    if (!activeSession || isStreaming) return;
+
+    const msgIdx = activeSession.messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+    const msg = activeSession.messages[msgIdx];
+    const agent = activeSession.agents.find(a => a.id === msg.arenaAgentId);
+    if (!agent) return;
+
+    let currentMessages = [...activeSession.messages];
+    
+    const updateUI = (s: ArenaSession) => {
+      setSessions(prev => prev.map(existing => existing.id === s.id ? s : existing));
+    };
+
+    const abort = new AbortController();
+    abortRef.current = abort;
+    setIsStreaming(true);
+    setStreamingAgentId(agent.id);
+
+    try {
+      await streamArenaAgent({
+        agent,
+        session: activeSession,
+        messages: currentMessages, // Передаем все сообщения, Gemini API продолжит последнее
+        globalApiKeys,
+        targetMessageId: messageId,
+        onChunk: (text) => {
+          currentMessages = currentMessages.map(m => {
+            if (m.id !== messageId) return m;
+            const existing = m.parts.find(p => 'text' in p) as { text: string } | undefined;
+            if (existing) {
+              return {
+                ...m,
+                parts: m.parts.map(p => 'text' in p ? { text: existing.text + text } : p),
+              };
+            }
+            return { ...m, parts: [...m.parts, { text }] };
+          });
+          const updatedSession = { ...activeSession, messages: currentMessages, updatedAt: Date.now() };
+          updateUI(updatedSession);
+        },
+        onDone: (parts) => {
+          // Просто снимаем флаг стриминга, текст уже добавлен
+          currentMessages = currentMessages.map(m =>
+            m.id === messageId ? { ...m, isStreaming: false } : m
+          );
+          const finalSession = { ...activeSession, messages: currentMessages, updatedAt: Date.now() };
+          updateUI(finalSession);
+          saveArenaSession(finalSession);
+        },
+        onError: (error) => {
+          currentMessages = currentMessages.map(m =>
+            m.id === messageId ? { ...m, error, isStreaming: false } : m
+          );
+          updateUI({ ...activeSession, messages: currentMessages, updatedAt: Date.now() });
+        },
+        signal: abort.signal,
+      });
+    } finally {
+      setIsStreaming(false);
+      setStreamingAgentId(null);
+      abortRef.current = null;
+    }
+  }, [activeSession, isStreaming, globalApiKeys]);
 
   const runAgentStream = useCallback(async (
     session: ArenaSession,
@@ -365,6 +455,7 @@ export function useArena(globalApiKeys: ApiKeyEntry[], models: GeminiModel[], gl
     // Session actions
     createSession,
     loadSession,
+    branchSession,
     deleteSession,
     importChatAsSession,
     updateSessionSystemPrompt,
@@ -381,6 +472,7 @@ export function useArena(globalApiKeys: ApiKeyEntry[], models: GeminiModel[], gl
     // Messaging
     sendUserMessage,
     triggerAgent,
+    continueAgentStream,
     stopStreaming,
     toggleResponseMode,
   };

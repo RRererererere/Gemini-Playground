@@ -11,7 +11,7 @@ import {
   User, Sparkles, Copy, Check, Edit2, Trash2, RefreshCw,
   ChevronDown, ChevronUp, FileText, Image as ImageIcon, Volume2, Braces,
   Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square, Wrench, Video, MonitorPlay,
-  Send, Calculator, ClipboardList, MessageSquare, Globe
+  Send, Calculator, ClipboardList, MessageSquare, Globe, GitBranch
 } from 'lucide-react';
 import type { Message, AttachedFile, Part, DeepThinkAnalysis, BridgePayload } from '@/types';
 import MemoryPill from './MemoryPill';
@@ -31,6 +31,7 @@ interface ChatMessageProps {
   onDelete: (id: string) => void;
   onRegenerate: () => void;
   onContinue: () => void;
+  onBranch?: () => void;
   onSubmitToolResults?: (messageId: string, responses: Array<{ toolCallId: string; rawResponse: string }>) => void;
   onEditPreviousUserMessage?: (modelMessageId: string) => void;
   onClearForceEdit?: (userMessageId: string) => void;
@@ -1493,7 +1494,7 @@ function BridgeDataBlock({ bridgeData }: { bridgeData: BridgePayload }) {
 
 export default function ChatMessage({
   message, index, isLast, isStreaming,
-  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick
+  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -1926,9 +1927,21 @@ export default function ChatMessage({
           <button
             onClick={() => onDelete(message.id)}
             className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--gem-red)] hover:bg-[rgba(239,68,68,0.08)] rounded-md transition-all"
+            title="Удалить"
           >
             <Trash2 size={10} />
           </button>
+          
+          {onBranch && (
+            <button
+              onClick={onBranch}
+              className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-all"
+              title="Создать новую ветку от этого сообщения"
+            >
+              <GitBranch size={10} />
+              <span className="hidden md:inline">Ветка</span>
+            </button>
+          )}
         </div>
       )}
     </div>

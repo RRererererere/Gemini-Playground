@@ -1668,6 +1668,30 @@ export default function Home() {
     await streamGeneration(messages, lastMsg.id, true);
   }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
 
+  const handleBranch = useCallback((messageId: string) => {
+    if (isStreaming || (appMode === 'arena' && arena.isStreaming)) return;
+    
+    if (appMode === 'arena') {
+      arena.branchSession(messageId);
+      return;
+    }
+    
+    const msgIdx = messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+    
+    if (messages.length > 0) {
+      saveCurrentChat(messages).catch(console.error);
+    }
+    
+    const branchMessages = messages.slice(0, msgIdx + 1).map(m => ({ ...m }));
+    const newChatId = generateId();
+    setCurrentChatId(newChatId);
+    setActiveChatId(newChatId);
+    setMessages(branchMessages);
+    setChatTitle(chatTitle ? `${chatTitle} (Ветка)` : 'Новая ветка');
+    setUnsaved(true);
+  }, [isStreaming, appMode, arena, messages, chatTitle, saveCurrentChat]);
+
   const handleSubmitToolResults = useCallback(async (
     modelMessageId: string,
     responses: Array<{ toolCallId: string; rawResponse: string }>
@@ -2454,7 +2478,8 @@ export default function Home() {
                         : handleDelete
                       }
                       onRegenerate={appMode === 'arena' ? () => {} : handleRegenerate}
-                      onContinue={appMode === 'arena' ? () => {} : handleContinue}
+                      onContinue={appMode === 'arena' ? () => arena.continueAgentStream(message.id) : handleContinue}
+                      onBranch={() => handleBranch(message.id)}
                       onSubmitToolResults={appMode === 'arena' ? () => {} : handleSubmitToolResults}
                       onEditPreviousUserMessage={appMode === 'arena' ? () => {} : forceEditPreviousUserMessage}
                       onClearForceEdit={appMode === 'arena' ? () => {} : clearForceEdit}
