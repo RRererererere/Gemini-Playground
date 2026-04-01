@@ -17,6 +17,7 @@ import type { Message, AttachedFile, Part, DeepThinkAnalysis, BridgePayload } fr
 import MemoryPill from './MemoryPill';
 import ImageMemoryPill from './ImageMemoryPill';
 import ImageMemoryRecallPill from './ImageMemoryRecallPill';
+import ImageMemorySearchPill from './ImageMemorySearchPill';
 import { SkillArtifactsGroup } from './SkillArtifactRenderer';
 import AnnotationRefDisplay from './AnnotationRefDisplay';
 import ImageLightbox from './ImageLightbox';
@@ -1759,10 +1760,30 @@ export default function ChatMessage({
                     return (
                       <ImageMemoryPill
                         key={`${message.id}-mem-${idx}`}
-                        scope={op.scope}
+                        scope={op.scope || 'local'}
                         description={op.description || ''}
                         tags={op.tags || []}
                         entities={op.entities || []}
+                        thumbnailBase64={op.thumbnailBase64}
+                      />
+                    );
+                  }
+                  if (op.type === 'search_image' && op.results) {
+                    return (
+                      <ImageMemorySearchPill
+                        key={`${message.id}-mem-${idx}`}
+                        memories={op.results}
+                        entities={op.results.flatMap(r => r.tags)}
+                        confidence={0.8}
+                      />
+                    );
+                  }
+                  if (op.type === 'recall_image') {
+                    return (
+                      <ImageMemoryRecallPill
+                        key={`${message.id}-mem-${idx}`}
+                        memoryId={op.memoryId || ''}
+                        description={op.description}
                         thumbnailBase64={op.thumbnailBase64}
                       />
                     );
@@ -1771,7 +1792,7 @@ export default function ChatMessage({
                     <MemoryPill
                       key={`${message.id}-mem-${idx}`}
                       operation={op.type}
-                      scope={op.scope}
+                      scope={op.scope || 'local'}
                       fact={op.fact}
                       oldFact={op.oldFact}
                       category={op.category}

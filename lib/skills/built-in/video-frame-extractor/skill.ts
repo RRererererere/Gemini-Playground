@@ -1,5 +1,5 @@
 import type { Skill, SkillContext, SkillToolResult } from '../../types';
-import { generateImageId } from '../image-analyser/cropper';
+import { generateImageId } from '@/lib/imageId';
 import { saveUniversalImage } from '@/lib/universal-image-store';
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

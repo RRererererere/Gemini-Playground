@@ -237,8 +237,8 @@ export interface SavedChat {
 
 // Операция с памятью для отображения в чате
 export interface MemoryOperation {
-  type: 'save' | 'update' | 'forget' | 'save_image';
-  scope: 'local' | 'global';
+  type: 'save' | 'update' | 'forget' | 'save_image' | 'search_image' | 'recall_image';
+  scope?: 'local' | 'global';
   fact?: string;
   oldFact?: string;
   category?: string;
@@ -250,6 +250,15 @@ export interface MemoryOperation {
   tags?: string[];
   entities?: string[];
   thumbnailBase64?: string;
+  // Для search_image
+  query?: string;
+  results?: Array<{
+    id: string;
+    description: string;
+    tags: string[];
+    entities: string[];
+    thumbnailBase64: string;
+  }>;
 }
 
 // Сохранённый системный промпт

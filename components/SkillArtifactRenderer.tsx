@@ -293,23 +293,29 @@ function ArtifactAnnotatedImage({ artifact, onAnnotationClick }: Props) {
   useEffect(() => {
     async function loadSourceImage() {
       try {
-        // Импортируем loadFileData динамически
-        const { loadFileData } = await import('@/lib/fileStorage');
+        // Сначала пробуем загрузить из universal-image-store
+        const { loadUniversalImage } = await import('@/lib/universal-image-store');
+        const universalImg = await loadUniversalImage(sourceImageId);
         
-        // Загружаем из IndexedDB
-        const base64Data = await loadFileData(sourceImageId);
-        
-        if (base64Data) {
-          // Определяем MIME type (по умолчанию image/png)
-          const mimeType = base64Data.startsWith('/9j/') ? 'image/jpeg' 
-                         : base64Data.startsWith('iVBOR') ? 'image/png'
-                         : base64Data.startsWith('R0lGOD') ? 'image/gif'
-                         : base64Data.startsWith('UklGR') ? 'image/webp'
-                         : 'image/png';
-          
-          setSourceImage(`data:${mimeType};base64,${base64Data}`);
+        if (universalImg) {
+          setSourceImage(`data:${universalImg.image.mimeType};base64,${universalImg.base64}`);
         } else {
-          console.warn('Source image not found in IndexedDB:', sourceImageId);
+          // Fallback: пробуем загрузить из старого fileStorage
+          const { loadFileData } = await import('@/lib/fileStorage');
+          const base64Data = await loadFileData(sourceImageId);
+          
+          if (base64Data) {
+            // Определяем MIME type (по умолчанию image/png)
+            const mimeType = base64Data.startsWith('/9j/') ? 'image/jpeg' 
+                           : base64Data.startsWith('iVBOR') ? 'image/png'
+                           : base64Data.startsWith('R0lGOD') ? 'image/gif'
+                           : base64Data.startsWith('UklGR') ? 'image/webp'
+                           : 'image/png';
+            
+            setSourceImage(`data:${mimeType};base64,${base64Data}`);
+          } else {
+            console.warn('Source image not found:', sourceImageId);
+          }
         }
       } catch (err) {
         console.error('Failed to load source image:', err);
