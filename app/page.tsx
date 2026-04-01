@@ -63,6 +63,7 @@ import { getImageDimensions } from '@/lib/image-utils';
 import { buildImageContext } from '@/lib/image-context';
 import { collectImages } from '@/lib/image-context';
 import { cropAndScale } from '@/lib/skills/built-in/image-analyser/cropper';
+import { generateImageId } from '@/lib/imageId';
 // Skills system
 import {
   collectSkillTools,
@@ -797,9 +798,8 @@ export default function Home() {
       // Tool loop — поддерживает несколько раундов memory tool calls
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       
-      // Накапливаем toolCalls/toolResponses между раундами
-      let accumulatedToolCalls: any[] = [];
-      let accumulatedToolResponses: any[] = [];
+      // Накапливаем раунды tool calls/responses
+      const completedRounds: Array<{ calls: any[]; responses: any[] }> = [];
       let memoryCallsThisTurn = 0;
       const MAX_MEMORY_CALLS = 100; // Увеличен лимит до 100
       let shouldContinueLoop = true;
@@ -810,38 +810,35 @@ export default function Home() {
         // Строим историю с накопленными tool calls/responses от предыдущих раундов
         const messagesForRequest = buildChatRequestMessages(history);
         
-        // Если есть накопленные tool responses — добавляем их как отдельный turn
-        // (assistant turn с functionCall + user turn с functionResponse)
+        // Если есть завершённые раунды — добавляем их как отдельные model/user turns
         let contentsForRequest = messagesForRequest;
-        if (accumulatedToolCalls.length > 0 && accumulatedToolResponses.length > 0) {
-          // Добавляем assistant turn с functionCalls (включая thoughtSignature из оригинального вызова)
-          contentsForRequest = [
-            ...messagesForRequest,
-            {
+        if (completedRounds.length > 0) {
+          for (const round of completedRounds) {
+            // Добавляем model turn с functionCalls этого раунда
+            contentsForRequest.push({
               role: 'model',
-              parts: accumulatedToolCalls.map(tc => ({
+              parts: round.calls.map(tc => ({
                 functionCall: { id: tc.id, name: tc.name, args: tc.args },
                 ...(tc.thoughtSignature ? { thoughtSignature: tc.thoughtSignature } : {}),
               })),
-            },
-            {
+            });
+            
+            // Добавляем user turn с functionResponses + extraParts этого раунда
+            contentsForRequest.push({
               role: 'user',
-              parts: accumulatedToolResponses.flatMap(tr => {
-                const parts: any[] = [{
+              parts: [
+                ...round.responses.map(tr => ({
                   functionResponse: {
                     id: tr.toolCallId,
                     name: tr.name,
                     response: tr.response,
                   },
-                }];
-                // Добавляем sibling parts для Gemini 2.x (например, изображения)
-                if (tr.extraParts) {
-                  parts.push(...tr.extraParts);
-                }
-                return parts;
-              }),
-            },
-          ];
+                })),
+                // extraParts (recalled images) — в тот же turn
+                ...round.responses.flatMap(tr => tr.extraParts || []),
+              ],
+            });
+          }
         }
         
         // Собираем skill tools
@@ -942,8 +939,9 @@ export default function Home() {
         let htmlAccumulator = '';
         let isInsideHtmlBlock = false;
         
-        // tool calls собранные в этом раунде
+        // tool calls и responses собранные в этом раунде
         const roundToolCalls: any[] = [];
+        const roundToolResponses: any[] = [];
 
         const flush = () => {
           flushScheduled = false;
@@ -1129,7 +1127,7 @@ export default function Home() {
                     args,
                     thoughtSignature: parsed.thoughtSignature,
                   });
-                  accumulatedToolResponses.push({
+                  roundToolResponses.push({
                     toolCallId: callId,
                     name,
                     response: skillResult.functionResponse,
@@ -1168,7 +1166,7 @@ export default function Home() {
                     args,
                     thoughtSignature: parsed.thoughtSignature,
                   });
-                  accumulatedToolResponses.push({
+                  roundToolResponses.push({
                     toolCallId: callId,
                     name,
                     response: { status: 'acknowledged' },
@@ -1312,7 +1310,7 @@ export default function Home() {
                   args,
                   thoughtSignature: parsed.thoughtSignature, // Сохраняем для отправки обратно
                 });
-                accumulatedToolResponses.push({
+                roundToolResponses.push({
                   toolCallId: callId,
                   name,
                   response: { success: memoryResult.success, id: memoryResult.id },
@@ -1473,13 +1471,12 @@ export default function Home() {
                         description: r.description,
                         tags: r.tags,
                         entities: r.entities,
-                        thumbnailBase64: r.thumbnailBase64,
                         mentions: r.mentions,
                         created_at: new Date(r.created_at).toLocaleDateString('ru-RU')
                       }))
                     };
                     
-                    // Добавляем memory operation для отображения в чате
+                    // Добавляем memory operation для отображения в чате (с thumbnails для UI)
                     const memoryOp: import('@/types').MemoryOperation = {
                       type: 'search_image',
                       query: args.query,
@@ -1524,60 +1521,104 @@ export default function Home() {
                       
                       // Добавляем изображение в responseParts для Gemini
                       if (base64) {
-                        // Создаем артефакт для UI
-                        const recallArtifact: import('@/types').SkillArtifact = {
-                          id: `recall_${memory.id}`,
-                          type: 'image',
-                          label: `🧠 Recalled: ${memory.description}`,
-                          data: { 
-                            kind: 'base64', 
-                            mimeType: memory.mimeType, 
-                            base64 
-                          },
-                          downloadable: true,
-                          filename: `recalled_${memory.id}.${memory.mimeType.split('/')[1]}`,
-                        };
+                        // Проверяем размер изображения (Gemini имеет лимиты)
+                        const imageSizeBytes = base64.length * 0.75; // base64 -> bytes
+                        const maxSizeMB = 20; // Gemini лимит ~20MB
                         
-                        // Добавляем memory operation для отображения в чате
-                        const memoryOp: import('@/types').MemoryOperation = {
-                          type: 'recall_image',
-                          memoryId: memory.id,
-                          description: memory.description,
-                          tags: memory.tags,
-                          thumbnailBase64: memory.thumbnailBase64,
-                          scope: memory.scope,
-                        };
-                        
-                        accumulatedToolResponses.push({
-                          toolCallId: callId,
-                          name,
-                          response: imageMemoryResult,
-                          extraParts: [{
-                            inlineData: {
-                              mimeType: memory.mimeType,
-                              data: base64
-                            }
-                          }],
-                          artifacts: [recallArtifact],
-                          hidden: true,
-                        });
-                        
-                        // Добавляем memory operation к сообщению
-                        setMessages(prev => prev.map(m => 
-                          m.id === targetMessageId
-                            ? { ...m, memoryOperations: [...(m.memoryOperations || []), memoryOp] }
-                            : m
-                        ));
-                        
-                        roundToolCalls.push({ 
-                          id: callId, 
-                          name, 
-                          args,
-                          thoughtSignature: parsed.thoughtSignature,
-                        });
-                        
-                        shouldContinueLoop = true;
-                        continue; // Пропускаем обычную обработку ниже
+                        if (imageSizeBytes > maxSizeMB * 1024 * 1024) {
+                          console.warn(`[recall_image_memory] Image too large: ${(imageSizeBytes / 1024 / 1024).toFixed(2)}MB`);
+                          imageMemoryResult = { 
+                            success: false, 
+                            error: `Image too large (${(imageSizeBytes / 1024 / 1024).toFixed(2)}MB). Maximum ${maxSizeMB}MB.` 
+                          };
+                        } else {
+                          // Сохраняем recalled изображение в universal store для доступа skill tools
+                          const { saveUniversalImage } = await import('@/lib/universal-image-store');
+                          const recalledImageId = memory.id; // Используем ID памяти как ID изображения
+                          
+                          await saveUniversalImage({
+                            id: recalledImageId,
+                            source: 'recalled',
+                            base64,
+                            mimeType: memory.mimeType,
+                            width: memory.originalWidth,
+                            height: memory.originalHeight,
+                            chatId: currentChatId || undefined,
+                            messageId: targetMessageId,
+                            metadata: {
+                              description: memory.description,
+                              tags: memory.tags,
+                              scope: memory.scope,
+                            },
+                          });
+                          
+                          // Генерируем короткий alias для модели
+                          const shortAlias = generateImageId();
+                          imageAliases.set(shortAlias, recalledImageId);
+                          
+                          console.log(`[recall_image_memory] Saved to universal store: ${recalledImageId}, alias: ${shortAlias}`);
+                          
+                          // Обновляем imageMemoryResult с alias для модели
+                          imageMemoryResult = {
+                            ...imageMemoryResult,
+                            image_id: shortAlias, // Короткий ID для использования в следующих tool calls
+                          };
+                          
+                          // Создаем артефакт для UI
+                          const recallArtifact: import('@/types').SkillArtifact = {
+                            id: `recall_${memory.id}`,
+                            type: 'image',
+                            label: `🧠 Recalled: ${memory.description}`,
+                            data: { 
+                              kind: 'base64', 
+                              mimeType: memory.mimeType, 
+                              base64 
+                            },
+                            downloadable: true,
+                            filename: `recalled_${memory.id}.${memory.mimeType.split('/')[1]}`,
+                          };
+                          
+                          // Добавляем memory operation для отображения в чате
+                          const memoryOp: import('@/types').MemoryOperation = {
+                            type: 'recall_image',
+                            memoryId: memory.id,
+                            description: memory.description,
+                            tags: memory.tags,
+                            thumbnailBase64: memory.thumbnailBase64,
+                            scope: memory.scope,
+                          };
+                          
+                          roundToolResponses.push({
+                            toolCallId: callId,
+                            name,
+                            response: imageMemoryResult,
+                            extraParts: [{
+                              inlineData: {
+                                mimeType: memory.mimeType,
+                                data: base64
+                              }
+                            }],
+                            artifacts: [recallArtifact],
+                            hidden: true,
+                          });
+                          
+                          // Добавляем memory operation к сообщению
+                          setMessages(prev => prev.map(m => 
+                            m.id === targetMessageId
+                              ? { ...m, memoryOperations: [...(m.memoryOperations || []), memoryOp] }
+                              : m
+                          ));
+                          
+                          roundToolCalls.push({ 
+                            id: callId, 
+                            name, 
+                            args,
+                            thoughtSignature: parsed.thoughtSignature,
+                          });
+                          
+                          shouldContinueLoop = true;
+                          continue; // Пропускаем обычную обработку ниже
+                        }
                       }
                     } else {
                       imageMemoryResult = { success: false, error: 'Image memory not found' };
@@ -1595,7 +1636,7 @@ export default function Home() {
                   args,
                   thoughtSignature: parsed.thoughtSignature,
                 });
-                accumulatedToolResponses.push({
+                roundToolResponses.push({
                   toolCallId: callId,
                   name,
                   response: imageMemoryResult,
@@ -1650,9 +1691,13 @@ export default function Home() {
         // Flush any buffered chunks before finishing.
         flush();
 
-        // Если были memory tool calls в этом раунде — накапливаем их для следующего
-        if (roundToolCalls.length > 0) {
-          accumulatedToolCalls = [...accumulatedToolCalls, ...roundToolCalls];
+        // Если были tool calls в этом раунде — сохраняем раунд для следующей итерации
+        if (roundToolCalls.length > 0 && roundToolResponses.length > 0) {
+          completedRounds.push({
+            calls: roundToolCalls,
+            responses: roundToolResponses,
+          });
+          
           // НЕ сбрасываем текст если он уже есть — сохраняем накопленный контент
           setMessages(prev => prev.map(m => {
             if (m.id !== targetMessageId) return m;
