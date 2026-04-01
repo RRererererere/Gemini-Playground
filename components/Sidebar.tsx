@@ -10,6 +10,7 @@ import {
   Copy,
   Cpu,
   Download,
+  Edit2,
   Eye,
   EyeOff,
   FileStack,
@@ -31,8 +32,10 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, SavedSystemPrompt } from '@/types';
+import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, SavedSystemPrompt, Provider, UniversalModel, ActiveModel } from '@/types';
 import { addApiKey, removeApiKey, getKeyStatus, timeUntilUnblock, unblockKey } from '@/lib/apiKeyManager';
+import { loadProviders, saveCustomProvider, removeProvider, loadModelsCache, saveModelsCache, clearModelsCache } from '@/lib/providerStorage';
+import { ProviderModal } from './AddProviderModal';
 import {
   exportAllSettings,
   exportChats,
@@ -106,14 +109,25 @@ function SkillsSection({ onSkillsChanged }: { onSkillsChanged?: () => void }) {
 }
 
 export interface SidebarSharedProps {
-  apiKeys: ApiKeyEntry[];
-  onApiKeysChange: (keys: ApiKeyEntry[]) => void;
-  activeKeyIndex: number;
-  onActiveKeyIndexChange: (idx: number) => void;
-  model: string;
-  onModelChange: (model: string) => void;
-  models: GeminiModel[];
-  onModelsLoad: (models: GeminiModel[]) => void;
+  // Multi-provider support
+  providers: Provider[];
+  onProvidersChange: (providers: Provider[]) => void;
+  activeProviderId: string;
+  onActiveProviderChange: (id: string) => void;
+  
+  // API Keys (per provider)
+  apiKeys: Record<string, ApiKeyEntry[]>;
+  onApiKeysChange: (providerId: string, keys: ApiKeyEntry[]) => void;
+  activeKeyIndex: Record<string, number>;
+  onActiveKeyIndexChange: (providerId: string, idx: number) => void;
+  
+  // Models (unified)
+  activeModel: ActiveModel | null;
+  onActiveModelChange: (model: ActiveModel) => void;
+  allModels: UniversalModel[];
+  onModelsLoad: (providerId: string, models: UniversalModel[]) => void;
+  onRefreshModels: (providerId: string) => void;
+  
   systemPrompt: string;
   onSystemPromptChange: (prompt: string) => void;
   tools: ChatTool[];
@@ -470,14 +484,19 @@ export function ChatSidebar({
 
 
 export function SettingsSidebar({
+  providers,
+  onProvidersChange,
+  activeProviderId,
+  onActiveProviderChange,
   apiKeys,
   onApiKeysChange,
   activeKeyIndex,
   onActiveKeyIndexChange,
-  model,
-  onModelChange,
-  models,
+  activeModel,
+  onActiveModelChange,
+  allModels,
   onModelsLoad,
+  onRefreshModels,
   systemPrompt,
   onSystemPromptChange,
   tools,
@@ -505,71 +524,129 @@ export function SettingsSidebar({
   onSkillsChanged,
   onClose,
 }: SidebarSharedProps) {
-  const [loadingModels, setLoadingModels] = useState(false);
+  const [loadingModels, setLoadingModels] = useState<Record<string, boolean>>({});
   const [modelError, setModelError] = useState('');
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [openSections, setOpenSections] = useState<Set<SettingsSectionId>>(new Set<SettingsSectionId>(['keys', 'model', 'system', 'tools', 'manage']));
 
   const [newKeyInput, setNewKeyInput] = useState('');
   const [showNewKey, setShowNewKey] = useState(false);
-  const [showKeys, setShowKeys] = useState<Record<number, boolean>>({});
+  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
+  const [showAddProviderModal, setShowAddProviderModal] = useState(false);
+  const [activeProviderTab, setActiveProviderTab] = useState(activeProviderId);
 
   const [savedPrompts, setSavedPrompts] = useState<SavedSystemPrompt[]>([]);
   const [promptDropdownOpen, setPromptDropdownOpen] = useState(false);
-  const activeKeyEntry = apiKeys[activeKeyIndex];
+  const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
+  
+  const currentProviderKeys = apiKeys[activeProviderTab] || [];
+  const currentKeyIndex = activeKeyIndex[activeProviderTab] || 0;
+  const activeKeyEntry = currentProviderKeys[currentKeyIndex];
   const activeKeySuffix = activeKeyEntry?.key ? activeKeyEntry.key.slice(-4) : '';
+  const activeProvider = providers.find(p => p.id === activeProviderId);
+  const currentTabProvider = providers.find(p => p.id === activeProviderTab);
 
   const importRef = useRef<HTMLInputElement>(null);
   const importGsRef = useRef<HTMLInputElement>(null);
   const importBackupRef = useRef<HTMLInputElement>(null);
   const [importError, setImportError] = useState('');
 
-  const loadModels = useCallback(async (key: string) => {
+  const loadModels = useCallback(async (providerId: string, key: string) => {
     if (!key.trim()) return;
 
-    setLoadingModels(true);
+    setLoadingModels(prev => ({ ...prev, [providerId]: true }));
     setModelError('');
 
+    const provider = providers.find(p => p.id === providerId);
+    if (!provider) {
+      setLoadingModels(prev => ({ ...prev, [providerId]: false }));
+      return;
+    }
+
     try {
-      const res = await fetch(`/api/models?apiKey=${encodeURIComponent(key)}`);
-      const data = await res.json();
+      let res: Response;
+      let data: any;
 
-      if (!res.ok || data.error) {
-        setModelError(data.error || 'Не удалось загрузить модели');
-        onModelsLoad([]);
-        return;
-      }
+      if (provider.type === 'gemini') {
+        res = await fetch(`/api/models?apiKey=${encodeURIComponent(key)}`);
+        data = await res.json();
 
-      onModelsLoad(data.models || []);
+        if (!res.ok || data.error) {
+          setModelError(data.error || 'Не удалось загрузить модели');
+          onModelsLoad(providerId, []);
+          return;
+        }
 
-      if (!model && data.models?.length > 0) {
-        const preferred =
-          data.models.find((item: GeminiModel) => item.name.includes('gemini-2.5-flash') && !item.name.includes('lite') && !item.name.includes('audio')) ||
-          data.models.find((item: GeminiModel) => item.name.includes('gemini-2.0-flash') && !item.name.includes('lite')) ||
-          data.models[0];
+        const geminiModels: UniversalModel[] = (data.models || []).map((m: GeminiModel) => ({
+          id: m.name,
+          displayName: m.displayName,
+          providerId,
+          inputTokenLimit: m.inputTokenLimit,
+          outputTokenLimit: m.outputTokenLimit,
+          supportedGenerationMethods: m.supportedGenerationMethods,
+        }));
 
-        if (preferred) onModelChange(preferred.name);
+        onModelsLoad(providerId, geminiModels);
+
+        // Auto-select preferred model if none selected
+        if (!activeModel && geminiModels.length > 0) {
+          const preferred =
+            geminiModels.find(m => m.id.includes('gemini-2.5-flash') && !m.id.includes('lite') && !m.id.includes('audio')) ||
+            geminiModels.find(m => m.id.includes('gemini-2.0-flash') && !m.id.includes('lite')) ||
+            geminiModels[0];
+
+          if (preferred) onActiveModelChange({ providerId, modelId: preferred.id });
+        }
+      } else {
+        // OpenAI-compatible
+        res = await fetch(`/api/openai-models?apiKey=${encodeURIComponent(key)}&baseUrl=${encodeURIComponent(provider.baseUrl)}`);
+        data = await res.json();
+
+        if (!res.ok || data.error) {
+          setModelError(data.error || 'Не удалось загрузить модели');
+          onModelsLoad(providerId, []);
+          return;
+        }
+
+        const openaiModels: UniversalModel[] = (data.models || []).map((m: any) => ({
+          id: m.id,
+          displayName: m.displayName,
+          providerId,
+          inputTokenLimit: m.inputTokenLimit,
+        }));
+
+        onModelsLoad(providerId, openaiModels);
+
+        // Auto-select first model if none selected
+        if (!activeModel && openaiModels.length > 0) {
+          onActiveModelChange({ providerId, modelId: openaiModels[0].id });
+        }
       }
     } catch {
       setModelError('Ошибка сети');
     } finally {
-      setLoadingModels(false);
+      setLoadingModels(prev => ({ ...prev, [providerId]: false }));
     }
-  }, [model, onModelChange, onModelsLoad]);
+  }, [providers, activeModel, onActiveModelChange, onModelsLoad]);
 
   useEffect(() => {
     setSavedPrompts(loadSystemPrompts());
   }, []);
 
+  const loadModelsRef = useRef(loadModels);
+  useEffect(() => {
+    loadModelsRef.current = loadModels;
+  }, [loadModels]);
+
   useEffect(() => {
     if (!activeKeyEntry?.key) return;
 
     const timer = setTimeout(() => {
-      loadModels(activeKeyEntry.key);
+      loadModelsRef.current(activeProviderTab, activeKeyEntry.key);
     }, 250);
 
     return () => clearTimeout(timer);
-  }, [activeKeyEntry?.key, loadModels]);
+  }, [activeKeyEntry?.key, activeProviderTab]);
 
   const savePrompts = (prompts: SavedSystemPrompt[]) => {
     setSavedPrompts(prompts);
@@ -593,23 +670,25 @@ export function SettingsSidebar({
     const trimmed = newKeyInput.trim();
     if (!trimmed) return;
 
-    const updated = addApiKey(apiKeys, trimmed);
-    onApiKeysChange(updated);
-    onActiveKeyIndexChange(updated.length - 1);
+    const updated = addApiKey(activeProviderTab, currentProviderKeys, trimmed);
+    onApiKeysChange(activeProviderTab, updated);
+    onActiveKeyIndexChange(activeProviderTab, updated.length - 1);
     setNewKeyInput('');
     setShowNewKey(false);
   };
 
   const deleteKey = (key: string) => {
-    const updated = removeApiKey(apiKeys, key);
-    onApiKeysChange(updated);
-    if (activeKeyIndex >= updated.length) onActiveKeyIndexChange(Math.max(updated.length - 1, 0));
+    const updated = removeApiKey(currentProviderKeys, key);
+    onApiKeysChange(activeProviderTab, updated);
+    if (currentKeyIndex >= updated.length) {
+      onActiveKeyIndexChange(activeProviderTab, Math.max(updated.length - 1, 0));
+    }
   };
 
   const selectKey = (idx: number) => {
-    onActiveKeyIndexChange(idx);
-    if (apiKeys[idx]?.key) {
-      loadModels(apiKeys[idx].key);
+    onActiveKeyIndexChange(activeProviderTab, idx);
+    if (currentProviderKeys[idx]?.key) {
+      loadModels(activeProviderTab, currentProviderKeys[idx].key);
     }
   };
 
@@ -619,11 +698,18 @@ export function SettingsSidebar({
     return value.toString();
   };
 
-  const selectedModel = models.find(item => item.name === model);
-  const modelDisplayName = selectedModel?.displayName || model || 'Выбрать модель';
+  const selectedModel = activeModel ? allModels.find(m => m.id === activeModel.modelId && m.providerId === activeModel.providerId) : null;
+  const modelDisplayName = selectedModel?.displayName || activeModel?.modelId || 'Выбрать модель';
   const tempLabel = temperature < 0.4 ? 'Точно' : temperature < 0.8 ? 'Баланс' : temperature < 1.4 ? 'Творчески' : 'Хаос';
   const tempColor = temperature < 0.4 ? '#2dd4bf' : temperature < 0.8 ? '#4ade80' : temperature < 1.4 ? '#f59e0b' : '#ef4444';
   const thinkingLabel = thinkingBudget === 0 ? 'Выкл' : thinkingBudget === -1 ? 'Авто' : `${thinkingBudget} токенов`;
+  
+  // Group models by provider
+  const modelsByProvider = allModels.reduce((acc, model) => {
+    if (!acc[model.providerId]) acc[model.providerId] = [];
+    acc[model.providerId].push(model);
+    return acc;
+  }, {} as Record<string, UniversalModel[]>);
 
   const handleImportChats = async (file: File) => {
     setImportError('');
@@ -649,7 +735,7 @@ export function SettingsSidebar({
         id: result.id!,
         title: result.title!,
         messages: result.messages!,
-        model: result.model || model,
+        model: result.model || activeModel?.modelId || '',
         systemPrompt: result.systemPrompt || '',
         tools: [],
         temperature: result.temperature ?? temperature,
@@ -667,6 +753,7 @@ export function SettingsSidebar({
   };
 
   return (
+    <>
     <SidebarShell
       title="Настройки"
       subtitle="Ключи, модели, системный промпт и резервные копии вынесены в отдельную правую зону."
@@ -722,13 +809,80 @@ export function SettingsSidebar({
               <SettingsSectionHeader id="keys" label="API Ключи" icon={Key} openSections={openSections} onToggle={toggleSection} />
               {openSections.has('keys') && (
                 <div className="space-y-3 px-4 pb-4">
-                  {apiKeys.map((entry, idx) => {
-                    const status = getKeyStatus(entry, model);
-                    const isActive = idx === activeKeyIndex;
+                  {/* Provider tabs */}
+                  <div className="flex items-center gap-1 overflow-x-auto pb-1">
+                    {providers.map(provider => {
+                      const isActive = provider.id === activeProviderTab;
+                      const providerKeys = apiKeys[provider.id] || [];
+                      
+                      return (
+                        <div key={provider.id} className={`group relative flex-shrink-0 flex items-center rounded-xl transition-all ${
+                          isActive ? 'bg-white/10' : ''
+                        }`}>
+                          <button
+                            onClick={() => setActiveProviderTab(provider.id)}
+                            className={`rounded-xl px-3 py-2 text-xs font-medium transition-all ${
+                              isActive
+                                ? 'text-white'
+                                : 'text-[var(--text-dim)] hover:text-[var(--text-muted)]'
+                            }`}
+                          >
+                            {provider.name}
+                            {providerKeys.length > 0 && (
+                              <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[9px] ${
+                                isActive ? 'bg-white/20' : 'bg-[var(--surface-3)]'
+                              }`}>
+                                {providerKeys.length}
+                              </span>
+                            )}
+                          </button>
+                          {/* Edit / Delete — только для кастомных провайдеров */}
+                          {!provider.isBuiltin && isActive && (
+                            <div className="flex items-center gap-0.5 pr-1">
+                              <button
+                                onClick={e => { e.stopPropagation(); setEditingProvider(provider); }}
+                                className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors"
+                                title="Редактировать провайдер"
+                              >
+                                <Edit2 size={10} />
+                              </button>
+                              <button
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  if (!confirm(`Удалить провайдер «${provider.name}»? Все его ключи тоже будут удалены.`)) return;
+                                  // Switch tab before delete
+                                  setActiveProviderTab('google');
+                                  onActiveProviderChange('google');
+                                  onProvidersChange(providers.filter(p => p.id !== provider.id));
+                                }}
+                                className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-dim)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                                title="Удалить провайдер"
+                              >
+                                <Trash2 size={10} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    <button
+                      onClick={() => setShowAddProviderModal(true)}
+                      className="flex-shrink-0 rounded-xl border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--text-dim)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+                      title="Добавить провайдер"
+                    >
+                      <Plus size={12} />
+                    </button>
+                  </div>
+
+                  {/* Keys for active provider */}
+                  {currentProviderKeys.map((entry, idx) => {
+                    const status = getKeyStatus(entry, activeModel?.modelId);
+                    const isActive = idx === currentKeyIndex;
+                    const keyId = `${entry.key}-${idx}`;
 
                     return (
                       <button
-                        key={`${entry.key}-${idx}`}
+                        key={keyId}
                         onClick={() => selectKey(idx)}
                         className={`group flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all ${
                           isActive
@@ -743,12 +897,12 @@ export function SettingsSidebar({
                         <div className="min-w-0 flex-1">
                           {entry.label && <p className="mb-0.5 text-[10px] text-[var(--text-muted)]">{entry.label}</p>}
                           <p className="truncate font-mono text-xs text-[var(--text-dim)]">
-                            {showKeys[idx] ? entry.key : `${entry.key.slice(0, 8)}••••••••${entry.key.slice(-4)}`}
+                            {showKeys[keyId] ? entry.key : `${entry.key.slice(0, 8)}••••••••${entry.key.slice(-4)}`}
                           </p>
                           {status !== 'active' && (
                             <p className="mt-1 flex items-center gap-1 text-[10px] text-[var(--gem-red)]">
                               <Clock size={8} />
-                              Разблокируется через {timeUntilUnblock(entry, model)}
+                              Разблокируется через {timeUntilUnblock(entry, activeModel?.modelId)}
                             </p>
                           )}
                           <p className={`mt-1 text-[10px] ${isActive ? 'text-emerald-200/85' : 'text-[var(--text-muted)]'}`}>
@@ -761,8 +915,8 @@ export function SettingsSidebar({
                             <button
                               onClick={event => {
                                 event.stopPropagation();
-                                const updated = unblockKey(apiKeys, idx, model);
-                                onApiKeysChange(updated);
+                                const updated = unblockKey(currentProviderKeys, idx, activeModel?.modelId);
+                                onApiKeysChange(activeProviderTab, updated);
                               }}
                               className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:text-[var(--text-primary)]"
                               title="Разблокировать ключ"
@@ -773,12 +927,12 @@ export function SettingsSidebar({
                           <button
                             onClick={event => {
                               event.stopPropagation();
-                              setShowKeys(prev => ({ ...prev, [idx]: !prev[idx] }));
+                              setShowKeys(prev => ({ ...prev, [keyId]: !prev[keyId] }));
                             }}
                             className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:text-[var(--text-primary)]"
                             title="Показать ключ"
                           >
-                            {showKeys[idx] ? <EyeOff size={12} /> : <Eye size={12} />}
+                            {showKeys[keyId] ? <EyeOff size={12} /> : <Eye size={12} />}
                           </button>
                           <button
                             onClick={event => {
@@ -808,7 +962,7 @@ export function SettingsSidebar({
                             setNewKeyInput('');
                           }
                         }}
-                        placeholder="AIza..."
+                        placeholder={currentTabProvider?.type === 'gemini' ? 'AIza...' : 'sk-...'}
                         autoFocus
                         className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-3)] px-3 py-2 text-xs font-mono text-[var(--text-primary)] placeholder:text-[var(--text-dim)]"
                       />
@@ -837,7 +991,7 @@ export function SettingsSidebar({
                     </button>
                   )}
 
-                  {apiKeys.length === 0 && (
+                  {currentProviderKeys.length === 0 && currentTabProvider?.type === 'gemini' && (
                     <p className="text-xs leading-relaxed text-[var(--text-dim)]">
                       Ключи можно получить на{' '}
                       <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-[var(--gem-blue)] hover:underline">
@@ -847,7 +1001,7 @@ export function SettingsSidebar({
                     </p>
                   )}
 
-                  {apiKeys.length > 0 && activeKeySuffix && (
+                  {currentProviderKeys.length > 0 && activeKeySuffix && (
                     <p className="text-[11px] text-[var(--text-dim)]">
                       Активный ключ: <span className="font-mono text-emerald-200/90">••••{activeKeySuffix}</span>
                     </p>
@@ -870,55 +1024,66 @@ export function SettingsSidebar({
                   <div className="relative">
                     <div className="mb-2 flex items-center justify-between">
                       <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)]">Выбранная модель</span>
-                      {apiKeys.length > 0 && (
+                      {currentProviderKeys.length > 0 && (
                         <button
-                          onClick={() => {
-                            if (activeKeyEntry?.key) loadModels(activeKeyEntry.key);
-                          }}
-                          disabled={loadingModels}
+                          onClick={() => onRefreshModels(activeProviderId)}
+                          disabled={loadingModels[activeProviderId]}
                           className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-dim)] transition-colors hover:bg-white/5 hover:text-[var(--text-primary)]"
                           title="Обновить модели"
                         >
-                          <RefreshCw size={12} className={loadingModels ? 'animate-spin' : ''} />
+                          <RefreshCw size={12} className={loadingModels[activeProviderId] ? 'animate-spin' : ''} />
                         </button>
                       )}
                     </div>
 
                     <button
                       onClick={() => setModelDropdownOpen(prev => !prev)}
-                      disabled={models.length === 0}
+                      disabled={allModels.length === 0}
                       className="flex w-full items-center justify-between rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-left transition-colors hover:border-[var(--border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <span className={`${model ? 'text-[var(--text-primary)]' : 'text-[var(--text-dim)]'} truncate text-sm`}>
-                        {loadingModels ? 'Загрузка...' : modelDisplayName.replace('Gemini ', '').replace(' (Preview)', '').trim()}
+                      <span className={`${activeModel ? 'text-[var(--text-primary)]' : 'text-[var(--text-dim)]'} truncate text-sm`}>
+                        {loadingModels[activeProviderId] ? 'Загрузка...' : modelDisplayName.replace('Gemini ', '').replace(' (Preview)', '').trim()}
                       </span>
                       <ChevronDown size={14} className={`ml-2 flex-shrink-0 text-[var(--text-dim)] transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} />
                     </button>
 
-                    {modelDropdownOpen && models.length > 0 && (
+                    {modelDropdownOpen && allModels.length > 0 && (
                       <div className="absolute inset-x-0 top-full z-50 mt-2 max-h-64 overflow-y-auto rounded-2xl border border-[var(--border-strong)] bg-[var(--surface-2)] p-2 shadow-2xl">
-                        {models.map(item => {
-                          const isSelected = item.name === model;
-                          const isNew = item.name.includes('3') || item.name.includes('2.5');
-                          const modelId = item.name.split('/')[1];
+                        {providers.map(provider => {
+                          const providerModels = modelsByProvider[provider.id] || [];
+                          if (providerModels.length === 0) return null;
 
                           return (
-                            <button
-                              key={item.name}
-                              onClick={() => {
-                                onModelChange(item.name);
-                                setModelDropdownOpen(false);
-                              }}
-                              className={`mb-1 flex w-full flex-col rounded-xl px-3 py-2 text-left transition-colors last:mb-0 ${
-                                isSelected ? 'bg-white/10 text-white' : 'text-[var(--text-primary)] hover:bg-white/[0.06]'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="truncate text-[13px] font-medium">{item.displayName || modelId}</span>
-                                {isNew && <span className="rounded-full bg-white px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.18em] text-black">New</span>}
+                            <div key={provider.id} className="mb-2 last:mb-0">
+                              <div className="px-3 py-1.5 text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)]">
+                                {provider.name}
                               </div>
-                              <span className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-dim)]">{modelId}</span>
-                            </button>
+                              {providerModels.map(item => {
+                                const isSelected = activeModel?.modelId === item.id && activeModel?.providerId === item.providerId;
+                                const isNew = item.id.includes('3') || item.id.includes('2.5');
+                                const modelId = item.id.split('/').pop() || item.id;
+
+                                return (
+                                  <button
+                                    key={item.id}
+                                    onClick={() => {
+                                      onActiveModelChange({ providerId: item.providerId, modelId: item.id });
+                                      onActiveProviderChange(item.providerId);
+                                      setModelDropdownOpen(false);
+                                    }}
+                                    className={`mb-1 flex w-full flex-col rounded-xl px-3 py-2 text-left transition-colors last:mb-0 ${
+                                      isSelected ? 'bg-white/10 text-white' : 'text-[var(--text-primary)] hover:bg-white/[0.06]'
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="truncate text-[13px] font-medium">{item.displayName || modelId}</span>
+                                      {isNew && <span className="rounded-full bg-white px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.18em] text-black">New</span>}
+                                    </div>
+                                    <span className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-dim)]">{modelId}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
                           );
                         })}
                       </div>
@@ -950,38 +1115,40 @@ export function SettingsSidebar({
                     </div>
                   </div>
 
-                  <div>
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-[var(--text-dim)]">
-                        <Brain size={12} />
-                        <span className="text-[10px] uppercase tracking-[0.16em]">Размышления</span>
+                  {activeProvider?.type === 'gemini' && (
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-[var(--text-dim)]">
+                          <Brain size={12} />
+                          <span className="text-[10px] uppercase tracking-[0.16em]">Размышления</span>
+                        </div>
+                        <span className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-mono text-[var(--text-primary)]">{thinkingLabel}</span>
                       </div>
-                      <span className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-mono text-[var(--text-primary)]">{thinkingLabel}</span>
-                    </div>
 
-                    <div className="mb-2 grid grid-cols-4 gap-1.5">
-                      {[
-                        { label: 'Выкл', value: 0 },
-                        { label: 'Авто', value: -1 },
-                        { label: 'Мало', value: 512 },
-                        { label: 'Много', value: 8192 },
-                      ].map(option => (
-                        <button
-                          key={option.label}
-                          onClick={() => onThinkingBudgetChange(option.value)}
-                          className={`rounded-xl border px-2 py-2 text-[10px] transition-all ${
-                            thinkingBudget === option.value ? 'border-white bg-white text-black' : 'border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-dim)] hover:text-[var(--text-primary)]'
-                          }`}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
+                      <div className="mb-2 grid grid-cols-4 gap-1.5">
+                        {[
+                          { label: 'Выкл', value: 0 },
+                          { label: 'Авто', value: -1 },
+                          { label: 'Мало', value: 512 },
+                          { label: 'Много', value: 8192 },
+                        ].map(option => (
+                          <button
+                            key={option.label}
+                            onClick={() => onThinkingBudgetChange(option.value)}
+                            className={`rounded-xl border px-2 py-2 text-[10px] transition-all ${
+                              thinkingBudget === option.value ? 'border-white bg-white text-black' : 'border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-dim)] hover:text-[var(--text-primary)]'
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
 
-                    {thinkingBudget > 0 && (
-                      <input type="range" min="128" max="32768" step="128" value={thinkingBudget} onChange={event => onThinkingBudgetChange(parseInt(event.target.value, 10))} />
-                    )}
-                  </div>
+                      {thinkingBudget > 0 && (
+                        <input type="range" min="128" max="32768" step="128" value={thinkingBudget} onChange={event => onThinkingBudgetChange(parseInt(event.target.value, 10))} />
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </section>
@@ -1310,5 +1477,26 @@ export function SettingsSidebar({
       </div>
 
     </SidebarShell>
+    {showAddProviderModal && (
+      <ProviderModal
+        onClose={() => setShowAddProviderModal(false)}
+        onSave={(provider) => {
+          onProvidersChange([...providers, provider]);
+          setActiveProviderTab(provider.id);
+          setShowAddProviderModal(false);
+        }}
+      />
+    )}
+    {editingProvider && (
+      <ProviderModal
+        existingProvider={editingProvider}
+        onClose={() => setEditingProvider(null)}
+        onSave={(updated) => {
+          onProvidersChange(providers.map(p => p.id === updated.id ? updated : p));
+          setEditingProvider(null);
+        }}
+      />
+    )}
+    </>
   );
 }

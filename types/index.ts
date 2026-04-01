@@ -261,10 +261,49 @@ export interface SavedSystemPrompt {
   updatedAt: number;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Multi-Provider Support Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Провайдер — Google AI или любой OpenAI-compatible эндпоинт
+export interface Provider {
+  id: string;            // 'google' (builtin) | crypto.randomUUID() (custom)
+  name: string;          // 'Google AI' | 'OpenRouter' | 'Ollama'
+  type: 'gemini' | 'openai';
+  baseUrl: string;       // для openai: 'https://openrouter.ai/api/v1'
+  isBuiltin: boolean;    // true только для Google AI
+  createdAt: number;
+}
+
+// Кэш моделей провайдера — в localStorage
+export interface ProviderModelsCache {
+  providerId: string;
+  models: UniversalModel[];
+  fetchedAt: number;
+}
+
+// Унифицированная модель — работает для обоих типов провайдеров
+export interface UniversalModel {
+  id: string;            // 'models/gemini-2.5-flash' или 'gpt-4o'
+  displayName: string;
+  providerId: string;
+  inputTokenLimit?: number;
+  outputTokenLimit?: number;
+  // только для gemini:
+  supportedGenerationMethods?: string[];
+}
+
+// Текущий выбор модели — теперь с провайдером
+export interface ActiveModel {
+  providerId: string;
+  modelId: string;       // полный ID модели
+}
+
 // API ключ с метаданными для циркуляции
 export interface ApiKeyEntry {
   key: string;
   label?: string;
+  providerId: string;    // НОВОЕ: к какому провайдеру относится ключ
   // Legacy global block (older versions). Still respected for safety, but UI can clear it.
   blockedUntil?: number; // timestamp when key becomes available again (global)
   // Per-model blocking (preferred). Map: modelName -> blockedUntil timestamp

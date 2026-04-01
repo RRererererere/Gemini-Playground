@@ -6,6 +6,7 @@ export interface ArenaAgent {
   emoji: string;
   color: string;          // hex: '#6366f1'
   model: string;
+  providerId: string;
   apiKey: string;         // '' = из глобального пула
   systemPrompt: string;
   temperature: number;
@@ -64,6 +65,7 @@ export function createDefaultAgent(index: number): ArenaAgent {
     emoji: def.emoji,
     color: AGENT_COLORS[index % AGENT_COLORS.length],
     model: '',  // будет подставлена глобальная модель
+    providerId: 'google',
     apiKey: '',
     systemPrompt: def.prompt,
     temperature: 0.8,

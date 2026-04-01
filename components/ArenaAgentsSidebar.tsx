@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { ChevronLeft, ChevronDown, Download, Plus, Trash2, X, Zap } from 'lucide-react';
 import type { ArenaAgent, ArenaSession } from '@/lib/arena-types';
 import { AGENT_EMOJIS, AGENT_COLORS } from '@/lib/arena-types';
-import type { GeminiModel, ApiKeyEntry, SavedChat } from '@/types';
+import type { UniversalModel, ApiKeyEntry, SavedChat, Provider } from '@/types';
 
 function getApiKeySuffix(key?: string) {
   if (!key) return '—';
@@ -13,8 +13,9 @@ function getApiKeySuffix(key?: string) {
 
 interface ArenaAgentsSidebarProps {
   session: ArenaSession | null;
-  models: GeminiModel[];
-  globalApiKeys: ApiKeyEntry[];
+  models: UniversalModel[];
+  providers: Provider[];
+  globalApiKeys: Record<string, ApiKeyEntry[]>;
   savedChats: SavedChat[];
   onUpdateAgent: (agent: ArenaAgent) => void;
   onAddAgent: () => void;
@@ -30,13 +31,15 @@ interface ArenaAgentsSidebarProps {
 function AgentCard({
   agent,
   models,
+  providers,
   globalApiKeys,
   onUpdate,
   onRemove,
 }: {
   agent: ArenaAgent;
-  models: GeminiModel[];
-  globalApiKeys: ApiKeyEntry[];
+  models: UniversalModel[];
+  providers: Provider[];
+  globalApiKeys: Record<string, ApiKeyEntry[]>;
   onUpdate: (a: ArenaAgent) => void;
   onRemove: () => void;
 }) {
@@ -63,10 +66,12 @@ function AgentCard({
     setShowEmojiPicker(false);
   };
 
+  const providerPool = globalApiKeys[agent.providerId || 'google'] || [];
+
   // Resolve which key is used for display
   const resolvedKeyLabel = agent.apiKey
     ? `Свой ${getApiKeySuffix(agent.apiKey)}`
-    : (globalApiKeys.length > 0 ? `Пул ${getApiKeySuffix(globalApiKeys[0]?.key)}` : 'Нет ключа');
+    : (providerPool.length > 0 ? `Пул ${getApiKeySuffix(providerPool[0]?.key)}` : 'Нет ключа');
 
   if (!expanded) {
     return (
@@ -166,6 +171,20 @@ function AgentCard({
           </div>
         </div>
 
+        {/* Provider */}
+        <div>
+          <label className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)] mb-1.5 block">Провайдер</label>
+          <select
+            value={draft.providerId || 'google'}
+            onChange={e => setDraft({ ...draft, providerId: e.target.value, model: '', apiKey: '' })}
+            className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-3)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--border-strong)] focus:outline-none"
+          >
+            {providers.map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </div>
+
         {/* Model */}
         <div>
           <label className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)] mb-1.5 block">Модель</label>
@@ -175,9 +194,9 @@ function AgentCard({
             className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-3)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--border-strong)] focus:outline-none"
           >
             <option value="">— Выберите модель —</option>
-            {models.map(m => (
-              <option key={m.name} value={m.name}>
-                {m.displayName || m.name.replace('models/', '')}
+            {models.filter(m => m.providerId === (draft.providerId || 'google')).map(m => (
+              <option key={m.id} value={m.id}>
+                {m.displayName || m.id.replace('models/', '')}
               </option>
             ))}
           </select>
@@ -191,18 +210,18 @@ function AgentCard({
             onChange={e => setDraft({ ...draft, apiKey: e.target.value })}
             className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-3)] px-3 py-2 text-sm text-[var(--text-primary)] focus:border-[var(--border-strong)] focus:outline-none"
           >
-            {/* Global pool keys */}
-            {globalApiKeys.filter(k => k.key).map((k, i) => (
+            <option value="">
+              {(globalApiKeys[draft.providerId || 'google'] || []).find(k => k.key) ? 'Из пула провайдера' : 'Нет ключей для провайдера'}
+            </option>
+            {/* Global pool keys for this provider */}
+            {(globalApiKeys[draft.providerId || 'google'] || []).filter(k => k.key).map((k, i) => (
               <option key={`global-${i}`} value={k.key}>
                 🔑 Ключ {i + 1} — {getApiKeySuffix(k.key)}{k.label ? ` (${k.label})` : ''}
               </option>
             ))}
-            {globalApiKeys.filter(k => k.key).length === 0 && (
-              <option value="" disabled>Нет ключей — добавьте в настройках</option>
-            )}
           </select>
           <p className="mt-1 text-[9px] text-[var(--text-dim)]">
-            Выберите один из глобальных ключей для этого агента
+            По умолчанию используется ключ из пула провайдера
           </p>
         </div>
 
@@ -291,6 +310,7 @@ function AgentCard({
 export default function ArenaAgentsSidebar({
   session,
   models,
+  providers,
   globalApiKeys,
   savedChats,
   onUpdateAgent,
@@ -398,6 +418,7 @@ export default function ArenaAgentsSidebar({
                 key={agent.id}
                 agent={agent}
                 models={models}
+                providers={providers}
                 globalApiKeys={globalApiKeys}
                 onUpdate={onUpdateAgent}
                 onRemove={() => onRemoveAgent(agent.id)}

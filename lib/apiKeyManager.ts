@@ -1,7 +1,15 @@
 import type { ApiKeyEntry } from '@/types';
 
-const STORAGE_KEY = 'gemini_api_keys';
 const BLOCK_DURATION_MS = 10 * 60 * 60 * 1000; // 10 часов
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Storage Key Helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getStorageKey(providerId: string): string {
+  // ОБРАТНАЯ СОВМЕСТИМОСТЬ — старый ключ для Google
+  return providerId === 'google' ? 'gemini_api_keys' : `oai_${providerId}_keys`;
+}
 
 function isBlockedForModel(entry: ApiKeyEntry, model: string | undefined, now: number): boolean {
   // Legacy global block
@@ -12,10 +20,10 @@ function isBlockedForModel(entry: ApiKeyEntry, model: string | undefined, now: n
 }
 
 // Загрузить ключи из localStorage
-export function loadApiKeys(): ApiKeyEntry[] {
+export function loadApiKeys(providerId: string): ApiKeyEntry[] {
   if (typeof window === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(getStorageKey(providerId));
     if (!raw) return [];
     return JSON.parse(raw) as ApiKeyEntry[];
   } catch {
@@ -24,13 +32,13 @@ export function loadApiKeys(): ApiKeyEntry[] {
 }
 
 // Сохранить ключи в localStorage
-export function saveApiKeys(keys: ApiKeyEntry[]): void {
+export function saveApiKeys(providerId: string, keys: ApiKeyEntry[]): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(keys));
+  localStorage.setItem(getStorageKey(providerId), JSON.stringify(keys));
 }
 
 // Добавить новый ключ
-export function addApiKey(keys: ApiKeyEntry[], rawKey: string, label?: string): ApiKeyEntry[] {
+export function addApiKey(providerId: string, keys: ApiKeyEntry[], rawKey: string, label?: string): ApiKeyEntry[] {
   const key = rawKey.trim();
   if (!key) return keys;
   // Не добавлять дублирующийся
@@ -38,6 +46,7 @@ export function addApiKey(keys: ApiKeyEntry[], rawKey: string, label?: string): 
   const newEntry: ApiKeyEntry = {
     key,
     label: label || '',
+    providerId,
     errorCount: 0,
   };
   return [...keys, newEntry];
@@ -198,4 +207,35 @@ export function isInvalidKeyError(message: string): boolean {
     (has401 && hasKeyword) ||
     (has403 && lower.includes('key'))
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Migration Helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Миграция старых ключей без providerId → добавить providerId: 'google'
+export function migrateOldApiKeys(): void {
+  if (typeof window === 'undefined') return;
+  
+  try {
+    const raw = localStorage.getItem('gemini_api_keys');
+    if (!raw) return;
+    
+    const keys = JSON.parse(raw) as ApiKeyEntry[];
+    let needsMigration = false;
+    
+    const migrated = keys.map(k => {
+      if (!k.providerId) {
+        needsMigration = true;
+        return { ...k, providerId: 'google' };
+      }
+      return k;
+    });
+    
+    if (needsMigration) {
+      localStorage.setItem('gemini_api_keys', JSON.stringify(migrated));
+    }
+  } catch {
+    // ignore migration errors
+  }
 }

@@ -1,4 +1,4 @@
-import type { Message, Part, ApiKeyEntry } from '@/types';
+import type { Message, Part, ApiKeyEntry, Provider } from '@/types';
 import type { ArenaAgent, ArenaSession } from './arena-types';
 import { buildAgentHistory } from './arena-history';
 import { buildChatRequestMessages } from './gemini';
@@ -35,22 +35,32 @@ export async function streamArenaAgent(params: {
   agent: ArenaAgent;
   session: ArenaSession;
   messages: Message[];
-  globalApiKeys: ApiKeyEntry[];
+  globalApiKeys: Record<string, ApiKeyEntry[]>;
+  providers: Provider[];
   targetMessageId: string;
   onChunk: (text: string) => void;
   onDone: (parts: Part[]) => void;
   onError: (error: string, type?: string) => void;
   signal?: AbortSignal;
 }): Promise<void> {
-  const { agent, session, messages, globalApiKeys, targetMessageId, onChunk, onDone, onError, signal } = params;
+  const { agent, session, messages, globalApiKeys, providers, targetMessageId, onChunk, onDone, onError, signal } = params;
+
+  // Провайдер агента
+  const providerId = agent.providerId || 'google';
+  const provider = providers.find(p => p.id === providerId);
+  if (!provider) {
+    onError('Провайдер не найден');
+    return;
+  }
 
   // Определяем API ключ
   let apiKey = agent.apiKey;
   if (!apiKey) {
-    // Используем первый доступный из глобального пула
-    const available = globalApiKeys.find(k => k.key);
+    // Используем первый доступный из глобального пула для этого провайдера
+    const pool = globalApiKeys[providerId] || [];
+    const available = pool.find(k => k.key);
     if (!available) {
-      onError('Нет доступного API ключа. Добавьте ключ в настройках или укажите у агента.', 'invalid_key');
+      onError(`Нет доступного ключа для ${provider.name}. Добавьте в настройках.`, 'invalid_key');
       return;
     }
     apiKey = available.key;
@@ -71,22 +81,29 @@ export async function streamArenaAgent(params: {
   const contentsForRequest = buildChatRequestMessages(agentHistory);
 
   try {
-    const response = await fetch('/api/chat', {
+    const endpoint = provider.type === 'openai' ? '/api/openai-chat' : '/api/chat';
+    const requestBody: any = {
+      messages: contentsForRequest,
+      model: modelName,
+      systemInstruction: systemPrompt,
+      tools: [],
+      memoryTools: [],
+      temperature: agent.temperature,
+      apiKey,
+      maxOutputTokens: agent.maxOutputTokens,
+      includeThoughts: false,
+    };
+    if (provider.type === 'openai') {
+      requestBody.baseUrl = provider.baseUrl;
+    } else {
+      requestBody.thinkingBudget = 0;
+    }
+
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal,
-      body: JSON.stringify({
-        messages: contentsForRequest,
-        model: modelName,
-        systemInstruction: systemPrompt,
-        tools: [],
-        memoryTools: [],
-        temperature: agent.temperature,
-        apiKey,
-        thinkingBudget: 0,       // Отключено для Arena
-        maxOutputTokens: agent.maxOutputTokens,
-        includeThoughts: false,   // Отключено для Arena
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {

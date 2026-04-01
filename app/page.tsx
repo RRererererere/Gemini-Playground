@@ -24,10 +24,13 @@ import AgentMessageHeader from '@/components/AgentMessageHeader';
 import ArenaInputBar from '@/components/ArenaInputBar';
 import ArenaAgentsSidebar from '@/components/ArenaAgentsSidebar';
 import { useArena } from '@/lib/useArena';
-import type { ChatTool, Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis, ToolResponse, SavedSystemPrompt, SkillArtifact, CanvasElement, WebsiteType, OpenFile, FileDiffOp } from '@/types';
+import type { ChatTool, Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis, ToolResponse, SavedSystemPrompt, SkillArtifact, CanvasElement, WebsiteType, OpenFile, FileDiffOp, Provider, UniversalModel, ActiveModel } from '@/types';
 import {
-  loadApiKeys, saveApiKeys, isRateLimitError,
+  loadApiKeys, saveApiKeys, isRateLimitError, addApiKey, removeApiKey, getNextAvailableKey, markKeyBlocked, markKeyUsed, unblockExpiredKeys, migrateOldApiKeys,
 } from '@/lib/apiKeyManager';
+import {
+  loadProviders, saveCustomProvider, removeProvider, loadModelsCache, saveModelsCache, getActiveProviderId, setActiveProviderId, getActiveModel, setActiveModel, migrateOldModelSelection, GOOGLE_PROVIDER,
+} from '@/lib/providerStorage';
 import {
   loadSavedChats, saveChatToStorage, deleteChatFromStorage,
   getActiveChatId, setActiveChatId,
@@ -93,11 +96,19 @@ function getApiKeySuffix(key?: string | null): string {
 }
 
 function sanitizeApiKeys(keys: ApiKeyEntry[]): ApiKeyEntry[] {
-  return keys.map(({ blockedUntil: _blockedUntil, blockedByModel: _blockedByModel, ...entry }) => ({
-    ...entry,
-    blockedUntil: undefined,
-    blockedByModel: undefined,
-  }));
+  const now = Date.now();
+  return keys.map(k => {
+    const next: ApiKeyEntry = { ...k };
+    if (next.blockedUntil && next.blockedUntil <= now) next.blockedUntil = undefined;
+    if (next.blockedByModel) {
+      const cleaned: Record<string, number> = {};
+      for (const [m, until] of Object.entries(next.blockedByModel)) {
+        if (typeof until === 'number' && until > now) cleaned[m] = until;
+      }
+      next.blockedByModel = Object.keys(cleaned).length ? cleaned : undefined;
+    }
+    return next;
+  });
 }
 
 function generateChatTitle(messages: Message[]): string {
@@ -131,13 +142,25 @@ ${analysis.futureStrategy ? `План на будущее: ${analysis.futureStra
 }
 
 export default function Home() {
-  // API Keys (multiple)
-  const [apiKeys, setApiKeys] = useState<ApiKeyEntry[]>([]);
-  const [activeKeyIndex, setActiveKeyIndex] = useState(0);
+  // Multi-provider support
+  const [providers, setProviders] = useState<Provider[]>([GOOGLE_PROVIDER]);
+  const [activeProviderId, setActiveProviderIdState] = useState('google');
+  
+  // API Keys (per provider)
+  const [apiKeys, setApiKeys] = useState<Record<string, ApiKeyEntry[]>>({});
+  const [activeKeyIndex, setActiveKeyIndex] = useState<Record<string, number>>({});
 
-  // Model
-  const [model, setModel] = useState<string>('');
-  const [models, setModels] = useState<GeminiModel[]>([]);
+  // Models (unified)
+  const [activeModel, setActiveModelState] = useState<ActiveModel | null>(null);
+  const [allModels, setAllModels] = useState<UniversalModel[]>([]);
+
+  // Legacy compatibility helpers
+  const model = activeModel?.modelId || '';
+  const models = allModels.filter(m => m.providerId === activeProviderId);
+  // Берём ключи из провайдера ВЫБРАННОЙ модели, а не из активного таба сайдбара
+  const effectiveProviderId = activeModel?.providerId || activeProviderId;
+  const currentProviderKeys = apiKeys[effectiveProviderId] || [];
+  const currentKeyIndex = activeKeyIndex[effectiveProviderId] || 0;
 
   // Arena mode — start 'chat' to match SSR, restore in useEffect
   const [appMode, setAppMode] = useState<'chat' | 'arena'>('chat');
@@ -227,12 +250,13 @@ export default function Home() {
   const messagesRef = useRef<Message[]>([]); // Keep latest messages to avoid stale closure
 
   const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze, abort: abortDeepThink } = useDeepThink();
-  const selectedApiKeyEntry = apiKeys[activeKeyIndex] || null;
+  const selectedApiKeyEntry = currentProviderKeys[currentKeyIndex] || null;
   const selectedApiKey = selectedApiKeyEntry?.key || '';
   const selectedApiKeySuffix = getApiKeySuffix(selectedApiKeyEntry?.key);
+  const activeProvider = providers.find(p => p.id === (activeModel?.providerId || activeProviderId));
 
   // Arena hook
-  const arena = useArena(apiKeys, models, model);
+  const arena = useArena(apiKeys, providers, activeModel, allModels);
 
   // Restore & persist appMode
   useEffect(() => {
@@ -276,15 +300,54 @@ export default function Home() {
   // Load from localStorage
   useEffect(() => {
     const loadData = async () => {
-      const keys = sanitizeApiKeys(loadApiKeys());
-      setApiKeys(keys);
-      saveApiKeys(keys);
-      const savedActiveKeyIndex = parseInt(localStorage.getItem(ACTIVE_API_KEY_INDEX_STORAGE_KEY) || '0', 10);
-      if (keys.length > 0 && Number.isFinite(savedActiveKeyIndex)) {
-        setActiveKeyIndex(Math.min(Math.max(savedActiveKeyIndex, 0), keys.length - 1));
+      // Миграция старых данных
+      migrateOldApiKeys();
+      migrateOldModelSelection();
+      
+      // Load providers
+      const loadedProviders = loadProviders();
+      setProviders(loadedProviders);
+      
+      // Load active provider
+      const savedActiveProviderId = getActiveProviderId();
+      setActiveProviderIdState(savedActiveProviderId);
+      
+      // Load API keys per provider
+      const keysMap: Record<string, ApiKeyEntry[]> = {};
+      const keyIndexMap: Record<string, number> = {};
+      
+      for (const provider of loadedProviders) {
+        const providerKeys = sanitizeApiKeys(loadApiKeys(provider.id));
+        keysMap[provider.id] = providerKeys;
+        saveApiKeys(provider.id, providerKeys);
+        
+        const savedIndex = parseInt(localStorage.getItem(`${provider.id}_active_key_index`) || '0', 10);
+        if (providerKeys.length > 0 && Number.isFinite(savedIndex)) {
+          keyIndexMap[provider.id] = Math.min(Math.max(savedIndex, 0), providerKeys.length - 1);
+        } else {
+          keyIndexMap[provider.id] = 0;
+        }
+      }
+      
+      setApiKeys(keysMap);
+      setActiveKeyIndex(keyIndexMap);
+      
+      // Load models cache
+      const modelsMap: UniversalModel[] = [];
+      for (const provider of loadedProviders) {
+        const cache = loadModelsCache(provider.id);
+        if (cache && cache.models) {
+          modelsMap.push(...cache.models);
+        }
+      }
+      setAllModels(modelsMap);
+      
+      // Load active model
+      const savedActiveModel = getActiveModel();
+      if (savedActiveModel) {
+        setActiveModelState(savedActiveModel);
       }
 
-      const savedModel = localStorage.getItem('gemini_model');
       const savedSysPrompt = localStorage.getItem('gemini_sys_prompt');
       const savedTemp = localStorage.getItem('gemini_temperature');
       const savedLegacySidebar = localStorage.getItem('gemini_sidebar');
@@ -295,7 +358,6 @@ export default function Home() {
       const savedDeepThinkPrompt = loadDeepThinkSystemPrompt();
       const mobileViewport = window.matchMedia('(max-width: 767px)').matches;
 
-      if (savedModel) setModel(savedModel);
       if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
       if (savedTemp) setTemperature(parseFloat(savedTemp));
       setDeepThinkSystemPrompt(savedDeepThinkPrompt || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
@@ -317,7 +379,10 @@ export default function Home() {
           setMessages(chat.messages);
           setCurrentChatId(chat.id);
           setChatTitle(chat.title);
-          setModel(chat.model || savedModel || '');
+          // Restore model from chat (legacy format)
+          if (chat.model && savedActiveModel) {
+            setActiveModelState({ providerId: savedActiveProviderId, modelId: chat.model });
+          }
           setSystemPrompt(chat.systemPrompt || savedSysPrompt || '');
           setDeepThinkSystemPrompt(chat.deepThinkSystemPrompt || savedDeepThinkPrompt || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
           setTools(chat.tools || []);
@@ -340,25 +405,29 @@ export default function Home() {
   }, [showDeepThinkDialog, deepThinkSystemPrompt]);
 
   // Persist simple settings
-  useEffect(() => { if (model) localStorage.setItem('gemini_model', model); }, [model]);
+  useEffect(() => { 
+    if (activeModel) {
+      setActiveModel(activeModel);
+      localStorage.setItem('gemini_model', activeModel.modelId); // legacy
+    }
+  }, [activeModel]);
+  useEffect(() => { 
+    setActiveProviderId(activeProviderId);
+  }, [activeProviderId]);
   useEffect(() => { localStorage.setItem('gemini_sys_prompt', systemPrompt); }, [systemPrompt]);
   useEffect(() => { localStorage.setItem('gemini_temperature', temperature.toString()); }, [temperature]);
-  useEffect(() => { localStorage.setItem(ACTIVE_API_KEY_INDEX_STORAGE_KEY, activeKeyIndex.toString()); }, [activeKeyIndex]);
+  useEffect(() => { 
+    // Persist per-provider active key index
+    Object.entries(activeKeyIndex).forEach(([providerId, idx]) => {
+      localStorage.setItem(`${providerId}_active_key_index`, idx.toString());
+    });
+  }, [activeKeyIndex]);
   useEffect(() => { localStorage.setItem('gemini_chats_sidebar', chatSidebarOpen.toString()); }, [chatSidebarOpen]);
   useEffect(() => { localStorage.setItem('gemini_settings_sidebar', settingsSidebarOpen.toString()); }, [settingsSidebarOpen]);
   useEffect(() => { localStorage.setItem('gemini_thinking_budget', thinkingBudget.toString()); }, [thinkingBudget]);
   useEffect(() => { localStorage.setItem('gemini_memory_enabled', memoryEnabled.toString()); }, [memoryEnabled]);
 
-  useEffect(() => {
-    if (apiKeys.length === 0) {
-      if (activeKeyIndex !== 0) setActiveKeyIndex(0);
-      return;
-    }
 
-    if (activeKeyIndex >= apiKeys.length) {
-      setActiveKeyIndex(apiKeys.length - 1);
-    }
-  }, [apiKeys.length, activeKeyIndex]);
 
   // Auto-scroll (only when user is near bottom; avoid smooth on every streamed chunk)
   useEffect(() => {
@@ -785,27 +854,40 @@ export default function Home() {
           effectiveSystemPromptWithImages = effectiveSystemPrompt + imageContext;
         }
         
-        const response = await fetch('/api/chat', {
+        // Определяем endpoint и параметры в зависимости от типа провайдера
+        const endpoint = activeProvider?.type === 'openai' ? '/api/openai-chat' : '/api/chat';
+        const requestBody: any = {
+          messages: contentsForRequest,
+          model: activeModel?.modelId || model,
+          systemInstruction: effectiveSystemPromptWithImages,
+          tools: tools,
+          memoryTools: [
+            ...(memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS ? MEMORY_TOOLS : []),
+            ...(memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS ? IMAGE_MEMORY_TOOLS : []),
+            ...skillTools,
+          ],
+          temperature,
+          apiKey: key,
+          maxOutputTokens,
+          includeThoughts: deepThinkState.enabled === true,
+        };
+        
+        // Для OpenAI-провайдеров добавляем baseUrl
+        if (activeProvider?.type === 'openai') {
+          requestBody.baseUrl = activeProvider.baseUrl;
+          // Tools поддерживаются для OpenAI провайдеров
+          // memoryTools и skills работают через тот же механизм
+          requestBody.includeThoughts = false;
+        } else {
+          // Только для Gemini
+          requestBody.thinkingBudget = thinkingBudget;
+        }
+        
+        const response = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: abortControllerRef.current!.signal,
-          body: JSON.stringify({
-            messages: contentsForRequest,
-            model,
-            systemInstruction: effectiveSystemPromptWithImages, // Используем с imageContext
-            tools: tools,
-            // После MAX_MEMORY_CALLS — отключаем memory tools чтобы не зациклиться
-            memoryTools: [
-              ...(memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS ? MEMORY_TOOLS : []),
-              ...(memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS ? IMAGE_MEMORY_TOOLS : []),
-              ...skillTools,
-            ],
-            temperature,
-            apiKey: key,
-            thinkingBudget,
-            maxOutputTokens, // Добавляем настройку
-            includeThoughts: deepThinkState.enabled === true,
-          }),
+          body: JSON.stringify(requestBody),
         });
         
         // Debug: проверяем что IMAGE_MEMORY_TOOLS отправляются
@@ -1556,7 +1638,7 @@ export default function Home() {
         }
       }, 100); // 100ms достаточно для React batching
     }
-  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, memoryEnabled]);
+  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, memoryEnabled, activeProvider, maxOutputTokens, handleSkillEvent]);
 
   // Auto-open sheet for ai_interactive sites when streaming ends
   useEffect(() => {
@@ -1603,7 +1685,7 @@ export default function Home() {
 
     const historyToSend = [...messages, userMsg];
     await streamGeneration(historyToSend, assistantMsgId, false);
-  }, [selectedApiKey, model, isStreaming, messages, streamGeneration, selectedApiKeySuffix]);
+  }, [selectedApiKey, model, isStreaming, messages, streamGeneration, selectedApiKeySuffix, activeModel]);
 
   const handleRegenerate = useCallback(async () => {
     if (isStreaming || messages.length === 0) return;
@@ -1970,7 +2052,13 @@ export default function Home() {
     setMessages(chat.messages);
     setCurrentChatId(chat.id);
     setChatTitle(chat.title);
-    setModel(chat.model);
+    const loadModel = allModels.find(m => m.id === chat.model);
+    if (loadModel) {
+      setActiveProviderIdState(loadModel.providerId);
+      setActiveModelState({ providerId: loadModel.providerId, modelId: loadModel.id });
+    } else {
+      setActiveModelState({ providerId: 'google', modelId: chat.model });
+    }
     setSystemPrompt(chat.systemPrompt || '');
     setDeepThinkSystemPrompt(chat.deepThinkSystemPrompt || loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
     setTools(chat.tools || []);
@@ -1978,7 +2066,7 @@ export default function Home() {
     setActiveChatId(chat.id);
     setUnsaved(false);
     setError('');
-  }, [isStreaming, messages, unsaved, saveCurrentChat]);
+  }, [isStreaming, messages, unsaved, saveCurrentChat, allModels]);
 
   const handleDeleteSavedChat = useCallback(async (id: string) => {
     // Получаем чат перед удалением для очистки URL
@@ -2016,12 +2104,6 @@ export default function Home() {
     
     // Сохраняем параллельно вместо последовательно
     await Promise.all(chats.map(c => saveChatToStorage(c)));
-  }, []);
-
-  const handleApiKeysChange = useCallback((keys: ApiKeyEntry[]) => {
-    const sanitized = sanitizeApiKeys(keys);
-    setApiKeys(sanitized);
-    saveApiKeys(sanitized);
   }, []);
 
   // Auto-save when streaming stops
@@ -2108,14 +2190,88 @@ export default function Home() {
   }, [isMobile, settingsSidebarOpen]);
 
   const settingsSidebarProps = {
+    // Multi-provider support
+    providers,
+    onProvidersChange: (newProviders: Provider[]) => {
+      setProviders(newProviders);
+      // Save custom providers
+      const customProviders = newProviders.filter(p => !p.isBuiltin);
+      customProviders.forEach(p => saveCustomProvider(p));
+    },
+    activeProviderId,
+    onActiveProviderChange: (id: string) => {
+      setActiveProviderIdState(id);
+      setActiveProviderId(id);
+    },
+    
+    // API Keys (per provider)
     apiKeys,
-    onApiKeysChange: handleApiKeysChange,
+    onApiKeysChange: (providerId: string, keys: ApiKeyEntry[]) => {
+      setApiKeys(prev => ({ ...prev, [providerId]: keys }));
+      saveApiKeys(providerId, keys);
+    },
     activeKeyIndex,
-    onActiveKeyIndexChange: setActiveKeyIndex,
-    model,
-    onModelChange: setModel,
-    models,
-    onModelsLoad: setModels,
+    onActiveKeyIndexChange: (providerId: string, idx: number) => {
+      setActiveKeyIndex(prev => ({ ...prev, [providerId]: idx }));
+    },
+    
+    // Models (unified)
+    activeModel,
+    onActiveModelChange: (model: ActiveModel) => {
+      setActiveModelState(model);
+      setActiveModel(model);
+    },
+    allModels,
+    onModelsLoad: (providerId: string, models: UniversalModel[]) => {
+      // Update allModels by replacing models for this provider
+      setAllModels(prev => {
+        const filtered = prev.filter(m => m.providerId !== providerId);
+        return [...filtered, ...models];
+      });
+      // Save to cache
+      saveModelsCache({ providerId, models, fetchedAt: Date.now() });
+    },
+    onRefreshModels: async (providerId: string) => {
+      const provider = providers.find(p => p.id === providerId);
+      const providerKeys = apiKeys[providerId] || [];
+      const keyIdx = activeKeyIndex[providerId] || 0;
+      const key = providerKeys[keyIdx]?.key;
+      
+      if (!key || !provider) return;
+      
+      try {
+        if (provider.type === 'gemini') {
+          const res = await fetch(`/api/models?apiKey=${encodeURIComponent(key)}`);
+          const data = await res.json();
+          if (res.ok && data.models) {
+            const geminiModels: UniversalModel[] = data.models.map((m: any) => ({
+              id: m.name,
+              displayName: m.displayName,
+              providerId,
+              inputTokenLimit: m.inputTokenLimit,
+              outputTokenLimit: m.outputTokenLimit,
+              supportedGenerationMethods: m.supportedGenerationMethods,
+            }));
+            settingsSidebarProps.onModelsLoad(providerId, geminiModels);
+          }
+        } else {
+          const res = await fetch(`/api/openai-models?apiKey=${encodeURIComponent(key)}&baseUrl=${encodeURIComponent(provider.baseUrl)}`);
+          const data = await res.json();
+          if (res.ok && data.models) {
+            const openaiModels: UniversalModel[] = data.models.map((m: any) => ({
+              id: m.id,
+              displayName: m.displayName,
+              providerId,
+              inputTokenLimit: m.inputTokenLimit,
+            }));
+            settingsSidebarProps.onModelsLoad(providerId, openaiModels);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to refresh models:', error);
+      }
+    },
+    
     systemPrompt,
     onSystemPromptChange: setSystemPrompt,
     tools,
@@ -2211,7 +2367,8 @@ export default function Home() {
             {appMode === 'arena' ? (
               <ArenaAgentsSidebar
                 session={arena.activeSession}
-                models={models}
+                models={allModels}
+                providers={providers}
                 globalApiKeys={apiKeys}
                 savedChats={savedChats}
                 onUpdateAgent={arena.updateAgent}
@@ -2444,7 +2601,7 @@ export default function Home() {
               <EmptyState 
                 hasApiKey={hasKeys} 
                 hasModel={!!model} 
-                apiKeysCount={apiKeys.length} 
+                apiKeysCount={Object.values(apiKeys).flat().length} 
                 onSuggestionClick={(text) => handleSend(text, [])}
               />
             )
@@ -2771,7 +2928,8 @@ export default function Home() {
             {appMode === 'arena' ? (
               <ArenaAgentsSidebar
                 session={arena.activeSession}
-                models={models}
+                models={allModels}
+                providers={providers}
                 globalApiKeys={apiKeys}
                 savedChats={savedChats}
                 onUpdateAgent={arena.updateAgent}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import type { Message, Part, AttachedFile, ApiKeyEntry, GeminiModel, SavedChat } from '@/types';
+import type { Message, Part, AttachedFile, ApiKeyEntry, SavedChat, Provider, UniversalModel } from '@/types';
 import type { ArenaAgent, ArenaSession } from './arena-types';
 import { createDefaultAgent, AGENT_COLORS } from './arena-types';
 import {
@@ -21,7 +21,9 @@ function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-export function useArena(globalApiKeys: ApiKeyEntry[], models: GeminiModel[], globalModel: string) {
+export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers: Provider[], activeModel: import('@/types').ActiveModel | null, allModels: import('@/types').UniversalModel[] = []) {
+  const globalModel = activeModel?.modelId || '';
+  const globalProviderId = activeModel?.providerId || 'google';
   const [sessions, setSessions] = useState<ArenaSession[]>([]);
   const [activeSessionId, setActiveSessionIdState] = useState<string | null>(null);
 
@@ -64,8 +66,8 @@ export function useArena(globalApiKeys: ApiKeyEntry[], models: GeminiModel[], gl
       id: generateId(),
       title: 'Новая арена',
       agents: [
-        { ...createDefaultAgent(0), model: globalModel },
-        { ...createDefaultAgent(1), model: globalModel },
+        { ...createDefaultAgent(0), model: globalModel, providerId: globalProviderId },
+        { ...createDefaultAgent(1), model: globalModel, providerId: globalProviderId },
       ],
       messages: [],
       responseMode: 'auto',
@@ -77,7 +79,7 @@ export function useArena(globalApiKeys: ApiKeyEntry[], models: GeminiModel[], gl
     setActiveSessionIdState(session.id);
     setActiveArenaSessionId(session.id);
     return session;
-  }, [globalModel]);
+  }, [globalModel, globalProviderId]);
 
   const loadSession = useCallback((id: string) => {
     setActiveSessionIdState(id);
@@ -120,13 +122,17 @@ export function useArena(globalApiKeys: ApiKeyEntry[], models: GeminiModel[], gl
   // ═══════ Import Chat → Arena ═══════
 
   const importChatAsSession = useCallback((chat: SavedChat) => {
-    // Создаём один агент "Gemini" с текущей моделью
+    // Ищем провайдера для модели чата
+    const chatModelDetails = allModels.find(m => m.id === chat.model);
+    const chatProviderId = chatModelDetails?.providerId || 'google';
+
     const geminiAgent: ArenaAgent = {
       id: generateId(),
       name: 'Gemini',
       emoji: '✨',
       color: AGENT_COLORS[2], // blue
       model: globalModel,
+      providerId: chatProviderId,
       apiKey: '',
       systemPrompt: '',
       temperature: 0.8,
@@ -159,17 +165,17 @@ export function useArena(globalApiKeys: ApiKeyEntry[], models: GeminiModel[], gl
     setActiveSessionIdState(session.id);
     setActiveArenaSessionId(session.id);
     return session;
-  }, [globalModel]);
+  }, [globalModel, allModels]);
 
   // ═══════ Agent CRUD ═══════
 
   const addAgent = useCallback(() => {
     updateSession(s => ({
       ...s,
-      agents: [...s.agents, { ...createDefaultAgent(s.agents.length), model: globalModel }],
+      agents: [...s.agents, { ...createDefaultAgent(s.agents.length), model: globalModel, providerId: globalProviderId }],
       updatedAt: Date.now(),
     }));
-  }, [updateSession, globalModel]);
+  }, [updateSession, globalModel, globalProviderId]);
 
   const updateAgent = useCallback((agent: ArenaAgent) => {
     updateSession(s => ({
@@ -259,6 +265,7 @@ export function useArena(globalApiKeys: ApiKeyEntry[], models: GeminiModel[], gl
         session: activeSession,
         messages: currentMessages, // Передаем все сообщения, Gemini API продолжит последнее
         globalApiKeys,
+        providers,
         targetMessageId: messageId,
         onChunk: (text) => {
           currentMessages = currentMessages.map(m => {
@@ -297,7 +304,7 @@ export function useArena(globalApiKeys: ApiKeyEntry[], models: GeminiModel[], gl
       setStreamingAgentId(null);
       abortRef.current = null;
     }
-  }, [activeSession, isStreaming, globalApiKeys]);
+  }, [activeSession, isStreaming, globalApiKeys, providers]);
 
   const runAgentStream = useCallback(async (
     session: ArenaSession,
@@ -336,6 +343,7 @@ export function useArena(globalApiKeys: ApiKeyEntry[], models: GeminiModel[], gl
         session: session,
         messages: messagesSnapshot,
         globalApiKeys,
+        providers,
         targetMessageId,
         onChunk: (text) => {
           currentMessages = currentMessages.map(m => {
@@ -374,7 +382,7 @@ export function useArena(globalApiKeys: ApiKeyEntry[], models: GeminiModel[], gl
     }
 
     return currentMessages;
-  }, [globalApiKeys]);
+  }, [globalApiKeys, providers]);
 
   // Send user message → (auto: trigger all agents sequentially)
   const sendUserMessage = useCallback(async (text: string, files?: AttachedFile[]) => {
