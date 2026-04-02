@@ -148,7 +148,7 @@ export interface Message {
 // Артефакт скилла (импортируется из lib/skills/types.ts в рантайме)
 export interface SkillArtifact {
   id: string;
-  type: 'image' | 'video' | 'audio' | 'document' | 'code' | 'table' | 'chart' | 'text' | 'custom' | 'annotated_image';
+  type: 'image' | 'video' | 'audio' | 'document' | 'code' | 'table' | 'chart' | 'text' | 'custom' | 'annotated_image' | 'agent_card';
   label?: string;
   data: 
     | { kind: 'base64'; mimeType: string; base64: string }
@@ -157,7 +157,8 @@ export interface SkillArtifact {
     | { kind: 'json'; value: unknown }
     | { kind: 'blob'; blob: Blob; mimeType: string }
     | { kind: 'stored'; stored: 'idb' } // большой артефакт в IndexedDB
-    | { kind: 'annotations'; sourceImageId: string; annotations: AnnotationItem[] }; // аннотированное изображение
+    | { kind: 'annotations'; sourceImageId: string; annotations: AnnotationItem[] } // аннотированное изображение
+    | { kind: 'agent'; agentId: string; name: string; description: string; avatarEmoji: string; model: string; enabledSkillIds: string[] }; // карточка агента
   sendToGemini?: boolean;
   downloadable?: boolean;
   filename?: string;
@@ -233,6 +234,10 @@ export interface SavedChat {
   temperature: number;
   createdAt: number;
   updatedAt: number;
+  // Agent Creator: подчаты
+  parentChatId?: string;      // если это подчат — ID родителя
+  agentId?: string;           // если подчат создан агентом — его ID
+  isSubChat?: boolean;        // флаг подчата
 }
 
 // Операция с памятью для отображения в чате
@@ -371,4 +376,24 @@ export interface FileDiffOp {
   search: string;       // что ищем (может быть неточным — fuzzy)
   replace: string;      // на что меняем
   description?: string; // что это за правка
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent Creator Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface Agent {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  avatarEmoji: string;
+  avatarImageMemoryId?: string;
+  referenceImageIds: string[];
+  enabledSkillIds: string[];
+  model: string;
+  temperature: number;
+  creatorChatId: string;
+  createdAt: number;
+  updatedAt: number;
 }

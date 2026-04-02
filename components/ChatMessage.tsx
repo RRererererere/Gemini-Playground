@@ -39,6 +39,7 @@ interface ChatMessageProps {
   onEditDeepThinkAnalysis?: (id: string, analysis: DeepThinkAnalysis) => void;
   onPlayHTML?: (html: string) => void;
   onAnnotationClick?: (annotation: import('@/types').AnnotationItem) => void;
+  onOpenAgentChat?: (agentId: string) => void;
 }
 
 function FilePreview({ file }: { file: AttachedFile }) {
@@ -1495,7 +1496,7 @@ function BridgeDataBlock({ bridgeData }: { bridgeData: BridgePayload }) {
 
 export default function ChatMessage({
   message, index, isLast, isStreaming,
-  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch
+  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -1669,7 +1670,7 @@ export default function ChatMessage({
         {/* Skill Artifacts */}
         {message.skillArtifacts && message.skillArtifacts.length > 0 && (
           <div className={`mb-2 ${isUser ? 'text-right' : 'text-left'}`}>
-            <SkillArtifactsGroup artifacts={message.skillArtifacts} onAnnotationClick={onAnnotationClick} />
+            <SkillArtifactsGroup artifacts={message.skillArtifacts} onAnnotationClick={onAnnotationClick} onOpenAgentChat={onOpenAgentChat} />
           </div>
         )}
 

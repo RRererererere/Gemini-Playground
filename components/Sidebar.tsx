@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   AlertCircle,
   BookOpen,
@@ -36,6 +36,8 @@ import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, SavedSystemPrompt, 
 import { addApiKey, removeApiKey, getKeyStatus, timeUntilUnblock, unblockKey } from '@/lib/apiKeyManager';
 import { loadProviders, saveCustomProvider, removeProvider, loadModelsCache, saveModelsCache, clearModelsCache } from '@/lib/providerStorage';
 import { ProviderModal } from './AddProviderModal';
+import { getAgents, deleteAgent, AGENTS_UPDATED_EVENT } from '@/lib/agents/agent-store';
+import type { Agent } from '@/lib/agents/types';
 import {
   exportAllSettings,
   exportChats,
@@ -157,6 +159,8 @@ export interface SidebarSharedProps {
   onMemoryEnabledChange: (enabled: boolean) => void;
   onSkillsChanged?: () => void;
   onClose?: () => void;
+  // Agents
+  onOpenAgent?: (agentId: string, parentChatId?: string) => void;
 }
 
 type SettingsSectionId = 'keys' | 'model' | 'system' | 'tools' | 'manage';
@@ -257,6 +261,7 @@ export function ChatSidebar({
   onNewChat,
   onDeleteChat,
   onClose,
+  onOpenAgent,
   // Arena props
   appMode,
   onAppModeChange,
@@ -265,7 +270,7 @@ export function ChatSidebar({
   onLoadArenaSession,
   onNewArenaSession,
   onDeleteArenaSession,
-}: Pick<SidebarSharedProps, 'savedChats' | 'currentChatId' | 'onLoadChat' | 'onNewChat' | 'onDeleteChat' | 'onClose'> & {
+}: Pick<SidebarSharedProps, 'savedChats' | 'currentChatId' | 'onLoadChat' | 'onNewChat' | 'onDeleteChat' | 'onClose' | 'onOpenAgent'> & {
   appMode?: 'chat' | 'arena';
   onAppModeChange?: (mode: 'chat' | 'arena') => void;
   arenaSessions?: Array<{ id: string; title: string; agents: any[]; messages: any[]; createdAt: number; updatedAt: number }>;
@@ -276,6 +281,87 @@ export function ChatSidebar({
 }) {
   const formatDate = (ts: number) => new Date(ts).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
   const isArena = appMode === 'arena';
+  
+  // Agents state
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [collapsedChats, setCollapsedChats] = useState<Set<string>>(new Set());
+  
+  useEffect(() => {
+    setAgents(getAgents());
+    
+    const handleAgentsUpdate = () => {
+      setAgents(getAgents());
+    };
+    
+    window.addEventListener(AGENTS_UPDATED_EVENT, handleAgentsUpdate);
+    return () => window.removeEventListener(AGENTS_UPDATED_EVENT, handleAgentsUpdate);
+  }, []);
+  
+  // Группировка чатов по родителям
+  const { parentChats, subChatsByParent, standaloneChats } = useMemo(() => {
+    const parents: SavedChat[] = [];
+    const subChats: Record<string, SavedChat[]> = {};
+    const standalone: SavedChat[] = [];
+    
+    // Сначала собираем все подчаты
+    savedChats.forEach(chat => {
+      if (chat.isSubChat && chat.parentChatId) {
+        if (!subChats[chat.parentChatId]) {
+          subChats[chat.parentChatId] = [];
+        }
+        subChats[chat.parentChatId].push(chat);
+      }
+    });
+    
+    // Теперь группируем родительские и standalone чаты
+    savedChats.forEach(chat => {
+      if (chat.isSubChat) {
+        // Уже обработан выше
+        return;
+      }
+      
+      if (subChats[chat.id] && subChats[chat.id].length > 0) {
+        // Это родительский чат с подчатами
+        parents.push(chat);
+      } else {
+        // Это standalone чат
+        standalone.push(chat);
+      }
+    });
+    
+    // Сортируем подчаты по дате создания
+    Object.keys(subChats).forEach(parentId => {
+      subChats[parentId].sort((a, b) => a.createdAt - b.createdAt);
+    });
+    
+    return { parentChats: parents, subChatsByParent: subChats, standaloneChats: standalone };
+  }, [savedChats]);
+  
+  // Автоматически раскрываем чат с активным подчатом
+  useEffect(() => {
+    const currentChat = savedChats.find(c => c.id === currentChatId);
+    if (currentChat?.parentChatId) {
+      setCollapsedChats(prev => {
+        const next = new Set(prev);
+        next.delete(currentChat.parentChatId!);
+        return next;
+      });
+    }
+  }, [currentChatId, savedChats]);
+  
+  const toggleCollapse = (chatId: string) => {
+    setCollapsedChats(prev => {
+      const next = new Set(prev);
+      if (next.has(chatId)) {
+        next.delete(chatId);
+      } else {
+        next.add(chatId);
+      }
+      return next;
+    });
+  };
+  
+  const starredAgents = agents.filter(a => a.starred);
 
   return (
     <SidebarShell
@@ -357,6 +443,45 @@ export function ChatSidebar({
           </button>
         </div>
 
+        {/* Starred agents section - только в режиме чата */}
+        {!isArena && starredAgents.length > 0 && (
+          <>
+            <div className="px-5 pb-2 pt-5 flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-400">
+                ★ Избранные
+              </p>
+              <button
+                className="text-[10px] text-[var(--text-dim)] hover:text-[var(--text-primary)] transition-colors"
+                onClick={() => {
+                  // TODO: открыть модалку со всеми агентами
+                }}
+              >
+                Все агенты →
+              </button>
+            </div>
+
+            <div className="px-3 pb-3">
+              <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
+                {starredAgents.map(agent => (
+                  <button
+                    key={agent.id}
+                    onClick={() => {
+                      onOpenAgent?.(agent.id, currentChatId || undefined);
+                      onClose?.();
+                    }}
+                    className="flex-shrink-0 flex flex-col items-center justify-center w-16 h-20 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] hover:bg-[var(--surface-3)] transition-all"
+                  >
+                    <span className="text-2xl mb-1">{agent.avatarEmoji}</span>
+                    <span className="text-[10px] text-[var(--text-muted)] truncate w-full px-1 text-center">
+                      {agent.name}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
         {/* Section header */}
         <div className="px-5 pb-3 pt-5">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-dim)]">
@@ -424,7 +549,7 @@ export function ChatSidebar({
               </div>
             )
           ) : (
-            /* Original chat list */
+            /* Hierarchical chat list */
             savedChats.length === 0 ? (
               <div className="mx-2 rounded-[24px] border border-dashed border-[var(--border)] bg-[var(--surface-1)] px-5 py-8 text-center">
                 <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--surface-2)] text-[var(--text-muted)]">
@@ -437,7 +562,134 @@ export function ChatSidebar({
               </div>
             ) : (
               <div className="space-y-1.5">
-                {[...savedChats].reverse().map(chat => {
+                {/* Parent chats with subchats */}
+                {[...parentChats].reverse().map(parentChat => {
+                  const subChats = subChatsByParent[parentChat.id] || [];
+                  const isCollapsed = collapsedChats.has(parentChat.id);
+                  const hasActiveSubChat = subChats.some(sc => sc.id === currentChatId);
+                  const isParentActive = parentChat.id === currentChatId;
+
+                  return (
+                    <div key={parentChat.id} className="space-y-0.5">
+                      {/* Parent chat */}
+                      <div
+                        className={`group flex w-full items-center gap-2 rounded-lg px-3 py-2.5 cursor-pointer transition-all ${
+                          isParentActive
+                            ? 'bg-white/[0.08] text-white'
+                            : 'text-[var(--text-muted)] hover:bg-white/[0.04] hover:text-[var(--text-primary)]'
+                        }`}
+                      >
+                        {/* Collapse toggle */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleCollapse(parentChat.id);
+                          }}
+                          className="flex-shrink-0 flex items-center justify-center w-4 h-4 text-[var(--text-dim)] hover:text-[var(--text-primary)] transition-all"
+                        >
+                          <ChevronDown size={12} className={`transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`} />
+                        </button>
+
+                        {/* Chat info */}
+                        <div
+                          onClick={() => {
+                            onLoadChat(parentChat);
+                            onClose?.();
+                          }}
+                          className="flex items-center gap-2.5 min-w-0 flex-1"
+                        >
+                          <MessageSquare size={14} className={`flex-shrink-0 ${isParentActive ? 'text-white' : 'text-[var(--text-dim)]'}`} />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-[13px] font-semibold">{parentChat.title}</p>
+                            <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">
+                              {parentChat.messages.length} • {formatDate(parentChat.updatedAt)}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Delete button */}
+                        <button
+                          onClick={event => {
+                            event.stopPropagation();
+                            const subChatsCount = subChats.length;
+                            if (subChatsCount > 0) {
+                              if (confirm(`Удалить чат и ${subChatsCount} подчат${subChatsCount === 1 ? '' : subChatsCount < 5 ? 'а' : 'ов'}?`)) {
+                                // Delete parent and all subchats
+                                onDeleteChat(parentChat.id);
+                                subChats.forEach(sc => onDeleteChat(sc.id));
+                              }
+                            } else {
+                              onDeleteChat(parentChat.id);
+                            }
+                          }}
+                          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] group-hover:opacity-100"
+                          title="Удалить чат"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+
+                      {/* Subchats */}
+                      {!isCollapsed && subChats.length > 0 && (
+                        <div className="ml-3 border-l border-[var(--border)] pl-2 space-y-0.5">
+                          {subChats.map((subChat, idx) => {
+                            const isActive = subChat.id === currentChatId;
+                            const isLast = idx === subChats.length - 1;
+                            const agent = subChat.agentId ? agents.find(a => a.id === subChat.agentId) : null;
+
+                            return (
+                              <div
+                                key={subChat.id}
+                                onClick={() => {
+                                  onLoadChat(subChat);
+                                  onClose?.();
+                                }}
+                                className={`group flex w-full items-center gap-2 rounded-lg px-3 py-2 cursor-pointer transition-all relative ${
+                                  isActive
+                                    ? 'bg-white/[0.08] text-white'
+                                    : 'text-[var(--text-muted)] hover:bg-white/[0.04] hover:text-[var(--text-primary)]'
+                                }`}
+                              >
+                                {/* Tree line */}
+                                <span className="absolute -left-2 top-1/2 w-2 h-px bg-[var(--border)]" />
+                                
+                                {/* Icon */}
+                                {agent ? (
+                                  <span className="flex-shrink-0 text-sm">{agent.avatarEmoji}</span>
+                                ) : (
+                                  <MessageSquare size={12} className={`flex-shrink-0 ${isActive ? 'text-white' : 'text-[var(--text-dim)]'}`} />
+                                )}
+
+                                {/* Info */}
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-[12px] font-medium">{subChat.title}</p>
+                                  <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">
+                                    {subChat.messages.length} • {formatDate(subChat.updatedAt)}
+                                  </p>
+                                </div>
+
+                                {/* Delete button */}
+                                <button
+                                  onClick={event => {
+                                    event.stopPropagation();
+                                    onDeleteChat(subChat.id);
+                                  }}
+                                  className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] group-hover:opacity-100"
+                                  title="Удалить подчат"
+                                >
+                                  <Trash2 size={10} />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Standalone chats (no subchats) */}
+                {[...standaloneChats].reverse().map(chat => {
                   const isActive = chat.id === currentChatId;
 
                   return (

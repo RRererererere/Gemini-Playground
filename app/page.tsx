@@ -52,6 +52,7 @@ import {
 import { buildMemoryPrompt, markMemoriesUsed } from '@/lib/memory-prompt';
 import { MEMORY_TOOLS, IMAGE_MEMORY_TOOLS } from '@/lib/memory-tools';
 import { saveMemory, updateMemory, forgetMemory, getMemories } from '@/lib/memory-store';
+import { getAgents } from '@/lib/agents/agent-store';
 import { 
   saveImageMemory, 
   searchImageMemories, 
@@ -2185,6 +2186,77 @@ export default function Home() {
     setError('');
   }, [isStreaming, messages, unsaved, saveCurrentChat, allModels]);
 
+  const handleOpenAgent = useCallback((agentId: string, parentChatId?: string) => {
+    if (isStreaming) return;
+    
+    // Автосохранение текущего чата
+    if (messages.length > 0) {
+      saveCurrentChat(messages, undefined, false).catch(console.error);
+    }
+    
+    // Загружаем агента
+    const agent = getAgents().find(a => a.id === agentId);
+    if (!agent) {
+      console.error('Agent not found:', agentId);
+      return;
+    }
+    
+    // Создаём новый подчат
+    const subChatId = generateId();
+    const newChat: SavedChat = {
+      id: subChatId,
+      title: agent.name,
+      messages: [],
+      model: agent.model,
+      systemPrompt: agent.systemPrompt,
+      deepThinkSystemPrompt: loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT,
+      tools: [],
+      temperature: agent.temperature,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      parentChatId: parentChatId || currentChatId || undefined,
+      agentId: agent.id,
+      isSubChat: true,
+    };
+    
+    // Сохраняем подчат
+    saveChatToStorage(newChat).then(() => {
+      // Обновляем список чатов
+      loadSavedChats().then(chats => {
+        setSavedChats(chats);
+      });
+    });
+    
+    // Очищаем текущий чат и загружаем подчат
+    clearChatState();
+    setMessages([]);
+    setCurrentChatId(subChatId);
+    setChatTitle(agent.name);
+    
+    // Устанавливаем модель агента
+    const agentModel = allModels.find(m => m.id === agent.model);
+    if (agentModel) {
+      setActiveProviderIdState(agentModel.providerId);
+      setActiveModelState({ providerId: agentModel.providerId, modelId: agentModel.id });
+    } else {
+      setActiveModelState({ providerId: 'google', modelId: agent.model });
+    }
+    
+    setSystemPrompt(agent.systemPrompt);
+    setTemperature(agent.temperature);
+    setActiveChatId(subChatId);
+    setUnsaved(false);
+    
+    // Сбрасываем canvas
+    setLiveCode('');
+    setWebsiteType(null);
+    setShowLiveCanvas(false);
+    
+    // TODO: Загрузить референсные изображения из image memory если есть
+    // TODO: Активировать скиллы агента
+    
+  }, [isStreaming, messages, saveCurrentChat, clearChatState, allModels, currentChatId, generateId, loadSavedChats, setSavedChats]);
+
   const handleDeleteSavedChat = useCallback(async (id: string) => {
     // Получаем чат перед удалением для очистки URL
     const chat = savedChats.find(c => c.id === id);
@@ -2442,6 +2514,7 @@ export default function Home() {
     onLoadArenaSession: arena.loadSession,
     onNewArenaSession: arena.createSession,
     onDeleteArenaSession: arena.deleteSession,
+    onOpenAgent: handleOpenAgent,
   };
 
   // Messages to display: in arena mode use arena session messages
@@ -2786,6 +2859,7 @@ export default function Home() {
                           (window as any).__chatInputAddAnnotation(annotationRef);
                         }
                       }}
+                      onOpenAgentChat={(agentId) => handleOpenAgent(agentId, currentChatId || undefined)}
                     />
                   </div>
                 );
