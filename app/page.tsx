@@ -9,10 +9,12 @@ import MemoryModal from '@/components/MemoryModal';
 import MemoryPill from '@/components/MemoryPill';
 import ImageMemoryPill from '@/components/ImageMemoryPill';
 import ImageMemoryRecallPill from '@/components/ImageMemoryRecallPill';
+import { CommandPalette } from '@/components/CommandPalette';
+import { SelectionToolbar } from '@/components/SelectionToolbar';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,
-  Save, X, ArrowDown, RefreshCw, MonitorPlay, Zap
+  Save, X, ArrowDown, RefreshCw, MonitorPlay, Zap, FilePen
 } from 'lucide-react';
 // @ts-ignore
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
@@ -2581,7 +2583,7 @@ export default function Home() {
       )}
 
       {!isMobile && (
-        <div className="flex-shrink-0 overflow-hidden border-r border-[var(--border-subtle)] transition-[width,opacity] duration-300 ease-out" style={chatSidebarStyle}>
+        <div className="flex-shrink-0 overflow-hidden border-r border-[var(--border-subtle)] transition-[width,opacity] duration-[350ms] ease-[cubic-bezier(0.16,1,0.3,1)]" style={chatSidebarStyle}>
           <div className="h-full w-[320px]">
             <ChatSidebar
               savedChats={savedChats}
@@ -2699,18 +2701,6 @@ export default function Home() {
               {appMode === 'arena' ? <Zap size={13} /> : <SlidersHorizontal size={13} />}
               <span className="hidden md:block">{appMode === 'arena' ? 'Агенты' : 'Настройки'}</span>
             </button>
-            <div className="w-[1px] h-4 bg-[var(--border)] mx-1 hidden sm:block" />
-            
-            {/* Restore Preview Button - shows when code exists but canvas is closed */}
-            {liveCode && !showLiveCanvas && (
-              <button
-                onClick={() => setShowLiveCanvas(true)}
-                className="flex items-center justify-center w-8 h-8 text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-lg transition-colors"
-                title="Открыть превью сайта"
-              >
-                <MonitorPlay size={16} />
-              </button>
-            )}
             
             {messages.length > 0 && (
               <button
@@ -2744,23 +2734,13 @@ export default function Home() {
                 }`}
                 title="File Editor"
               >
-                <span className="text-sm">📝</span>
+                <FilePen size={13} />
                 <span className="hidden md:block">Editor</span>
                 {openFiles.some(f => f.isDirty) && (
                   <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
                 )}
               </button>
             )}
-            <div className="w-[1px] h-4 bg-[var(--border)] mx-1 hidden sm:block" />
-            
-            <button
-              onClick={handleNewChat}
-              disabled={isStreaming}
-              className="flex items-center gap-1.5 px-2.5 h-7 text-xs text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] border border-transparent hover:border-[var(--border)] rounded-lg transition-all disabled:opacity-50"
-            >
-              <MessageSquarePlus size={13} />
-              <span className="hidden md:block">Новый</span>
-            </button>
           </div>
         </div>
 
@@ -2777,7 +2757,7 @@ export default function Home() {
 
         {/* Messages */}
         <div 
-          className="flex-1 overflow-y-auto chat-messages-area px-4 py-6 relative"
+          className="flex-1 overflow-y-auto chat-messages-area px-6 py-8 relative"
           onScroll={handleScroll}
         >
           {(appMode === 'arena' ? (arena.activeSession?.messages ?? []) : messages).length === 0 ? (
@@ -2796,11 +2776,12 @@ export default function Home() {
               />
             )
           ) : (
-            <div className="max-w-3xl mx-auto space-y-5">
+            <div className="max-w-3xl mx-auto space-y-6">
               {(appMode === 'arena' ? arenaVisibleMessages : visibleMessages).map((message, idx) => {
                 const msgList = appMode === 'arena' ? arenaVisibleMessages : visibleMessages;
+                const isLastMessage = idx === msgList.length - 1;
                 return (
-                  <div key={message.id}>
+                  <div key={message.id} className={isLastMessage ? 'animate-message-appear' : ''}>
                     {/* Arena: agent header above model messages */}
                     {appMode === 'arena' && message.role === 'model' && message.arenaAgentId && (
                       <AgentMessageHeader
@@ -2918,6 +2899,8 @@ export default function Home() {
             pendingCanvasElement={pendingCanvasElement}
             onCanvasElementConsumed={() => setPendingCanvasElement(null)}
             onAnnotationClick={() => {}}
+            deepThinkEnabled={deepThinkState.enabled}
+            onDeepThinkToggle={toggleDeepThink}
           />
           {/* Arena Input Bar */}
           {appMode === 'arena' && arena.activeSession && (
@@ -3114,7 +3097,7 @@ export default function Home() {
       </PanelGroup>
 
       {!isMobile && (
-        <div className="flex-shrink-0 overflow-hidden border-l border-[var(--border-subtle)] transition-[width,opacity] duration-300 ease-out" style={settingsSidebarStyle}>
+        <div className="flex-shrink-0 overflow-hidden border-l border-[var(--border-subtle)] transition-[width,opacity] duration-[350ms] ease-[cubic-bezier(0.16,1,0.3,1)]" style={settingsSidebarStyle}>
           <div className="h-full w-[360px]">
             {appMode === 'arena' ? (
               <ArenaAgentsSidebar
@@ -3325,11 +3308,62 @@ export default function Home() {
           setSkillsRevision(r => r + 1);
         }}
       />
+
+      {/* Command Palette */}
+      <CommandPalette
+        savedChats={savedChats}
+        onNewChat={handleNewChat}
+        onLoadChat={(id) => {
+          const chat = savedChats.find(c => c.id === id);
+          if (chat) handleLoadChat(chat);
+        }}
+        onOpenSettings={() => setSettingsSidebarOpen(true)}
+        onOpenMemory={() => setShowMemoryModal(true)}
+        onToggleCanvas={() => setShowLiveCanvas(prev => !prev)}
+      />
+
+      {/* Selection Toolbar */}
+      <SelectionToolbar
+        onQuote={(text) => {
+          const quoted = `> ${text.split('\n').join('\n> ')}\n\n`;
+          window.dispatchEvent(new CustomEvent('append-to-input', { detail: quoted }));
+        }}
+        onAsk={(text) => {
+          handleSend(text, []);
+        }}
+      />
     </div>
   );
 }
 
 function EmptyState({ hasApiKey, hasModel, apiKeysCount, onSuggestionClick }: { hasApiKey: boolean; hasModel: boolean; apiKeysCount: number; onSuggestionClick: (text: string) => void }) {
+  const [activePool, setActivePool] = useState(0);
+  const [fading, setFading] = useState(false);
+
+  const SUGGESTION_POOLS = [
+    // Группа 1: Код
+    ['Напиши REST API на TypeScript', 'Объясни разницу между useMemo и useCallback', 'Как работает event loop в Node.js?', 'Создай алгоритм бинарного поиска'],
+    // Группа 2: Анализ
+    ['Проанализируй этот текст на предмет логических ошибок', 'Составь SWOT-анализ для стартапа', 'Помоги структурировать мои мысли', 'Найди противоречия в этом аргументе'],
+    // Группа 3: Творчество
+    ['Придумай название для продукта', 'Напиши метафору для объяснения квантовой механики', 'Создай необычный персонаж для истории', 'Предложи 5 способов улучшить презентацию'],
+    // Группа 4: Факты
+    ['Объясни как работает TCP/IP', 'Что такое теорема Гёделя о неполноте?', 'Как устроен нейрон?', 'Расскажи историю интернета кратко'],
+  ];
+
+  useEffect(() => {
+    if (!hasApiKey || !hasModel) return;
+    
+    const interval = setInterval(() => {
+      setFading(true);
+      setTimeout(() => {
+        setActivePool(prev => (prev + 1) % SUGGESTION_POOLS.length);
+        setFading(false);
+      }, 200);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [hasApiKey, hasModel]);
+
   return (
     <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-center px-4">
       <div className="w-14 h-14 rounded-2xl bg-white flex items-center justify-center mb-6">
@@ -3360,20 +3394,16 @@ function EmptyState({ hasApiKey, hasModel, apiKeysCount, onSuggestionClick }: { 
       )}
 
       {hasApiKey && hasModel && (
-        <div className="mt-8 grid grid-cols-1 gap-2 max-w-sm w-full">
-          {[
-            { label: '💬 Начать разговор', text: 'Привет! Что умеешь делать?' },
-            { label: '💻 Ревью кода', text: 'Посмотри этот код и предложи улучшения:' },
-            { label: '✍️ Написать текст', text: 'Напиши короткий рассказ о космическом путешествии.' },
-            { label: '🧠 Объяснить тему', text: 'Объясни квантовую запутанность простыми словами.' },
-          ].map(s => (
-            <div key={s.label}
-              onClick={() => onSuggestionClick(s.text)}
-              className="text-left text-sm text-[var(--text-dim)] bg-[var(--surface-2)] border border-[var(--border)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] rounded-xl px-4 py-3 cursor-pointer transition-all group shadow-sm hover:shadow-glow-sm"
+        <div className={`mt-8 grid grid-cols-2 gap-2 max-w-sm w-full transition-opacity duration-200 ${fading ? 'opacity-0' : 'opacity-100'}`}>
+          {SUGGESTION_POOLS[activePool].map((suggestion, i) => (
+            <button
+              key={`${activePool}-${i}`}
+              onClick={() => onSuggestionClick(suggestion)}
+              disabled={fading}
+              className="text-left px-3 py-2.5 rounded-xl border border-[var(--border)] bg-[var(--surface-1)] text-xs text-[var(--text-muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <span className="font-medium text-[var(--text-muted)] group-hover:text-[var(--text-primary)] transition-colors">{s.label}</span>
-              <p className="mt-0.5 text-[var(--text-dim)] group-hover:text-[var(--text-muted)] transition-colors text-xs">{s.text}</p>
-            </div>
+              {suggestion}
+            </button>
           ))}
         </div>
       )}

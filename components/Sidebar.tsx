@@ -232,12 +232,14 @@ function SettingsSectionHeader({
   icon: Icon,
   openSections,
   onToggle,
+  badge,
 }: {
   id: SettingsSectionId;
   label: string;
   icon: LucideIcon;
   openSections: Set<SettingsSectionId>;
   onToggle: (id: SettingsSectionId) => void;
+  badge?: string;
 }) {
   const isOpen = openSections.has(id);
 
@@ -247,9 +249,16 @@ function SettingsSectionHeader({
         <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-2)]">
           <Icon size={14} className="text-[var(--text-muted)]" />
         </div>
-        <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-dim)]">{label}</span>
+        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--text-dim)]">{label}</span>
       </div>
-      <ChevronDown size={14} className={`text-[var(--text-dim)] transition-transform duration-300 ${isOpen ? '' : '-rotate-90'}`} />
+      <div className="flex items-center gap-2">
+        {badge && (
+          <span className="mr-2 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2 py-0.5 text-[10px] font-mono text-[var(--text-muted)] max-w-[80px] truncate">
+            {badge}
+          </span>
+        )}
+        <ChevronDown size={14} className={`text-[var(--text-dim)] transition-transform duration-300 ${isOpen ? '' : '-rotate-90'}`} />
+      </div>
     </button>
   );
 }
@@ -373,24 +382,6 @@ export function ChatSidebar({
       icon={MessageSquare}
       onClose={onClose}
       borderClassName="border-r border-[var(--border)]"
-      footer={
-        <div className="px-5 py-4">
-          <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-1)] px-4 py-3">
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Локально</span>
-              <span className="text-xs font-mono text-[var(--text-primary)]">
-                {isArena ? (arenaSessions?.length ?? 0) : savedChats.length}
-              </span>
-            </div>
-            <p className="text-xs leading-relaxed text-[var(--text-muted)]">
-              {isArena
-                ? 'Arena-сессии хранятся отдельно от обычных чатов.'
-                : 'Все сохранённые диалоги остаются под рукой и не смешиваются с настройками.'
-              }
-            </p>
-          </div>
-        </div>
-      }
     >
       <div className="flex h-full min-h-0 flex-col">
         {/* Pill switcher — Chat / Arena */}
@@ -779,7 +770,7 @@ export function SettingsSidebar({
   const [loadingModels, setLoadingModels] = useState<Record<string, boolean>>({});
   const [modelError, setModelError] = useState('');
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
-  const [openSections, setOpenSections] = useState<Set<SettingsSectionId>>(new Set<SettingsSectionId>(['keys', 'model', 'system', 'tools', 'manage']));
+  const [openSections, setOpenSections] = useState<Set<SettingsSectionId>>(new Set<SettingsSectionId>(['keys']));
 
   const [newKeyInput, setNewKeyInput] = useState('');
   const [showNewKey, setShowNewKey] = useState(false);
@@ -1270,7 +1261,14 @@ export function SettingsSidebar({
             </section>
 
             <section className="overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--surface-1)]">
-              <SettingsSectionHeader id="model" label="Модель" icon={Cpu} openSections={openSections} onToggle={toggleSection} />
+              <SettingsSectionHeader 
+                id="model" 
+                label="Модель" 
+                icon={Cpu} 
+                openSections={openSections} 
+                onToggle={toggleSection}
+                badge={activeModel?.modelId?.split('/').pop()?.replace('gemini-', 'g-') || undefined}
+              />
               {openSections.has('model') && (
                 <div className="space-y-4 px-4 pb-4">
                   <div className="relative">
@@ -1406,7 +1404,14 @@ export function SettingsSidebar({
             </section>
 
             <section className="overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--surface-1)]">
-              <SettingsSectionHeader id="tools" label="Инструменты" icon={Wrench} openSections={openSections} onToggle={toggleSection} />
+              <SettingsSectionHeader 
+                id="tools" 
+                label="Инструменты" 
+                icon={Wrench} 
+                openSections={openSections} 
+                onToggle={toggleSection}
+                badge={(tools.length + (memoryEnabled ? 1 : 0)) > 0 ? String(tools.length + (memoryEnabled ? 1 : 0)) : undefined}
+              />
               {openSections.has('tools') && (
                 <div className="space-y-3 px-4 pb-4">
                   {/* Память */}
@@ -1521,7 +1526,14 @@ export function SettingsSidebar({
             </section>
 
             <section className="overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--surface-1)]">
-              <SettingsSectionHeader id="system" label="Система" icon={BookOpen} openSections={openSections} onToggle={toggleSection} />
+              <SettingsSectionHeader 
+                id="system" 
+                label="Система" 
+                icon={BookOpen} 
+                openSections={openSections} 
+                onToggle={toggleSection}
+                badge={systemPrompt.trim() ? `${systemPrompt.trim().slice(0,12)}…` : undefined}
+              />
               {openSections.has('system') && (
                 <div className="space-y-3 px-4 pb-4">
                   <div className="relative">
@@ -1621,7 +1633,14 @@ export function SettingsSidebar({
             </section>
 
             <section className="overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--surface-1)]">
-              <SettingsSectionHeader id="manage" label="Данные" icon={FileStack} openSections={openSections} onToggle={toggleSection} />
+              <SettingsSectionHeader 
+                id="manage" 
+                label="Данные" 
+                icon={FileStack} 
+                openSections={openSections} 
+                onToggle={toggleSection}
+                badge={savedChats.length > 0 ? `${savedChats.length}` : undefined}
+              />
               {openSections.has('manage') && (
                 <div className="space-y-3 px-4 pb-4">
                   {importError && (

@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Send, Square, Paperclip, X, FileText, Image as ImageIcon,
-  Volume2, Braces, Plus, ArrowRight, Video
+  Volume2, Braces, Plus, ArrowRight, Video, Brain
 } from 'lucide-react';
 import type { AttachedFile, CanvasElement, AnnotationReference } from '@/types';
 import { generateImageId } from '@/lib/imageId';
@@ -21,6 +21,8 @@ interface ChatInputProps {
   pendingCanvasElement?: CanvasElement | null;
   onCanvasElementConsumed?: () => void;
   onAnnotationClick?: (text: string) => void;
+  deepThinkEnabled?: boolean;
+  onDeepThinkToggle?: () => void;
 }
 
 const ACCEPTED_TYPES = {
@@ -265,13 +267,15 @@ const annotationColors: Record<string, string> = {
 export default function ChatInput({
   onSend, onStop, isStreaming, disabled,
   canContinue, onContinue, canRun, onRun, onAddUserMessage,
-  pendingCanvasElement, onCanvasElementConsumed, onAnnotationClick
+  pendingCanvasElement, onCanvasElementConsumed, onAnnotationClick,
+  deepThinkEnabled, onDeepThinkToggle
 }: ChatInputProps) {
   const [text, setText] = useState('');
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [annotationRefs, setAnnotationRefs] = useState<AnnotationReference[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [canvasPreview, setCanvasPreview] = useState<CanvasElement | null>(null);
+  const [sendAnimating, setSendAnimating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -288,6 +292,17 @@ export default function ChatInput({
       delete (window as any).__chatInputAddAnnotation;
     };
   }, [onAnnotationClick]);
+
+  // Listen for append-to-input event from SelectionToolbar
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      setText(prev => prev + customEvent.detail);
+      textareaRef.current?.focus();
+    };
+    window.addEventListener('append-to-input', handler);
+    return () => window.removeEventListener('append-to-input', handler);
+  }, []);
 
   useEffect(() => {
     if (pendingCanvasElement) {
@@ -496,6 +511,10 @@ export default function ChatInput({
     if (!text.trim() && files.length === 0 && !canvasPreview && annotationRefs.length === 0) return;
     if (disabled) return;
 
+    // Анимация кнопки Send
+    setSendAnimating(true);
+    setTimeout(() => setSendAnimating(false), 250);
+
     let finalText = text;
     let additionalFiles = [...files];
 
@@ -688,6 +707,22 @@ export default function ChatInput({
               onChange={e => e.target.files && handleFiles(e.target.files)}
             />
 
+            {/* DeepThink Toggle */}
+            {onDeepThinkToggle && (
+              <button
+                onClick={onDeepThinkToggle}
+                disabled={disabled || isStreaming}
+                title={deepThinkEnabled ? 'DeepThink включён' : 'DeepThink выключен'}
+                className={`flex items-center justify-center w-8 h-8 rounded-lg transition-all disabled:opacity-40 ${
+                  deepThinkEnabled
+                    ? 'text-[var(--gem-blue)] bg-[rgba(74,158,255,0.12)] hover:bg-[rgba(74,158,255,0.18)]'
+                    : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'
+                }`}
+              >
+                <Brain size={15} />
+              </button>
+            )}
+
             {/* Add user message turn */}
             <button
               onClick={onAddUserMessage}
@@ -718,7 +753,7 @@ export default function ChatInput({
                   else if (canRun) onRun();
                 }}
                 disabled={( !hasContent && !canContinue && !canRun ) || disabled}
-                className={`flex items-center gap-1.5 px-5 sm:px-4 h-10 sm:h-9 text-base sm:text-sm font-medium rounded-xl transition-all ${
+                className={`flex items-center gap-1.5 px-5 sm:px-4 h-10 sm:h-9 text-base sm:text-sm font-medium rounded-xl transition-all ${sendAnimating ? 'animate-send-pop' : ''} ${
                   (hasContent || canContinue || canRun) && !disabled
                     ? 'bg-white hover:opacity-80 text-black'
                     : 'bg-[var(--surface-3)] text-[var(--text-dim)] cursor-not-allowed opacity-50'

@@ -1651,7 +1651,7 @@ export default function ChatMessage({
       </div>
 
       {/* Message Bubble */}
-      <div className={`relative w-full chat-bubble ${isUser ? 'max-w-[85%] self-end' : 'max-w-[90%] self-start'}`}>
+      <div className={`relative w-full chat-bubble ${isUser ? 'max-w-[90%] md:max-w-[75%] self-end' : 'max-w-[90%] self-start'}`}>
 
         {/* Файлы */}
         {message.files && message.files.length > 0 && (
