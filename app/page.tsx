@@ -67,6 +67,14 @@ import { buildImageContext } from '@/lib/image-context';
 import { collectImages } from '@/lib/image-context';
 import { cropAndScale } from '@/lib/skills/built-in/image-analyser/cropper';
 import { generateImageId } from '@/lib/imageId';
+import {
+  loadRPGProfile,
+  saveRPGProfile,
+  addFeedbackEntry,
+  getStyleInjection,
+  needsCondensation,
+  buildCondensationPrompt,
+} from '@/lib/rpg-style-profile';
 // Skills system
 import {
   collectSkillTools,
@@ -97,6 +105,37 @@ function generateToolCallId(name: string, args: unknown) {
 
 function getApiKeySuffix(key?: string | null): string {
   return key ? key.slice(-4) : '';
+}
+
+// Вспомогательная функция для одиночного вызова Gemini без стриминга
+async function callGeminiOnce(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  maxTokens: number
+): Promise<string> {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          maxOutputTokens: maxTokens,
+          temperature: 0.7,
+        },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Gemini API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  return text;
 }
 
 function sanitizeApiKeys(keys: ApiKeyEntry[]): ApiKeyEntry[] {
@@ -445,6 +484,35 @@ export default function Home() {
     if (messages.length > 0) setUnsaved(true);
   }, [messages]);
 
+  // RPG Style Profile - периодическая компрессия
+  useEffect(() => {
+    const profile = loadRPGProfile();
+    if (!needsCondensation(profile)) return;
+
+    // Запустить компрессию в фоне (fire and forget, не блокировать UI)
+    const doCondense = async () => {
+      const prompt = buildCondensationPrompt(profile);
+      try {
+        const key = selectedApiKeyEntry?.key;
+        if (!key) return;
+        
+        // Один вызов к Gemini, короткий, без стриминга
+        const result = await callGeminiOnce(key, model, prompt, 300);
+        const updatedProfile = {
+          ...profile,
+          condensedRules: result,
+          lastCondensedAt: Date.now(),
+          entries: profile.entries.slice(-5) // оставить только 5 последних сырых
+        };
+        saveRPGProfile(updatedProfile);
+      } catch (e) {
+        // Тихо игнорировать ошибку компрессии
+        console.error('RPG profile condensation failed:', e);
+      }
+    };
+    doCondense();
+  }, [messages.length, model, selectedApiKeyEntry]);
+
   // Token counting
   const tokenCountRequestIdRef = useRef(0);
   const tokenCountAbortRef = useRef<AbortController | null>(null);
@@ -719,6 +787,13 @@ export default function Home() {
     }
     if (skillsPromptInjection) {
       effectiveSystemPrompt = effectiveSystemPrompt + skillsPromptInjection;
+    }
+    
+    // RPG Style Profile injection
+    const rpgProfile = loadRPGProfile();
+    const styleInjection = getStyleInjection(rpgProfile);
+    if (styleInjection) {
+      effectiveSystemPrompt = effectiveSystemPrompt + '\n\n' + styleInjection;
     }
     
     // ВАЖНО: imageContext добавляется ВНУТРИ tool loop, так как он должен обновляться
@@ -1870,6 +1945,90 @@ export default function Home() {
     await streamGeneration(messages, lastMsg.id, true);
   }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
 
+  // ============ RPG FEEDBACK ============
+  const handleFeedback = useCallback((
+    messageId: string,
+    rating: 'like' | 'dislike',
+    comment?: string
+  ) => {
+    // 1. Обновить message.feedback в массиве messages
+    setMessages(prev => prev.map(m =>
+      m.id !== messageId ? m :
+      m.feedback?.rating === rating
+        ? { ...m, feedback: undefined }          // toggle off
+        : { ...m, feedback: { rating, comment, timestamp: Date.now() } }
+    ));
+
+    // 2. Добавить в RPG Style Profile
+    const msg = messages.find(m => m.id === messageId);
+    if (!msg) return;
+    const excerpt = getVisibleMessageText(msg.parts).slice(0, 200);
+    addFeedbackEntry({
+      rating,
+      comment: comment || '',
+      excerpt,
+      timestamp: Date.now()
+    });
+  }, [messages]);
+
+  const handleRegenerateWithFeedback = useCallback(async (
+    messageId: string,
+    dislikeComment: string
+  ) => {
+    if (isStreaming) return;
+
+    // 1. Найти индекс плохого сообщения
+    const msgIdx = messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+
+    const badMessage = messages[msgIdx];
+    const badText = getVisibleMessageText(badMessage.parts).slice(0, 400);
+
+    // 2. История ДО плохого сообщения
+    const historyBefore = messages.slice(0, msgIdx);
+
+    // 3. Сформировать скрытый хинт-сообщение
+    const feedbackHint: Message = {
+      id: generateId(),
+      role: 'user',
+      parts: [{
+        text: `[SYSTEM FEEDBACK - не упоминай это в ответе] Твой предыдущий ответ был: "${badText}${badText.length === 400 ? '...' : ''}"
+
+Пользователь поставил дизлайк.${dislikeComment ? `\nПричина: "${dislikeComment}"` : ''}
+
+Напиши принципиально иначе. Учти замечание.`,
+      }],
+      kind: 'bridge_data', // переиспользуем существующий механизм скрытия
+    };
+
+    // 4. Обновить message.feedback с флагом appliedToRegeneration
+    setMessages(prev => prev.map(m =>
+      m.id !== messageId ? m : {
+        ...m,
+        feedback: { ...m.feedback!, appliedToRegeneration: true }
+      }
+    ));
+
+    // 5. Создать новое пустое сообщение модели
+    const newMsgId = generateId();
+    const newMessages = [
+      ...historyBefore,
+      feedbackHint,
+      { 
+        id: newMsgId, 
+        role: 'model' as const, 
+        parts: [{ text: '' }], 
+        isStreaming: true, 
+        modelName: model, 
+        apiKeySuffix: selectedApiKeySuffix || undefined 
+      },
+    ];
+    setMessages(newMessages);
+
+    // 6. Стримить. История для API: всё до плохого + хинт
+    await streamGeneration([...historyBefore, feedbackHint], newMsgId, false);
+  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
+
   const handleBranch = useCallback((messageId: string) => {
     if (isStreaming || (appMode === 'arena' && arena.isStreaming)) return;
     
@@ -2319,6 +2478,7 @@ export default function Home() {
   const visibleMessages = useMemo(
     () => messages.filter(message => {
       if (message.kind === 'tool_response') return false;
+      if (message.kind === 'bridge_data') return false; // скрыть feedback-хинты
       if (
         message.role === 'user' &&
         (message.toolResponses?.length || 0) > 0 &&
@@ -2841,6 +3001,8 @@ export default function Home() {
                         }
                       }}
                       onOpenAgentChat={(agentId) => handleOpenAgent(agentId, currentChatId || undefined)}
+                      onFeedback={appMode === 'arena' ? undefined : handleFeedback}
+                      onRegenerateWithFeedback={appMode === 'arena' ? undefined : handleRegenerateWithFeedback}
                     />
                   </div>
                 );

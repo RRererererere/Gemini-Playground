@@ -21,6 +21,7 @@ import ImageMemorySearchPill from './ImageMemorySearchPill';
 import { SkillArtifactsGroup } from './SkillArtifactRenderer';
 import AnnotationRefDisplay from './AnnotationRefDisplay';
 import ImageLightbox from './ImageLightbox';
+import MessageFeedback from './MessageFeedback';
 
 interface ChatMessageProps {
   message: Message;
@@ -40,6 +41,8 @@ interface ChatMessageProps {
   onPlayHTML?: (html: string) => void;
   onAnnotationClick?: (annotation: import('@/types').AnnotationItem) => void;
   onOpenAgentChat?: (agentId: string) => void;
+  onFeedback?: (messageId: string, rating: 'like' | 'dislike', comment?: string) => void;
+  onRegenerateWithFeedback?: (messageId: string, comment: string) => void;
 }
 
 function FilePreview({ file }: { file: AttachedFile }) {
@@ -1496,7 +1499,7 @@ function BridgeDataBlock({ bridgeData }: { bridgeData: BridgePayload }) {
 
 export default function ChatMessage({
   message, index, isLast, isStreaming,
-  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat
+  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat, onFeedback, onRegenerateWithFeedback
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -1944,6 +1947,16 @@ export default function ChatMessage({
               <span className="text-[9px]">▶</span>
               Продолжить
             </button>
+          )}
+
+          {/* Feedback кнопки - только для model сообщений */}
+          {!isUser && onFeedback && onRegenerateWithFeedback && (
+            <MessageFeedback
+              message={message}
+              isLast={isLast}
+              onFeedback={onFeedback}
+              onRegenerateWithFeedback={onRegenerateWithFeedback}
+            />
           )}
 
           <button

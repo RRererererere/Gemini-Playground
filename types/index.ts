@@ -143,6 +143,13 @@ export interface Message {
   forceEdit?: boolean;
   // Arena: ID агента-отправителя (только в Arena режиме для model-сообщений)
   arenaAgentId?: string;
+  // RPG Feedback: оценка сообщения пользователем
+  feedback?: {
+    rating: 'like' | 'dislike';
+    comment?: string;
+    timestamp: number;
+    appliedToRegeneration?: boolean;
+  };
 }
 
 // Артефакт скилла (импортируется из lib/skills/types.ts в рантайме)
