@@ -43,6 +43,9 @@ interface ChatMessageProps {
   onOpenAgentChat?: (agentId: string) => void;
   onFeedback?: (messageId: string, rating: 'like' | 'dislike', comment?: string) => void;
   onRegenerateWithFeedback?: (messageId: string, comment: string) => void;
+  onRegenerateTextOnly?: (messageId: string) => void;
+  onDismissBlocked?: (messageId: string) => void;
+  onEditDeepThinking?: (messageId: string, newThinking: string) => void;
 }
 
 function FilePreview({ file }: { file: AttachedFile }) {
@@ -669,10 +672,20 @@ function ThinkingBlock({ thinking, isStreaming }: { thinking: string; isStreamin
 }
 
 // Блок с размышлениями DeepThink (фиолетовый)
-function DeepThinkingBlock({ thinking, isStreaming }: { thinking: string; isStreaming?: boolean }) {
+function DeepThinkingBlock({ 
+  thinking, 
+  isStreaming,
+  onEdit,
+}: { 
+  thinking: string; 
+  isStreaming?: boolean;
+  onEdit?: (newThinking: string) => void;
+}) {
   const [expanded, setExpanded] = useState(true); // По умолчанию открыт
   const [translatedText, setTranslatedText] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState(thinking);
 
   const handleTranslate = async () => {
     if (translatedText) {
@@ -702,6 +715,18 @@ function DeepThinkingBlock({ thinking, isStreaming }: { thinking: string; isStre
     }
   };
 
+  const handleSave = () => {
+    if (onEdit) {
+      onEdit(editText);
+    }
+    setIsEditing(false);
+  };
+
+  const handleCancel = () => {
+    setEditText(thinking);
+    setIsEditing(false);
+  };
+
   const displayText = translatedText || thinking;
 
   return (
@@ -714,6 +739,20 @@ function DeepThinkingBlock({ thinking, isStreaming }: { thinking: string; isStre
         <span className="text-xs text-purple-400 font-medium flex-1 text-left">
           {isStreaming ? '🧠 DeepThink анализирует контекст...' : '🧠 DeepThink Analysis'}
         </span>
+        {!isStreaming && onEdit && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsEditing(true);
+              setExpanded(true);
+            }}
+            className="flex items-center gap-1 px-2 py-1 text-[9px] text-purple-300/70 hover:text-purple-300 hover:bg-purple-500/20 rounded transition-all"
+            title="Редактировать размышления"
+          >
+            <Edit2 size={9} />
+            Правка
+          </button>
+        )}
         {!isStreaming && (
           <button
             onClick={(e) => {
@@ -745,7 +784,35 @@ function DeepThinkingBlock({ thinking, isStreaming }: { thinking: string; isStre
       </button>
       {(expanded || isStreaming) && (
         <div className="px-4 py-3 border-t border-purple-500/20 bg-purple-500/5">
-          {isTranslating ? (
+          {isEditing ? (
+            <div className="flex flex-col gap-2">
+              <textarea
+                value={editText}
+                onChange={e => setEditText(e.target.value)}
+                className="w-full text-xs text-purple-200/90 leading-relaxed bg-purple-500/10 border border-purple-500/30 rounded-lg px-3 py-2 resize-none focus:outline-none focus:border-purple-400/60 placeholder:text-purple-400/40 max-h-[200px] sm:max-h-[400px]"
+                style={{ minHeight: '120px', resize: 'vertical' }}
+                placeholder="Размышления DeepThink..."
+                autoFocus
+              />
+              <div className="flex items-center gap-2 justify-end">
+                <span className="text-[10px] text-purple-400/50 flex-1">
+                  После сохранения — нажми «Регенерировать текст»
+                </span>
+                <button
+                  onClick={handleCancel}
+                  className="px-2.5 py-1 text-[11px] rounded-lg text-purple-300/60 hover:text-purple-300 hover:bg-purple-500/20 transition-colors"
+                >
+                  Отмена
+                </button>
+                <button
+                  onClick={handleSave}
+                  className="px-2.5 py-1 text-[11px] rounded-lg bg-purple-500/25 text-purple-300 hover:bg-purple-500/35 border border-purple-500/30 transition-colors"
+                >
+                  Сохранить
+                </button>
+              </div>
+            </div>
+          ) : isTranslating ? (
             // Скелетон во время перевода
             <div className="space-y-2">
               <div className="skeleton-text w-full" style={{ background: 'linear-gradient(90deg, rgba(168, 85, 247, 0.1) 0%, rgba(168, 85, 247, 0.2) 50%, rgba(168, 85, 247, 0.1) 100%)', backgroundSize: '200% 100%' }}></div>
@@ -1154,6 +1221,67 @@ function BlockedIndicator({ reason }: { reason?: string }) {
   );
 }
 
+// Блок с действиями когда контент заблокирован после DeepThink
+function BlockedWithDeepThinkActions({
+  reason,
+  messageId,
+  isLast,
+  onDismiss,
+  onRetry,
+}: {
+  reason?: string;
+  messageId: string;
+  isLast: boolean;
+  onDismiss: () => void;
+  onRetry: () => void;
+}) {
+  const reasonLabels: Record<string, string> = {
+    SAFETY: 'SAFETY',
+    RECITATION: 'RECITATION',
+    BLOCKLIST: 'BLOCKLIST',
+    PROHIBITED_CONTENT: 'PROHIBITED_CONTENT',
+    OTHER: 'OTHER',
+  };
+
+  const reasonCode = (reason && reasonLabels[reason]) || 'BLOCKED';
+
+  return (
+    <div className="mb-3 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <AlertOctagon size={13} className="text-red-400 flex-shrink-0" />
+        <span className="text-[11px] text-red-400 font-medium">
+          Контент заблокирован
+        </span>
+        <span className="text-[10px] text-red-400/60 font-mono ml-1">
+          [{reasonCode}]
+        </span>
+      </div>
+      
+      <p className="text-[11px] text-[var(--text-dim)] leading-relaxed">
+        DeepThink-анализ сохранён. Попробовать снова с другим подходом или оставить анализ без ответа?
+      </p>
+      
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          onClick={onDismiss}
+          className="px-3 py-1.5 text-[11px] rounded-lg bg-[var(--surface-3)] text-[var(--text-dim)] hover:text-[var(--text-primary)] border border-[var(--border)] transition-colors"
+        >
+          Оставить анализ
+        </button>
+        {isLast && (
+          <button
+            onClick={onRetry}
+            className="px-3 py-1.5 text-[11px] rounded-lg bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/25 transition-colors flex items-center gap-1.5"
+          >
+            <RefreshCw size={10} />
+            Попробовать снова
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ToolCallsBlock({
   toolCalls,
   messageId,
@@ -1499,7 +1627,7 @@ function BridgeDataBlock({ bridgeData }: { bridgeData: BridgePayload }) {
 
 export default function ChatMessage({
   message, index, isLast, isStreaming,
-  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat, onFeedback, onRegenerateWithFeedback
+  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat, onFeedback, onRegenerateWithFeedback, onRegenerateTextOnly, onDismissBlocked, onEditDeepThinking
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -1634,7 +1762,15 @@ export default function ChatMessage({
           </span>
         )}
         {isBlocked && !isUser && (
-          <BlockedIndicator reason={message.blockReason || message.finishReason} />
+          deepThinking
+            ? <BlockedWithDeepThinkActions
+                reason={message.blockReason || message.finishReason}
+                messageId={message.id}
+                isLast={isLast}
+                onDismiss={() => onDismissBlocked?.(message.id)}
+                onRetry={() => onRegenerateTextOnly?.(message.id)}
+              />
+            : <BlockedIndicator reason={message.blockReason || message.finishReason} />
         )}
         {geminiError && !isUser && (
           <MessageErrorIndicator
@@ -1720,6 +1856,7 @@ export default function ChatMessage({
               <DeepThinkingBlock
                 thinking={deepThinking}
                 isStreaming={isStreaming && isLast && !deepThinkAnalysis && !thinking && !messageText}
+                onEdit={onEditDeepThinking ? (newText) => onEditDeepThinking(message.id, newText) : undefined}
               />
             )}
 
@@ -1938,6 +2075,24 @@ export default function ChatMessage({
               Повтор
             </button>
           )}
+
+          {/* Регенерировать только текст (без DeepThink) */}
+          {(() => {
+            const hasDeepThink = !!message.deepThinking && !!message.deepThinkEnhancedPrompt;
+            const hasError = !!message.error;
+            const isEmpty = !messageText && !message.isStreaming;
+            const showTextOnlyRegen = !isUser && isLast && hasDeepThink && (hasError || isEmpty || message.isBlocked);
+            
+            return showTextOnlyRegen && onRegenerateTextOnly && (
+              <button
+                onClick={() => onRegenerateTextOnly(message.id)}
+                className="flex items-center gap-1 px-2 py-1 text-[11px] text-purple-400/80 hover:text-purple-400 hover:bg-purple-500/10 rounded-md transition-all"
+              >
+                <RefreshCw size={10} />
+                Регенерировать текст
+              </button>
+            );
+          })()}
 
           {!isUser && isLast && messageText && (
             <button

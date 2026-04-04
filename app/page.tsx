@@ -733,6 +733,7 @@ export default function Home() {
     targetMessageId: string,
     isAppending: boolean,
     customAnalysis?: DeepThinkAnalysis, // Кастомный анализ после редактирования
+    prebuiltSystemPrompt?: string,      // Готовый prompt от предыдущего DeepThink
   ) => {
     // Получить следующий доступный ключ
     const key = selectedApiKeyEntry?.key;
@@ -800,7 +801,8 @@ export default function Home() {
     // после каждого zoom_region вызова (новые изображения добавляются в историю)
     let finalAnalysis: DeepThinkAnalysis | null = null;
     
-    if (deepThinkState.enabled && !customAnalysis) {
+    if (deepThinkState.enabled && !customAnalysis && !prebuiltSystemPrompt) {
+      // Путь 1: DeepThink enabled, нет customAnalysis, нет prebuiltSystemPrompt
       // Показываем визуально, что идет анализ - создаем пустое сообщение с deepThinking
       setMessages(prev => prev.map(m =>
         m.id !== targetMessageId ? m : {
@@ -831,6 +833,16 @@ export default function Home() {
       effectiveSystemPrompt = dtResult.enhancedPrompt;
       finalAnalysis = dtResult.analysis;
       
+      // Сохранить enhancedPrompt на сообщение для последующего переиспользования
+      if (dtResult.enhancedPrompt && !dtResult.error) {
+        setMessages(prev => prev.map(m =>
+          m.id !== targetMessageId ? m : {
+            ...m,
+            deepThinkEnhancedPrompt: dtResult.enhancedPrompt,
+          }
+        ));
+      }
+      
       if (dtResult.error) {
         // Записываем ошибку прямо в сообщение
         setMessages(prev => prev.map(m =>
@@ -852,7 +864,7 @@ export default function Home() {
         ));
       }
     } else if (customAnalysis) {
-      // Используем кастомный анализ после редактирования
+      // Путь 2: Используем кастомный анализ после редактирования
       finalAnalysis = customAnalysis;
       effectiveSystemPrompt = buildEnhancedPromptFromAnalysis(customAnalysis);
       
@@ -866,6 +878,10 @@ export default function Home() {
           isStreaming: true,
         }
       ));
+    } else if (prebuiltSystemPrompt) {
+      // Путь 3: Готовый prompt (регенерация текста без DeepThink)
+      effectiveSystemPrompt = prebuiltSystemPrompt;
+      // DeepThink НЕ запускается, deepThinking на сообщении НЕ трогается
     }
 
     // Cleanup tracker для таймеров
@@ -2029,6 +2045,74 @@ export default function Home() {
     await streamGeneration([...historyBefore, feedbackHint], newMsgId, false);
   }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
 
+  // ============ DEEPTHINK IMPROVEMENTS ============
+  
+  // Регенерация только текста без повторного DeepThink
+  const handleRegenerateTextOnly = useCallback(async (messageId: string) => {
+    if (isStreaming) return;
+
+    const msgIdx = messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+
+    const existingMsg = messages[msgIdx];
+    const historyBefore = messages.slice(0, msgIdx);
+
+    // Сбросить только основной текст и ошибки — сохранить deepThinking, deepThinkAnalysis
+    setMessages(prev => prev.map(m =>
+      m.id !== messageId ? m : {
+        ...m,
+        parts: [{ text: '' }],
+        thinking: undefined,
+        error: undefined,
+        errorType: undefined,
+        errorCode: undefined,
+        errorStatus: undefined,
+        errorRetryAfterMs: undefined,
+        isBlocked: false,
+        blockReason: undefined,
+        finishReason: undefined,
+        isStreaming: true,
+      }
+    ));
+
+    // Передать сохранённый enhanced prompt через новый параметр
+    await streamGeneration(
+      historyBefore,
+      messageId,
+      false,
+      undefined,                                // customAnalysis
+      existingMsg.deepThinkEnhancedPrompt,      // prebuiltSystemPrompt
+    );
+  }, [isStreaming, messages, streamGeneration]);
+
+  // Редактирование DeepThink размышлений
+  const extractEnhancedPromptFromThinking = (thinking: string): string => {
+    const marker = '---СИСТЕМНЫЙ ПРОМПТ---';
+    const idx = thinking.indexOf(marker);
+    return idx !== -1
+      ? thinking.slice(idx + marker.length).trim()
+      : thinking.trim();
+  };
+
+  const handleEditDeepThinking = useCallback((messageId: string, newThinking: string) => {
+    setMessages(prev => prev.map(m => {
+      if (m.id !== messageId) return m;
+      const newEnhancedPrompt = extractEnhancedPromptFromThinking(newThinking);
+      return {
+        ...m,
+        deepThinking: newThinking,
+        deepThinkEnhancedPrompt: newEnhancedPrompt || m.deepThinkEnhancedPrompt,
+      };
+    }));
+  }, []);
+
+  // Скрыть blocked state
+  const handleDismissBlocked = useCallback((messageId: string) => {
+    setMessages(prev => prev.map(m =>
+      m.id !== messageId ? m : { ...m, isBlocked: false, blockReason: undefined }
+    ));
+  }, []);
+
   const handleBranch = useCallback((messageId: string) => {
     if (isStreaming || (appMode === 'arena' && arena.isStreaming)) return;
     
@@ -3003,6 +3087,9 @@ export default function Home() {
                       onOpenAgentChat={(agentId) => handleOpenAgent(agentId, currentChatId || undefined)}
                       onFeedback={appMode === 'arena' ? undefined : handleFeedback}
                       onRegenerateWithFeedback={appMode === 'arena' ? undefined : handleRegenerateWithFeedback}
+                      onRegenerateTextOnly={appMode === 'arena' ? undefined : handleRegenerateTextOnly}
+                      onDismissBlocked={appMode === 'arena' ? undefined : handleDismissBlocked}
+                      onEditDeepThinking={appMode === 'arena' ? undefined : handleEditDeepThinking}
                     />
                   </div>
                 );

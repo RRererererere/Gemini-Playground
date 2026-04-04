@@ -115,6 +115,7 @@ export interface Message {
   deepThinking?: string;   // размышления DeepThink (фиолетовые)
   deepThinkAnalysis?: DeepThinkAnalysis; // результат анализа DeepThink (редактируемый)
   deepThinkError?: string; // ошибка при выполнении анализа
+  deepThinkEnhancedPrompt?: string; // итоговый system prompt после DeepThink-анализа
   preflightImageSearch?: {
     found: boolean;
     memories: Array<{
