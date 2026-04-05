@@ -678,6 +678,7 @@ function DeepThinkingBlock({
   thinking, 
   isStreaming,
   isInterrupted,
+  errorMessage,
   onEdit,
   onContinue,
   onSkip,
@@ -685,6 +686,7 @@ function DeepThinkingBlock({
   thinking: string; 
   isStreaming?: boolean;
   isInterrupted?: boolean;
+  errorMessage?: string;
   onEdit?: (newThinking: string) => void;
   onContinue?: () => void;
   onSkip?: () => void;
@@ -851,19 +853,30 @@ function DeepThinkingBlock({
       
       {/* Кнопки при прерывании DeepThink */}
       {isInterrupted && onContinue && onSkip && (
-        <div className="px-4 py-3 border-t border-purple-500/20 bg-purple-500/5 flex items-center gap-2">
-          <button
-            onClick={onSkip}
-            className="px-3 py-1.5 text-[11px] rounded-lg bg-white/10 text-white hover:bg-white/15 transition-colors"
-          >
-            Оставить
-          </button>
-          <button
-            onClick={onContinue}
-            className="px-3 py-1.5 text-[11px] rounded-lg bg-white/10 text-white hover:bg-white/15 transition-colors"
-          >
-            Продолжить
-          </button>
+        <div className="px-4 py-3 border-t border-purple-500/20 bg-purple-500/5 flex flex-col gap-2">
+          {errorMessage && (
+            <p className="text-[11px] text-red-300/80 leading-relaxed">
+              ⚠ {errorMessage}
+            </p>
+          )}
+          <p className="text-[11px] text-purple-300/60">
+            DeepThink прерван. Продолжить генерацию или оставить только анализ?
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onSkip}
+              className="px-3 py-1.5 text-[11px] rounded-lg bg-[var(--surface-3)] text-[var(--text-dim)] hover:text-[var(--text-primary)] border border-[var(--border)] transition-colors"
+            >
+              Оставить анализ
+            </button>
+            <button
+              onClick={onContinue}
+              className="px-3 py-1.5 text-[11px] rounded-lg bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 border border-purple-500/30 transition-colors flex items-center gap-1.5"
+            >
+              <RefreshCw size={10} />
+              Повторить генерацию
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -1883,6 +1896,7 @@ export default function ChatMessage({
                 thinking={deepThinking}
                 isStreaming={isStreaming && isLast && !deepThinkAnalysis && !thinking && !messageText}
                 isInterrupted={message.deepThinkInterrupted}
+                errorMessage={message.deepThinkError}
                 onEdit={onEditDeepThinking ? (newText) => onEditDeepThinking(message.id, newText) : undefined}
                 onContinue={onContinueDeepThink ? () => onContinueDeepThink(message.id) : undefined}
                 onSkip={onSkipDeepThink ? () => onSkipDeepThink(message.id) : undefined}
@@ -1898,8 +1912,8 @@ export default function ChatMessage({
               />
             )}
 
-            {/* DeepThink Error block */}
-            {!isUser && deepThinkError && (
+            {/* DeepThink Error block - только если не interrupted (в interrupted случае UI уже в DeepThinkingBlock) */}
+            {!isUser && deepThinkError && !message.deepThinkInterrupted && (
               <DeepThinkErrorBlock error={deepThinkError} />
             )}
 
@@ -2072,18 +2086,24 @@ export default function ChatMessage({
       </div>
 
       {/* Actions */}
-      {!isEditing && !isStreaming && (
-        <div className={`flex items-center gap-0.5 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-          {messageText && (
-            <button
-              onClick={copyText}
-              className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-all"
-              title={copied ? 'Скопировано' : 'Копировать'}
-            >
-              {copied ? <Check size={10} className="text-[var(--gem-green)]" /> : <Copy size={10} />}
-              <span className="hidden sm:inline">{copied ? 'Скопировано' : 'Копировать'}</span>
-            </button>
-          )}
+      {!isEditing && !isStreaming && (() => {
+        const hasFeedback = !isUser && !!message.feedback?.rating;
+        return (
+          <div className={`flex items-center gap-0.5 mt-1.5 transition-opacity ${
+            hasFeedback
+              ? 'opacity-100'
+              : 'opacity-0 group-hover:opacity-100'
+          } ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+            {messageText && (
+              <button
+                onClick={copyText}
+                className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-all"
+                title={copied ? 'Скопировано' : 'Копировать'}
+              >
+                {copied ? <Check size={10} className="text-[var(--gem-green)]" /> : <Copy size={10} />}
+                <span className="hidden sm:inline">{copied ? 'Скопировано' : 'Копировать'}</span>
+              </button>
+            )}
 
           {/* Нельзя редактировать thinking-only ответы */}
           {!(message.thinking && !messageText && !isBlocked) && (
@@ -2166,8 +2186,9 @@ export default function ChatMessage({
               <span className="hidden md:inline">Ветка</span>
             </button>
           )}
-        </div>
-      )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

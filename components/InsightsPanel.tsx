@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { X, BarChart2 } from 'lucide-react';
+import { X, BarChart2, ThumbsUp, ThumbsDown, RefreshCw, ChevronUp, ChevronDown } from 'lucide-react';
 import type { Message } from '@/types';
 import { getMemories } from '@/lib/memory-store';
 import type { Memory, MemoryScope } from '@/lib/memory-store';
@@ -24,6 +24,14 @@ const CATEGORY_COLORS: Record<string, string> = {
   belief: '#8b5cf6',
   episode: '#6366f1',
 };
+
+// Вспомогательная функция для извлечения текста из parts
+function getTextFromParts(parts: any[]): string {
+  return parts
+    .filter((p: any) => 'text' in p && typeof p.text === 'string' && !p.thought)
+    .map((p: any) => p.text)
+    .join('');
+}
 
 export default function InsightsPanel({ messages, chatId, onClose }: InsightsPanelProps) {
   const [activeTab, setActiveTab] = useState<TabType>('memory');
@@ -85,12 +93,16 @@ export default function InsightsPanel({ messages, chatId, onClose }: InsightsPan
   const deepThinkAnalyses = useMemo(() => {
     return messages
       .filter(m => m.role === 'model' && (m.deepThinking || m.deepThinkEnhancedPrompt))
-      .map((m, idx) => ({
+      .map((m) => ({
         messageId: m.id,
-        messageIndex: messages.indexOf(m),
+        messageIndex: messages.indexOf(m) + 1, // 1-based
+        messageExcerpt: getTextFromParts(m.parts).slice(0, 60),
         deepThinking: m.deepThinking,
+        originalPrompt: m.deepThinkOriginalPrompt,
         enhancedPrompt: m.deepThinkEnhancedPrompt,
         analysis: m.deepThinkAnalysis,
+        hasError: !!m.deepThinkError,
+        errorText: m.deepThinkError,
         timestamp: Date.now(), // TODO: добавить реальный timestamp в Message
       }))
       .slice(-5); // последние 5
@@ -315,16 +327,22 @@ interface DeepThinkTabProps {
   analyses: Array<{
     messageId: string;
     messageIndex: number;
+    messageExcerpt?: string;
     deepThinking?: string;
+    originalPrompt?: string;
     enhancedPrompt?: string;
     analysis?: any;
+    hasError?: boolean;
+    errorText?: string;
     timestamp: number;
   }>;
 }
 
 function DeepThinkTab({ analyses }: DeepThinkTabProps) {
-  // Начинаем с последнего анализа, но безопасно
   const [selectedIndex, setSelectedIndex] = useState(() => Math.max(0, analyses.length - 1));
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
+  const [originalExpanded, setOriginalExpanded] = useState(false);
+  const [enhancedExpanded, setEnhancedExpanded] = useState(false);
 
   if (analyses.length === 0) {
     return (
@@ -338,7 +356,6 @@ function DeepThinkTab({ analyses }: DeepThinkTabProps) {
     );
   }
 
-  // Безопасный индекс
   const safeIndex = Math.min(Math.max(0, selectedIndex), analyses.length - 1);
   const selected = analyses[safeIndex];
 
@@ -354,62 +371,93 @@ function DeepThinkTab({ analyses }: DeepThinkTabProps) {
     );
   }
 
+  const diffChars = selected.enhancedPrompt && selected.originalPrompt
+    ? selected.enhancedPrompt.length - selected.originalPrompt.length
+    : null;
+
   return (
-    <div className="flex flex-col h-full p-4 space-y-3">
-      {/* Pipeline Card */}
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--border-subtle)] bg-[var(--surface-3)]">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-purple-400">⚡ DeepThink #{safeIndex + 1}</span>
-            <span className="text-[10px] text-[var(--text-dim)]">
-              · сообщение #{selected.messageIndex}
-            </span>
-          </div>
-          <span className="text-[10px] text-[var(--text-dim)]">
-            {/* TODO: реальный timestamp */}
-            только что
+    <div className="flex flex-col h-full overflow-y-auto p-4 space-y-3">
+      {/* Контекст сообщения */}
+      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--surface-2)] border border-[var(--border)]">
+        <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider">
+          Сообщение #{selected.messageIndex}
+        </span>
+        {selected.messageExcerpt && (
+          <span className="text-[11px] text-[var(--text-primary)] truncate flex-1">
+            "{selected.messageExcerpt}..."
           </span>
-        </div>
+        )}
+        {selected.hasError && (
+          <span className="text-[10px] text-red-400 flex-shrink-0">⚠ ошибка</span>
+        )}
+      </div>
 
-        {/* Pipeline */}
-        <div className="p-4 space-y-3">
-          {/* Размышления */}
-          {selected.deepThinking && (
-            <>
-              <div>
-                <div className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-1.5">
-                  РАЗМЫШЛЕНИЯ
-                </div>
-                <div className="text-[12px] text-[var(--text-primary)] leading-relaxed line-clamp-5">
-                  {selected.deepThinking}
-                </div>
-              </div>
-
-              <div className="flex items-center justify-center py-1.5">
-                <div className="w-px h-4 bg-[var(--border)]" />
-              </div>
-            </>
-          )}
-
-          {/* Enhanced Prompt */}
-          {selected.enhancedPrompt && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-1.5">
-                ENHANCED PROMPT
-              </div>
-              <div className="text-[12px] text-[var(--text-primary)] leading-relaxed line-clamp-3">
-                {selected.enhancedPrompt.slice(0, 200)}...
-              </div>
+      {/* Pipeline карточка */}
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] overflow-hidden">
+        {/* ИСХОДНЫЙ ПРОМПТ */}
+        {selected.originalPrompt ? (
+          <PipelineSection
+            label="ИСХОДНЫЙ ПРОМПТ"
+            content={selected.originalPrompt}
+            expanded={originalExpanded}
+            onToggle={() => setOriginalExpanded(v => !v)}
+            color="var(--text-dim)"
+          />
+        ) : (
+          <div className="px-4 py-3 border-b border-[var(--border-subtle)]">
+            <div className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-1">
+              ИСХОДНЫЙ ПРОМПТ
             </div>
-          )}
-        </div>
+            <div className="text-[11px] text-[var(--text-dim)] italic">
+              нет данных (сохраняется с новых чатов)
+            </div>
+          </div>
+        )}
 
-        {/* Diff Stats */}
-        {selected.enhancedPrompt && (
+        <PipelineArrow />
+
+        {/* РАЗМЫШЛЕНИЯ */}
+        {selected.deepThinking && (
+          <PipelineSection
+            label="РАЗМЫШЛЕНИЯ"
+            content={selected.deepThinking}
+            expanded={thinkingExpanded}
+            onToggle={() => setThinkingExpanded(v => !v)}
+            color="#a855f7"
+            accent
+          />
+        )}
+
+        <PipelineArrow />
+
+        {/* ENHANCED PROMPT */}
+        {selected.enhancedPrompt ? (
+          <PipelineSection
+            label="ENHANCED PROMPT"
+            content={selected.enhancedPrompt}
+            expanded={enhancedExpanded}
+            onToggle={() => setEnhancedExpanded(v => !v)}
+            color="var(--gem-teal)"
+          />
+        ) : (
+          <div className="px-4 py-3">
+            <div className="text-[10px] uppercase tracking-wider text-[var(--text-dim)] mb-1">
+              ENHANCED PROMPT
+            </div>
+            <div className="text-[11px] text-[var(--text-dim)] italic">
+              {selected.hasError ? `Не создан — ${selected.errorText}` : 'нет данных'}
+            </div>
+          </div>
+        )}
+
+        {/* Diff stats */}
+        {diffChars !== null && (
           <div className="flex items-center gap-3 px-4 py-2 border-t border-[var(--border-subtle)] bg-[var(--surface-3)]">
-            <span className="text-[10px] font-mono text-[var(--gem-teal)]">
-              +{selected.enhancedPrompt.length} символов
+            <span className={`text-[10px] font-mono ${diffChars >= 0 ? 'text-[var(--gem-teal)]' : 'text-red-400'}`}>
+              {diffChars >= 0 ? '+' : ''}{diffChars} символов
+            </span>
+            <span className="text-[10px] text-[var(--text-dim)]">
+              {selected.originalPrompt?.length} → {selected.enhancedPrompt?.length}
             </span>
           </div>
         )}
@@ -417,24 +465,84 @@ function DeepThinkTab({ analyses }: DeepThinkTabProps) {
 
       {/* Timeline */}
       {analyses.length > 1 && (
-        <div className="flex items-center gap-0 mt-2">
-          {analyses.map((analysis, idx) => (
-            <div key={analysis.messageId} className="flex items-center">
-              <button
-                onClick={() => setSelectedIndex(idx)}
-                className={`w-2.5 h-2.5 rounded-full border-2 transition-all ${
-                  idx === safeIndex
-                    ? 'bg-purple-400 border-purple-400'
-                    : 'bg-transparent border-[var(--border-strong)] hover:border-purple-400/50'
-                }`}
-              />
+        <div className="flex items-end gap-0 mt-1 px-1">
+          {analyses.map((a, idx) => (
+            <div key={a.messageId} className="flex items-center flex-1 min-w-0">
+              <div className="flex flex-col items-center gap-1">
+                <button
+                  onClick={() => { setSelectedIndex(idx); setThinkingExpanded(false); }}
+                  className={`w-2.5 h-2.5 rounded-full border-2 transition-all ${
+                    idx === safeIndex
+                      ? 'bg-purple-400 border-purple-400 scale-125'
+                      : a.hasError
+                        ? 'bg-transparent border-red-400/50 hover:border-red-400'
+                        : 'bg-transparent border-[var(--border-strong)] hover:border-purple-400/50'
+                  }`}
+                />
+                <span className="text-[9px] text-[var(--text-dim)]">#{a.messageIndex}</span>
+              </div>
               {idx < analyses.length - 1 && (
-                <div className="flex-1 h-px bg-[var(--border)] min-w-[20px]" />
+                <div className="flex-1 h-px bg-[var(--border)] mx-1 mb-4" />
               )}
             </div>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// Переиспользуемый компонент секции
+function PipelineSection({ label, content, expanded, onToggle, color, accent }: {
+  label: string;
+  content: string;
+  expanded: boolean;
+  onToggle: () => void;
+  color: string;
+  accent?: boolean;
+}) {
+  const MAX_COLLAPSED = 120;
+  const isLong = content.length > MAX_COLLAPSED;
+
+  return (
+    <div className="border-b border-[var(--border-subtle)] last:border-0">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-[var(--surface-3)] transition-colors"
+      >
+        <span className="text-[10px] uppercase tracking-wider" style={{ color }}>
+          {label}
+        </span>
+        {isLong && (
+          expanded
+            ? <ChevronUp size={10} className="text-[var(--text-dim)] flex-shrink-0" />
+            : <ChevronDown size={10} className="text-[var(--text-dim)] flex-shrink-0" />
+        )}
+      </button>
+      <div className="px-4 pb-3">
+        <p className={`text-[11px] leading-relaxed whitespace-pre-wrap break-words ${
+          accent ? 'text-purple-300/90' : 'text-[var(--text-primary)]'
+        } ${!expanded && isLong ? 'line-clamp-3' : ''}`}>
+          {content}
+        </p>
+        {isLong && !expanded && (
+          <button
+            onClick={onToggle}
+            className="text-[10px] text-[var(--text-dim)] hover:text-[var(--text-primary)] mt-1"
+          >
+            показать всё ({content.length} символов)
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PipelineArrow() {
+  return (
+    <div className="flex items-center justify-center py-1 bg-[var(--surface-3)]">
+      <div className="w-px h-3 bg-[var(--border)]" />
+      <span className="text-[9px] text-[var(--text-dim)] mx-2 absolute">↓</span>
     </div>
   );
 }
@@ -448,14 +556,114 @@ interface SessionTabProps {
 }
 
 function SessionTab({ messages }: SessionTabProps) {
-  // Пока заглушка — зависит от реализации feedback системы
-  return (
-    <div className="flex flex-col items-center justify-center h-full p-8 text-center">
-      <div className="text-sm text-[var(--text-primary)] mb-2">
-        Нет данных о взаимодействиях в этом чате
+  // Собираем model-сообщения с событиями
+  const modelMessages = messages
+    .filter(m => m.role === 'model' && !m.isStreaming)
+    .map((m) => ({
+      id: m.id,
+      index: messages.indexOf(m) + 1,
+      excerpt: getTextFromParts(m.parts).slice(0, 70),
+      feedback: m.feedback,
+      regenerationCount: 0, // TODO: добавить interactionMeta в Message
+      regenerationReasons: [],
+    }));
+
+  const hasAnyEvents = modelMessages.some(
+    m => m.feedback || m.regenerationCount > 0
+  );
+
+  // Summary stats
+  const totalLikes = modelMessages.filter(m => m.feedback?.rating === 'like').length;
+  const totalDislikes = modelMessages.filter(m => m.feedback?.rating === 'dislike').length;
+  const totalRegens = modelMessages.reduce((s, m) => s + m.regenerationCount, 0);
+  const mostRegenMsg = [...modelMessages].sort((a, b) => b.regenerationCount - a.regenerationCount)[0];
+
+  if (!hasAnyEvents) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-8 text-center gap-3">
+        <div className="text-3xl">💬</div>
+        <div className="text-sm text-[var(--text-primary)]">Нет данных</div>
+        <div className="text-xs text-[var(--text-dim)] max-w-[200px]">
+          Ставь лайки и дизлайки на ответы — они появятся здесь
+        </div>
       </div>
-      <div className="text-xs text-[var(--text-dim)]">
-        Ставь лайки и дизлайки на ответы — они появятся здесь
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-full overflow-y-auto">
+      {/* Summary */}
+      <div className="px-4 pt-4 pb-3">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
+          <div className="flex items-center gap-4 flex-wrap text-[11px]">
+            {totalLikes > 0 && (
+              <span className="flex items-center gap-1 text-[var(--gem-teal)]">
+                <ThumbsUp size={10} /> {totalLikes}
+              </span>
+            )}
+            {totalDislikes > 0 && (
+              <span className="flex items-center gap-1 text-red-400">
+                <ThumbsDown size={10} /> {totalDislikes}
+              </span>
+            )}
+            {totalRegens > 0 && (
+              <span className="flex items-center gap-1 text-purple-400">
+                <RefreshCw size={10} /> {totalRegens} рег.
+              </span>
+            )}
+          </div>
+          {mostRegenMsg && mostRegenMsg.regenerationCount > 1 && (
+            <p className="text-[10px] text-[var(--text-dim)] mt-2">
+              Проблемный: сообщение #{mostRegenMsg.index} ({mostRegenMsg.regenerationCount} регенерации)
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Timeline */}
+      <div className="px-4 pb-4 space-y-2">
+        {modelMessages.map(msg => {
+          const hasEvents = msg.feedback || msg.regenerationCount > 0;
+          if (!hasEvents) return null;
+
+          return (
+            <div key={msg.id} className="space-y-1.5">
+              {/* Сообщение */}
+              <div className="rounded-lg bg-[var(--surface-2)] border border-[var(--border)] px-3 py-2">
+                <div className="text-[10px] text-[var(--text-dim)] mb-1">
+                  #{msg.index}
+                </div>
+                {msg.excerpt && (
+                  <p className="text-[11px] text-[var(--text-dim)] leading-relaxed line-clamp-2">
+                    {msg.excerpt}...
+                  </p>
+                )}
+              </div>
+
+              {/* Events */}
+              <div className="flex items-center gap-1.5 flex-wrap pl-1">
+                {msg.feedback?.rating === 'like' && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-[var(--gem-teal)]/10 text-[var(--gem-teal)] border border-[var(--gem-teal)]/20">
+                    <ThumbsUp size={8} />
+                    {msg.feedback.comment ? `"${msg.feedback.comment.slice(0, 30)}"` : 'лайк'}
+                  </span>
+                )}
+                {msg.feedback?.rating === 'dislike' && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-red-500/10 text-red-400 border border-red-500/20">
+                    <ThumbsDown size={8} />
+                    {msg.feedback.comment ? `"${msg.feedback.comment.slice(0, 30)}"` : 'дизлайк'}
+                  </span>
+                )}
+                {msg.regenerationCount > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                    <RefreshCw size={8} />
+                    ×{msg.regenerationCount}
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

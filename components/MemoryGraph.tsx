@@ -37,6 +37,7 @@ export default function MemoryGraph({
   onDeleteMemory,
 }: MemoryGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [selectedNode, setSelectedNode] = useState<Memory | null>(null);
   const [selectedNodePosition, setSelectedNodePosition] = useState<{ x: number; y: number } | null>(null);
   const [showLinks, setShowLinks] = useState(true);
@@ -241,7 +242,7 @@ export default function MemoryGraph({
   }, [memories, showLinks, categoryFilter, selectedNode, zoom]);
 
   return (
-    <div className="relative w-full h-full">
+    <div ref={containerRef} className="relative w-full h-full">
       {/* Toolbar */}
       <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
         <div className="flex gap-2 bg-[var(--surface-2)] border border-[var(--border)] rounded-xl p-2">
@@ -290,23 +291,36 @@ export default function MemoryGraph({
       <svg ref={svgRef} className="w-full h-full" onClick={() => setSelectedNode(null)} />
 
       {/* In-Graph Tooltip */}
-      {selectedNode && selectedNodePosition && (
-        <div
-          className="absolute bg-[var(--surface-2)] border border-[var(--border)] rounded-2xl p-4 shadow-2xl z-20 animate-fade-in pointer-events-auto"
-          style={{
-            left: Math.min(Math.max(selectedNodePosition.x + 20, 20), window.innerWidth - 320),
-            top: Math.min(Math.max(selectedNodePosition.y - 80, 20), window.innerHeight - 200),
-            width: '280px',
-          }}
-        >
-          <div className="flex items-start justify-between mb-3">
-            <span
-              className="px-2 py-1 rounded-full text-[10px] font-medium text-white"
-              style={{ backgroundColor: CATEGORY_COLORS[selectedNode.category] }}
-            >
-              {selectedNode.category}
-            </span>
-            <button
+      {selectedNode && selectedNodePosition && (() => {
+        const containerWidth = containerRef.current?.clientWidth || 400;
+        const containerHeight = containerRef.current?.clientHeight || 400;
+        const isMobileLayout = containerWidth < 380;
+        
+        const tooltipWidth = Math.min(270, containerWidth - 30);
+        const tooltipLeft = isMobileLayout
+          ? Math.max(10, selectedNodePosition.x - tooltipWidth / 2)
+          : Math.min(selectedNodePosition.x + 20, containerWidth - tooltipWidth - 10);
+        const tooltipTop = isMobileLayout
+          ? Math.min(selectedNodePosition.y + 20, containerHeight - 200)
+          : Math.min(Math.max(selectedNodePosition.y - 80, 10), containerHeight - 220);
+        
+        return (
+          <div
+            className="absolute bg-[var(--surface-2)] border border-[var(--border)] rounded-2xl p-4 shadow-2xl z-20 animate-fade-in pointer-events-auto"
+            style={{
+              left: tooltipLeft + 'px',
+              top: tooltipTop + 'px',
+              width: tooltipWidth + 'px',
+            }}
+          >
+            <div className="flex items-start justify-between mb-3">
+              <span
+                className="px-2 py-1 rounded-full text-[10px] font-medium text-white"
+                style={{ backgroundColor: CATEGORY_COLORS[selectedNode.category] }}
+              >
+                {selectedNode.category}
+              </span>
+              <button
               onClick={() => setSelectedNode(null)}
               className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-dim)] hover:text-[var(--text-primary)] transition-colors"
             >
@@ -375,8 +389,9 @@ export default function MemoryGraph({
               <Trash2 size={14} />
             </button>
           </div>
-        </div>
-      )}
+          </div>
+        );
+      })()}
 
       {memories.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center">

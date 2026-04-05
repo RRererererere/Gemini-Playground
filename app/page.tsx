@@ -805,6 +805,9 @@ export default function Home() {
     
     if (deepThinkState.enabled && !customAnalysis && !prebuiltSystemPrompt) {
       // Путь 1: DeepThink enabled, нет customAnalysis, нет prebuiltSystemPrompt
+      // Сохраняем исходный prompt ДО DeepThink для diff в Insights
+      const originalPromptBeforeDeepThink = effectiveSystemPrompt;
+      
       // Показываем визуально, что идет анализ - создаем пустое сообщение с deepThinking
       setMessages(prev => prev.map(m =>
         m.id !== targetMessageId ? m : {
@@ -835,12 +838,13 @@ export default function Home() {
       effectiveSystemPrompt = dtResult.enhancedPrompt;
       finalAnalysis = dtResult.analysis;
       
-      // Сохранить enhancedPrompt на сообщение для последующего переиспользования
+      // Сохранить enhancedPrompt и originalPrompt на сообщение для последующего переиспользования
       if (dtResult.enhancedPrompt && !dtResult.error) {
         setMessages(prev => prev.map(m =>
           m.id !== targetMessageId ? m : {
             ...m,
             deepThinkEnhancedPrompt: dtResult.enhancedPrompt,
+            deepThinkOriginalPrompt: originalPromptBeforeDeepThink,
           }
         ));
       }
