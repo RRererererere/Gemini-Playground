@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
-import { Trash2, X } from 'lucide-react';
+import { Trash2, X, Edit2 } from 'lucide-react';
 import type { Memory, MemoryCategory } from '@/lib/memory-store';
 
 interface MemoryGraphProps {
@@ -38,9 +38,10 @@ export default function MemoryGraph({
 }: MemoryGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [selectedNode, setSelectedNode] = useState<Memory | null>(null);
-  const [showLabels, setShowLabels] = useState(true);
+  const [selectedNodePosition, setSelectedNodePosition] = useState<{ x: number; y: number } | null>(null);
   const [showLinks, setShowLinks] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState<MemoryCategory | null>(null);
+  const [zoom, setZoom] = useState(1);
 
   useEffect(() => {
     if (!svgRef.current || memories.length === 0) return;
@@ -90,47 +91,62 @@ export default function MemoryGraph({
 
     const g = svg.append('g');
 
+    // Defs для glow фильтров
+    const defs = svg.append('defs');
+    Object.entries(CATEGORY_COLORS).forEach(([category, color]) => {
+      const filter = defs.append('filter')
+        .attr('id', `glow-${category}`)
+        .attr('x', '-50%')
+        .attr('y', '-50%')
+        .attr('width', '200%')
+        .attr('height', '200%');
+      
+      filter.append('feGaussianBlur')
+        .attr('stdDeviation', '3')
+        .attr('result', 'blur');
+      
+      const feMerge = filter.append('feMerge');
+      feMerge.append('feMergeNode').attr('in', 'blur');
+      feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+    });
+
     // Zoom
-    const zoom = d3
+    const zoomBehavior = d3
       .zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.5, 3])
       .on('zoom', event => {
         g.attr('transform', event.transform);
+        setZoom(event.transform.k);
       });
 
-    svg.call(zoom as any);
+    svg.call(zoomBehavior as any);
 
-    // Links
+    // Links - изогнутые рёбра
     const link = g
       .append('g')
-      .selectAll('line')
+      .selectAll('path')
       .data(links)
-      .join('line')
-      .attr('stroke', 'rgba(255,255,255,0.15)')
-      .attr('stroke-width', 1.5)
+      .join('path')
+      .attr('stroke', 'rgba(255,255,255,0.08)')
+      .attr('stroke-width', 1)
+      .attr('fill', 'none')
       .style('display', showLinks ? 'block' : 'none');
 
-    // Nodes
-    const node = g
+    // Nodes - двойные кольца
+    const nodeGroup = g
       .append('g')
-      .selectAll('circle')
+      .selectAll('g')
       .data(nodes)
-      .join('circle')
-      .attr('r', d => {
-        const size = d.memory.confidence * d.memory.mentions;
-        return Math.max(8, Math.min(24, 8 + size * 2));
-      })
-      .attr('fill', d => CATEGORY_COLORS[d.memory.category])
-      .attr('stroke', '#fff')
-      .attr('stroke-width', 2)
+      .join('g')
       .style('cursor', 'pointer')
       .on('click', (event, d) => {
         event.stopPropagation();
         setSelectedNode(d.memory);
+        setSelectedNodePosition({ x: d.x || 0, y: d.y || 0 });
       })
       .call(
         d3
-          .drag<SVGCircleElement, GraphNode>()
+          .drag<SVGGElement, GraphNode>()
           .on('start', (event, d) => {
             if (!event.active) simulation.alphaTarget(0.3).restart();
             d.fx = d.x;
@@ -147,36 +163,82 @@ export default function MemoryGraph({
           }) as any
       );
 
-    // Labels
+    // Внешнее кольцо (confidence)
+    nodeGroup.append('circle')
+      .attr('r', d => {
+        const innerR = Math.max(6, Math.min(18, 6 + d.memory.mentions * 1.5));
+        return innerR + 4;
+      })
+      .attr('fill', 'none')
+      .attr('stroke', d => CATEGORY_COLORS[d.memory.category])
+      .attr('stroke-width', 2)
+      .attr('opacity', d => d.memory.confidence);
+
+    // Внутренний круг (mentions)
+    nodeGroup.append('circle')
+      .attr('r', d => Math.max(6, Math.min(18, 6 + d.memory.mentions * 1.5)))
+      .attr('fill', d => CATEGORY_COLORS[d.memory.category])
+      .attr('fill-opacity', 0.85);
+
+    // Labels - показываем только при zoom > 1.3
     const label = g
       .append('g')
       .selectAll('text')
       .data(nodes)
       .join('text')
-      .text(d => d.memory.fact.slice(0, 20) + (d.memory.fact.length > 20 ? '…' : ''))
+      .text(d => d.memory.fact.slice(0, 18) + (d.memory.fact.length > 18 ? '…' : ''))
       .attr('font-size', 10)
       .attr('fill', 'rgba(255,255,255,0.7)')
       .attr('text-anchor', 'middle')
       .attr('dy', 30)
       .style('pointer-events', 'none')
-      .style('display', showLabels ? 'block' : 'none');
+      .style('opacity', 0)
+      .style('transition', 'opacity 200ms');
 
     simulation.on('tick', () => {
-      link
-        .attr('x1', d => (d.source as GraphNode).x!)
-        .attr('y1', d => (d.source as GraphNode).y!)
-        .attr('x2', d => (d.target as GraphNode).x!)
-        .attr('y2', d => (d.target as GraphNode).y!);
+      // Изогнутые рёбра
+      link.attr('d', d => {
+        const source = d.source as GraphNode;
+        const target = d.target as GraphNode;
+        const dx = (target.x || 0) - (source.x || 0);
+        const dy = (target.y || 0) - (source.y || 0);
+        const dr = Math.sqrt(dx * dx + dy * dy) * 0.6;
+        return `M${source.x},${source.y} A${dr},${dr} 0 0,1 ${target.x},${target.y}`;
+      });
 
-      node.attr('cx', d => d.x!).attr('cy', d => d.y!);
-
+      nodeGroup.attr('transform', d => `translate(${d.x},${d.y})`);
       label.attr('x', d => d.x!).attr('y', d => d.y!);
     });
+
+    // Обновляем opacity labels при изменении zoom
+    const updateLabelsVisibility = () => {
+      label.style('opacity', zoom > 1.3 ? 1 : 0);
+    };
+    updateLabelsVisibility();
+
+    // Применяем glow к выбранному ноду
+    if (selectedNode) {
+      nodeGroup
+        .filter(d => d.memory.id === selectedNode.id)
+        .attr('filter', `url(#glow-${selectedNode.category})`);
+    }
+
+    // Подсвечиваем связанные рёбра при выборе нода
+    if (selectedNode) {
+      link
+        .attr('stroke', d => {
+          const source = (d.source as GraphNode).id;
+          const target = (d.target as GraphNode).id;
+          return source === selectedNode.id || target === selectedNode.id
+            ? 'rgba(255,255,255,0.3)'
+            : 'rgba(255,255,255,0.08)';
+        });
+    }
 
     return () => {
       simulation.stop();
     };
-  }, [memories, showLabels, showLinks, categoryFilter]);
+  }, [memories, showLinks, categoryFilter, selectedNode, zoom]);
 
   return (
     <div className="relative w-full h-full">
@@ -191,15 +253,6 @@ export default function MemoryGraph({
               className="rounded"
             />
             Связи
-          </label>
-          <label className="flex items-center gap-2 text-xs text-[var(--text-muted)] cursor-pointer">
-            <input
-              type="checkbox"
-              checked={showLabels}
-              onChange={e => setShowLabels(e.target.checked)}
-              className="rounded"
-            />
-            Метки
           </label>
         </div>
 
@@ -234,11 +287,18 @@ export default function MemoryGraph({
       </div>
 
       {/* SVG */}
-      <svg ref={svgRef} className="w-full h-full" />
+      <svg ref={svgRef} className="w-full h-full" onClick={() => setSelectedNode(null)} />
 
-      {/* Selected Node Panel */}
-      {selectedNode && (
-        <div className="absolute top-4 right-4 w-80 bg-[var(--surface-2)] border border-[var(--border)] rounded-2xl p-4 shadow-2xl z-10 animate-fade-in">
+      {/* In-Graph Tooltip */}
+      {selectedNode && selectedNodePosition && (
+        <div
+          className="absolute bg-[var(--surface-2)] border border-[var(--border)] rounded-2xl p-4 shadow-2xl z-20 animate-fade-in pointer-events-auto"
+          style={{
+            left: Math.min(Math.max(selectedNodePosition.x + 20, 20), window.innerWidth - 320),
+            top: Math.min(Math.max(selectedNodePosition.y - 80, 20), window.innerHeight - 200),
+            width: '280px',
+          }}
+        >
           <div className="flex items-start justify-between mb-3">
             <span
               className="px-2 py-1 rounded-full text-[10px] font-medium text-white"
@@ -296,9 +356,13 @@ export default function MemoryGraph({
 
           <div className="flex gap-2 mt-4">
             <button
-              onClick={() => onSelectMemory(selectedNode.id)}
-              className="flex-1 px-3 py-2 rounded-lg bg-white text-black text-xs font-medium hover:opacity-80 transition-opacity"
+              onClick={() => {
+                onSelectMemory(selectedNode.id);
+                setSelectedNode(null);
+              }}
+              className="flex-1 px-3 py-2 rounded-lg bg-white text-black text-xs font-medium hover:opacity-80 transition-opacity flex items-center justify-center gap-1.5"
             >
+              <Edit2 size={12} />
               Редактировать
             </button>
             <button

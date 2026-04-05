@@ -14,12 +14,13 @@ import { SelectionToolbar } from '@/components/SelectionToolbar';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,
-  Save, X, ArrowDown, RefreshCw, MonitorPlay, Zap, FilePen
+  Save, X, ArrowDown, RefreshCw, MonitorPlay, Zap, FilePen, BarChart2
 } from 'lucide-react';
 // @ts-ignore
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
 import LivePreviewPanel from '@/components/LivePreviewPanel';
 import FileEditorCanvas from '@/components/FileEditorCanvas';
+import InsightsPanel from '@/components/InsightsPanel';
 import { useDeepThink } from '@/lib/useDeepThink';
 import DeepThinkToggle from '@/components/DeepThinkToggle';
 import AgentMessageHeader from '@/components/AgentMessageHeader';
@@ -246,6 +247,7 @@ export default function Home() {
   const [showLiveCanvas, setShowLiveCanvas] = useState(false);
   const [liveCode, setLiveCode] = useState('');
   const [websiteType, setWebsiteType] = useState<WebsiteType>(null);
+  const [showInsights, setShowInsights] = useState(false);
   
   // File Editor state
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
@@ -844,14 +846,19 @@ export default function Home() {
       }
       
       if (dtResult.error) {
-        // Записываем ошибку прямо в сообщение
+        // DeepThink прерван - устанавливаем флаг и останавливаем генерацию
         setMessages(prev => prev.map(m =>
           m.id !== targetMessageId ? m : {
             ...m,
             deepThinkError: dtResult.error || 'DeepThink failed',
+            deepThinkInterrupted: true,
+            isStreaming: false,
           }
         ));
         setError(`DeepThink Error: ${dtResult.error}`);
+        setIsStreaming(false);
+        setStreamingId(null);
+        return; // Останавливаем генерацию
       }
 
       if (finalAnalysis) {
@@ -2113,6 +2120,52 @@ export default function Home() {
     ));
   }, []);
 
+  // Продолжить DeepThink после прерывания
+  const handleContinueDeepThink = useCallback(async (messageId: string) => {
+    if (isStreaming) return;
+    
+    const msgIdx = messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+    
+    const historyBefore = messages.slice(0, msgIdx);
+    
+    // Сбросить флаг interrupted и запустить заново
+    setMessages(prev => prev.map(m =>
+      m.id !== messageId ? m : {
+        ...m,
+        deepThinkInterrupted: false,
+        deepThinkError: undefined,
+        isStreaming: true,
+      }
+    ));
+    
+    // Запустить streamGeneration заново с DeepThink
+    await streamGeneration(historyBefore, messageId, false);
+  }, [isStreaming, messages, streamGeneration]);
+
+  // Пропустить DeepThink и начать генерацию текста
+  const handleSkipDeepThink = useCallback(async (messageId: string) => {
+    if (isStreaming) return;
+    
+    const msgIdx = messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+    
+    const historyBefore = messages.slice(0, msgIdx);
+    
+    // Сбросить флаг interrupted и начать генерацию без DeepThink
+    setMessages(prev => prev.map(m =>
+      m.id !== messageId ? m : {
+        ...m,
+        deepThinkInterrupted: false,
+        deepThinkError: undefined,
+        isStreaming: true,
+      }
+    ));
+    
+    // Запустить streamGeneration без DeepThink (используя базовый systemPrompt)
+    await streamGeneration(historyBefore, messageId, false, undefined, systemPrompt);
+  }, [isStreaming, messages, streamGeneration, systemPrompt]);
+
   const handleBranch = useCallback((messageId: string) => {
     if (isStreaming || (appMode === 'arena' && arena.isStreaming)) return;
     
@@ -3090,6 +3143,8 @@ export default function Home() {
                       onRegenerateTextOnly={appMode === 'arena' ? undefined : handleRegenerateTextOnly}
                       onDismissBlocked={appMode === 'arena' ? undefined : handleDismissBlocked}
                       onEditDeepThinking={appMode === 'arena' ? undefined : handleEditDeepThinking}
+                      onContinueDeepThink={appMode === 'arena' ? undefined : handleContinueDeepThink}
+                      onSkipDeepThink={appMode === 'arena' ? undefined : handleSkipDeepThink}
                     />
                   </div>
                 );
@@ -3125,11 +3180,22 @@ export default function Home() {
         {/* Input */}
         <div className="flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper">
           {appMode === 'chat' && (
-            <div className="px-4 mb-2 flex items-center justify-end">
+            <div className="px-4 mb-2 flex items-center justify-end gap-2">
               <DeepThinkToggle
                 state={deepThinkState}
                 onToggle={toggleDeepThink}
               />
+              <button
+                onClick={() => setShowInsights(v => !v)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all border ${
+                  showInsights
+                    ? 'bg-[var(--gem-teal)]/15 border-[var(--gem-teal)]/40 text-[var(--gem-teal)]'
+                    : 'bg-transparent border-[var(--border)] text-white/40 hover:text-white/60'
+                }`}
+              >
+                <BarChart2 size={13} />
+                Insights
+              </button>
             </div>
           )}
           <ChatInput
@@ -3245,6 +3311,25 @@ export default function Home() {
           </Panel>
         )}
 
+        {/* Insights Panel - Desktop */}
+        {!isMobile && showInsights && (
+          <>
+            <PanelResizeHandle className="w-1 bg-[var(--border-subtle)] hover:bg-[var(--border-strong)] transition-colors cursor-col-resize z-10" />
+            <Panel
+              defaultSize={38}
+              minSize={28}
+              maxSize={55}
+              className="flex flex-col min-w-0 border-l border-[var(--border)] overflow-hidden bg-[var(--surface-1)]"
+            >
+              <InsightsPanel
+                messages={messages}
+                chatId={currentChatId || ''}
+                onClose={() => setShowInsights(false)}
+              />
+            </Panel>
+          </>
+        )}
+
         {/* Mobile: Bottom Sheet для ai_interactive или fullscreen для static */}
         {isMobile && showLiveCanvas && mobileCanvasState !== 'hidden' && (
           <div 
@@ -3341,6 +3426,48 @@ export default function Home() {
                 }}
               />
             </div>
+          </div>
+        )}
+
+        {/* Insights Panel - Mobile Bottom Sheet */}
+        {isMobile && showInsights && (
+          <div
+            className="fixed inset-x-0 bottom-0 z-40 flex flex-col bg-[var(--surface-1)] border-t border-[var(--border)] rounded-t-2xl shadow-2xl"
+            style={{ height: '72vh', touchAction: 'none' }}
+            onTouchStart={(e) => {
+              const touch = e.touches[0];
+              const startY = touch.clientY;
+              
+              const handleTouchMove = (e: TouchEvent) => {
+                const currentY = e.touches[0].clientY;
+                const diff = currentY - startY;
+                
+                // Свайп вниз на 80px+ = закрыть
+                if (diff > 80) {
+                  setShowInsights(false);
+                  document.removeEventListener('touchmove', handleTouchMove);
+                  document.removeEventListener('touchend', handleTouchEnd);
+                }
+              };
+              
+              const handleTouchEnd = () => {
+                document.removeEventListener('touchmove', handleTouchMove);
+                document.removeEventListener('touchend', handleTouchEnd);
+              };
+              
+              document.addEventListener('touchmove', handleTouchMove);
+              document.addEventListener('touchend', handleTouchEnd);
+            }}
+          >
+            {/* Drag handle */}
+            <div className="flex justify-center pt-3 pb-1 flex-shrink-0">
+              <div className="w-10 h-1 rounded-full bg-[var(--border-strong)]" />
+            </div>
+            <InsightsPanel
+              messages={messages}
+              chatId={currentChatId || ''}
+              onClose={() => setShowInsights(false)}
+            />
           </div>
         )}
       </PanelGroup>

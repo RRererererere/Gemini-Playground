@@ -46,6 +46,8 @@ interface ChatMessageProps {
   onRegenerateTextOnly?: (messageId: string) => void;
   onDismissBlocked?: (messageId: string) => void;
   onEditDeepThinking?: (messageId: string, newThinking: string) => void;
+  onContinueDeepThink?: (messageId: string) => void;
+  onSkipDeepThink?: (messageId: string) => void;
 }
 
 function FilePreview({ file }: { file: AttachedFile }) {
@@ -675,11 +677,17 @@ function ThinkingBlock({ thinking, isStreaming }: { thinking: string; isStreamin
 function DeepThinkingBlock({ 
   thinking, 
   isStreaming,
+  isInterrupted,
   onEdit,
+  onContinue,
+  onSkip,
 }: { 
   thinking: string; 
   isStreaming?: boolean;
+  isInterrupted?: boolean;
   onEdit?: (newThinking: string) => void;
+  onContinue?: () => void;
+  onSkip?: () => void;
 }) {
   const [expanded, setExpanded] = useState(true); // По умолчанию открыт
   const [translatedText, setTranslatedText] = useState<string | null>(null);
@@ -838,6 +846,24 @@ function DeepThinkingBlock({
               </ReactMarkdown>
             </div>
           )}
+        </div>
+      )}
+      
+      {/* Кнопки при прерывании DeepThink */}
+      {isInterrupted && onContinue && onSkip && (
+        <div className="px-4 py-3 border-t border-purple-500/20 bg-purple-500/5 flex items-center gap-2">
+          <button
+            onClick={onSkip}
+            className="px-3 py-1.5 text-[11px] rounded-lg bg-white/10 text-white hover:bg-white/15 transition-colors"
+          >
+            Оставить
+          </button>
+          <button
+            onClick={onContinue}
+            className="px-3 py-1.5 text-[11px] rounded-lg bg-white/10 text-white hover:bg-white/15 transition-colors"
+          >
+            Продолжить
+          </button>
         </div>
       )}
     </div>
@@ -1627,7 +1653,7 @@ function BridgeDataBlock({ bridgeData }: { bridgeData: BridgePayload }) {
 
 export default function ChatMessage({
   message, index, isLast, isStreaming,
-  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat, onFeedback, onRegenerateWithFeedback, onRegenerateTextOnly, onDismissBlocked, onEditDeepThinking
+  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat, onFeedback, onRegenerateWithFeedback, onRegenerateTextOnly, onDismissBlocked, onEditDeepThinking, onContinueDeepThink, onSkipDeepThink
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -1856,7 +1882,10 @@ export default function ChatMessage({
               <DeepThinkingBlock
                 thinking={deepThinking}
                 isStreaming={isStreaming && isLast && !deepThinkAnalysis && !thinking && !messageText}
+                isInterrupted={message.deepThinkInterrupted}
                 onEdit={onEditDeepThinking ? (newText) => onEditDeepThinking(message.id, newText) : undefined}
+                onContinue={onContinueDeepThink ? () => onContinueDeepThink(message.id) : undefined}
+                onSkip={onSkipDeepThink ? () => onSkipDeepThink(message.id) : undefined}
               />
             )}
 
@@ -2049,9 +2078,10 @@ export default function ChatMessage({
             <button
               onClick={copyText}
               className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-all"
+              title={copied ? 'Скопировано' : 'Копировать'}
             >
               {copied ? <Check size={10} className="text-[var(--gem-green)]" /> : <Copy size={10} />}
-              {copied ? 'Скопировано' : 'Копировать'}
+              <span className="hidden sm:inline">{copied ? 'Скопировано' : 'Копировать'}</span>
             </button>
           )}
 
@@ -2060,9 +2090,10 @@ export default function ChatMessage({
             <button
               onClick={startEdit}
               className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-all"
+              title="Изменить"
             >
               <Edit2 size={10} />
-              Изменить
+              <span className="hidden sm:inline">Изменить</span>
             </button>
           )}
 
@@ -2070,9 +2101,10 @@ export default function ChatMessage({
             <button
               onClick={onRegenerate}
               className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-all"
+              title="Повтор"
             >
               <RefreshCw size={10} />
-              Повтор
+              <span className="hidden sm:inline">Повтор</span>
             </button>
           )}
 
@@ -2087,9 +2119,10 @@ export default function ChatMessage({
               <button
                 onClick={() => onRegenerateTextOnly(message.id)}
                 className="flex items-center gap-1 px-2 py-1 text-[11px] text-purple-400/80 hover:text-purple-400 hover:bg-purple-500/10 rounded-md transition-all"
+                title="Регенерировать текст"
               >
                 <RefreshCw size={10} />
-                Регенерировать текст
+                <span className="hidden sm:inline">Регенерировать текст</span>
               </button>
             );
           })()}
@@ -2098,9 +2131,10 @@ export default function ChatMessage({
             <button
               onClick={onContinue}
               className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--gem-teal)] hover:bg-[rgba(45,212,191,0.08)] rounded-md transition-all"
+              title="Продолжить"
             >
               <span className="text-[9px]">▶</span>
-              Продолжить
+              <span className="hidden sm:inline">Продолжить</span>
             </button>
           )}
 
