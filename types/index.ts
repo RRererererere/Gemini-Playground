@@ -99,7 +99,7 @@ export interface AttachedFile {
 export interface Message {
   id: string;
   role: 'user' | 'model';
-  kind?: 'tool_response' | 'bridge_data'; // добавили bridge_data
+  kind?: 'tool_response' | 'bridge_data' | 'regenerated_hidden'; // добавили regenerated_hidden для скрытых сообщений в аналитике
   parts: Part[];
   files?: AttachedFile[];
   annotationRefs?: AnnotationReference[]; // ссылки на аннотации для отображения

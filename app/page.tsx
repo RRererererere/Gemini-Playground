@@ -850,22 +850,25 @@ export default function Home() {
       }
       
       if (dtResult.error) {
-        // DeepThink прерван - устанавливаем флаг и останавливаем генерацию
+        // DeepThink прерван - НЕ останавливаем генерацию, продолжаем с оригинальным промптом
         setMessages(prev => prev.map(m =>
           m.id !== targetMessageId ? m : {
             ...m,
             deepThinkError: dtResult.error || 'DeepThink failed',
             deepThinkInterrupted: true,
-            isStreaming: false,
+            isStreaming: true, // ← НЕ останавливаем
           }
         ));
-        setError(`DeepThink Error: ${dtResult.error}`);
-        setIsStreaming(false);
-        setStreamingId(null);
-        return; // Останавливаем генерацию
-      }
-
-      if (finalAnalysis) {
+        
+        // Логируем ошибку, но НЕ показываем пользователю (не блокируем UI)
+        console.warn('[DeepThink] Error occurred, falling back to original prompt:', dtResult.error);
+        
+        // Продолжаем с оригинальным системным промптом (fallback)
+        effectiveSystemPrompt = originalPromptBeforeDeepThink;
+        
+        // НЕ вызываем setIsStreaming(false) и return — продолжаем генерацию
+      } else if (finalAnalysis) {
+        // DeepThink успешен — используем улучшенный промпт
         setMessages(prev => prev.map(m =>
           m.id !== targetMessageId ? m : {
             ...m,
@@ -1979,24 +1982,31 @@ export default function Home() {
     comment?: string
   ) => {
     // 1. Обновить message.feedback в массиве messages
-    setMessages(prev => prev.map(m =>
-      m.id !== messageId ? m :
-      m.feedback?.rating === rating
-        ? { ...m, feedback: undefined }          // toggle off
-        : { ...m, feedback: { rating, comment, timestamp: Date.now() } }
-    ));
-
-    // 2. Добавить в RPG Style Profile
-    const msg = messages.find(m => m.id === messageId);
-    if (!msg) return;
-    const excerpt = getVisibleMessageText(msg.parts).slice(0, 200);
-    addFeedbackEntry({
-      rating,
-      comment: comment || '',
-      excerpt,
-      timestamp: Date.now()
+    setMessages(prev => {
+      const msg = prev.find(m => m.id === messageId);
+      if (!msg) return prev;
+      
+      const isToggleOff = msg.feedback?.rating === rating;
+      
+      // 2. Добавить в RPG Style Profile ЗДЕСЬ, с актуальными данными
+      if (!isToggleOff) {
+        const excerpt = getVisibleMessageText(msg.parts).slice(0, 200);
+        addFeedbackEntry({
+          rating,
+          comment: comment || '',
+          excerpt,
+          timestamp: Date.now()
+        });
+      }
+      
+      return prev.map(m =>
+        m.id !== messageId ? m :
+        isToggleOff
+          ? { ...m, feedback: undefined }          // toggle off
+          : { ...m, feedback: { rating, comment, timestamp: Date.now() } }
+      );
     });
-  }, [messages]);
+  }, []); // убрать messages из deps
 
   const handleRegenerateWithFeedback = useCallback(async (
     messageId: string,
@@ -2028,18 +2038,18 @@ export default function Home() {
       kind: 'bridge_data', // переиспользуем существующий механизм скрытия
     };
 
-    // 4. Обновить message.feedback с флагом appliedToRegeneration
-    setMessages(prev => prev.map(m =>
-      m.id !== messageId ? m : {
-        ...m,
-        feedback: { ...m.feedback!, appliedToRegeneration: true }
-      }
-    ));
+    // 4. Сохранить оригинальное сообщение с дизлайком как скрытое (для аналитики)
+    const hiddenBadMessage: Message = {
+      ...badMessage,
+      kind: 'regenerated_hidden', // скрытое, но доступное для аналитики
+      feedback: { ...badMessage.feedback!, appliedToRegeneration: true }
+    };
 
     // 5. Создать новое пустое сообщение модели
     const newMsgId = generateId();
     const newMessages = [
       ...historyBefore,
+      hiddenBadMessage, // ← СОХРАНЯЕМ оригинал для аналитики
       feedbackHint,
       { 
         id: newMsgId, 
@@ -2052,7 +2062,7 @@ export default function Home() {
     ];
     setMessages(newMessages);
 
-    // 6. Стримить. История для API: всё до плохого + хинт
+    // 6. Стримить. История для API: всё до плохого + хинт (БЕЗ hiddenBadMessage)
     await streamGeneration([...historyBefore, feedbackHint], newMsgId, false);
   }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
 
@@ -2301,38 +2311,73 @@ export default function Home() {
 
   // ============ FILE EDITOR HANDLERS ============
   const handleAcceptEdits = useCallback((fileId: string) => {
-    setOpenFiles(prev => prev.map(f => {
-      if (f.id !== fileId) return f;
-      // Принимаем изменения - очищаем isDirty если контент совпадает с оригиналом
-      return {
-        ...f,
-        isDirty: f.content !== f.originalContent
-      };
-    }));
+    if (!currentChatId) return;
+    
+    setOpenFiles(prev => {
+      const updated = prev.map(f => {
+        if (f.id !== fileId) return f;
+        
+        // Принимаем изменения: текущий content становится новым baseline (originalContent)
+        return {
+          ...f,
+          originalContent: f.content, // ← ГЛАВНОЕ: сдвигаем baseline
+          isDirty: false,
+          history: [...f.history, {
+            content: f.originalContent,
+            description: 'AI edit accepted',
+            timestamp: Date.now()
+          }]
+        };
+      });
+      
+      // Синхронизируем с localStorage
+      const storageKey = `skill_data_file-editor_${currentChatId}_file_editor_open_files`;
+      localStorage.setItem(storageKey, JSON.stringify(updated));
+      
+      return updated;
+    });
+    
     setPendingEdits(prev => {
       const next = new Map(prev);
       next.delete(fileId);
       return next;
     });
-  }, []);
+    
+    // Логируем для отладки
+    console.log('[File Editor] Изменения приняты — originalContent обновлён');
+  }, [currentChatId]);
 
   const handleRejectEdits = useCallback((fileId: string) => {
-    setOpenFiles(prev => prev.map(f => {
-      if (f.id !== fileId) return f;
-      // Отменяем изменения - возвращаем к последнему сохранённому состоянию
-      const lastHistory = f.history[f.history.length - 1];
-      return {
-        ...f,
-        content: lastHistory ? lastHistory.content : f.originalContent,
-        isDirty: lastHistory ? true : false
-      };
-    }));
+    if (!currentChatId) return;
+    
+    setOpenFiles(prev => {
+      const updated = prev.map(f => {
+        if (f.id !== fileId) return f;
+        
+        // Reject: откатываем к originalContent (состояние ДО AI-правки)
+        return {
+          ...f,
+          content: f.originalContent,
+          isDirty: false,
+        };
+      });
+      
+      // Синхронизируем с localStorage
+      const storageKey = `skill_data_file-editor_${currentChatId}_file_editor_open_files`;
+      localStorage.setItem(storageKey, JSON.stringify(updated));
+      
+      return updated;
+    });
+    
     setPendingEdits(prev => {
       const next = new Map(prev);
       next.delete(fileId);
       return next;
     });
-  }, []);
+    
+    // Логируем для отладки
+    console.log('[File Editor] Изменения отклонены');
+  }, [currentChatId]);
 
   const handleManualEdit = useCallback((fileId: string, newContent: string) => {
     setOpenFiles(prev => prev.map(f => {

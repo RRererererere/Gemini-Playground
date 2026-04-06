@@ -20,6 +20,39 @@ const GLOBAL_KEY = 'memory_graph_global';
 const LOCAL_KEY_PREFIX = 'memory_graph_local_';
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Export/Import для бэкапа
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+export function exportAllMemories(): Record<string, string> {
+  const result: Record<string, string> = {};
+  
+  // Экспортируем глобальную память
+  const globalMemory = localStorage.getItem(GLOBAL_KEY);
+  if (globalMemory) {
+    result[GLOBAL_KEY] = globalMemory;
+  }
+  
+  // Экспортируем все локальные memory (итерируем все ключи с префиксом)
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(LOCAL_KEY_PREFIX)) {
+      const value = localStorage.getItem(key);
+      if (value) {
+        result[key] = value;
+      }
+    }
+  }
+  
+  return result;
+}
+
+export function importAllMemories(memories: Record<string, string>): void {
+  for (const [key, value] of Object.entries(memories)) {
+    localStorage.setItem(key, value);
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // CRUD операции
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

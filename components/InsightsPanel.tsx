@@ -558,7 +558,7 @@ interface SessionTabProps {
 function SessionTab({ messages }: SessionTabProps) {
   // Собираем model-сообщения с событиями
   const modelMessages = messages
-    .filter(m => m.role === 'model' && !m.isStreaming)
+    .filter(m => m.role === 'model' && !m.isStreaming) // включаем все model сообщения, даже скрытые
     .map((m) => ({
       id: m.id,
       index: messages.indexOf(m) + 1,
@@ -566,6 +566,7 @@ function SessionTab({ messages }: SessionTabProps) {
       feedback: m.feedback,
       regenerationCount: 0, // TODO: добавить interactionMeta в Message
       regenerationReasons: [],
+      isHidden: (m.kind as string) === 'regenerated_hidden', // помечаем скрытые для визуализации
     }));
 
   const hasAnyEvents = modelMessages.some(

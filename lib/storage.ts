@@ -511,8 +511,12 @@ export function saveDeepThinkSystemPrompt(prompt: string): void {
 
 export function exportAllSettings(): void {
   if (typeof window === 'undefined') return;
+  
+  // Импортируем функцию экспорта памяти
+  const { exportAllMemories } = require('./memory-store');
+  
   const data = {
-    version: 1,
+    version: 2, // bump версии
     exportedAt: Date.now(),
     keys: localStorage.getItem('gemini_api_keys') || '[]',
     chats: localStorage.getItem(CHATS_KEY) || '[]',
@@ -521,6 +525,20 @@ export function exportAllSettings(): void {
     temperature: localStorage.getItem('gemini_temperature') || '1',
     thinkingBudget: localStorage.getItem('gemini_thinking_budget') || '-1',
     systemPrompt: localStorage.getItem('gemini_sys_prompt') || '',
+    
+    // ↓ НОВЫЕ ПОЛЯ для Arena
+    arenaSessions: localStorage.getItem('arena_sessions') || '[]',
+    arenaActiveSession: localStorage.getItem('arena_active_session_id') || '',
+    
+    // ↓ НОВЫЕ ПОЛЯ для Memory
+    memories: exportAllMemories(),
+    
+    // ↓ НОВЫЕ ПОЛЯ для Agents
+    agents: localStorage.getItem('gemini_agents') || '[]',
+    
+    // ↓ НОВЫЕ ПОЛЯ для Skills
+    skillPrompts: localStorage.getItem('gemini_skill_prompts') || '{}',
+    deepThinkPrompt: localStorage.getItem('gemini_deepthink_system_prompt') || '',
   };
   
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -539,6 +557,9 @@ export async function importAllSettings(file: File): Promise<void> {
       try {
         const raw = JSON.parse(e.target?.result as string);
         if (raw.version && raw.exportedAt) {
+          // Импортируем функцию импорта памяти
+          const { importAllMemories } = require('./memory-store');
+          
           if (raw.keys) localStorage.setItem('gemini_api_keys', raw.keys);
           if (raw.chats) {
             // Restore file data before saving
@@ -563,6 +584,20 @@ export async function importAllSettings(file: File): Promise<void> {
           if (raw.temperature) localStorage.setItem('gemini_temperature', raw.temperature);
           if (raw.thinkingBudget) localStorage.setItem('gemini_thinking_budget', raw.thinkingBudget);
           if (raw.systemPrompt) localStorage.setItem('gemini_sys_prompt', raw.systemPrompt);
+          
+          // ↓ НОВЫЕ ПОЛЯ для Arena
+          if (raw.arenaSessions) localStorage.setItem('arena_sessions', raw.arenaSessions);
+          if (raw.arenaActiveSession) localStorage.setItem('arena_active_session_id', raw.arenaActiveSession);
+          
+          // ↓ НОВЫЕ ПОЛЯ для Memory
+          if (raw.memories) importAllMemories(raw.memories);
+          
+          // ↓ НОВЫЕ ПОЛЯ для Agents
+          if (raw.agents) localStorage.setItem('gemini_agents', raw.agents);
+          
+          // ↓ НОВЫЕ ПОЛЯ для Skills
+          if (raw.skillPrompts) localStorage.setItem('gemini_skill_prompts', raw.skillPrompts);
+          if (raw.deepThinkPrompt) localStorage.setItem('gemini_deepthink_system_prompt', raw.deepThinkPrompt);
           
           window.location.reload();
           resolve();
