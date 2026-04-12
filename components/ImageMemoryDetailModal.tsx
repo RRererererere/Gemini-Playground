@@ -398,8 +398,8 @@ export default function ImageMemoryDetailModal({
           imageId={memory.id}
           fileName={memory.description}
           metadata={{
-            width: memory.width,
-            height: memory.height,
+            width: memory.originalWidth,
+            height: memory.originalHeight,
             type: 'image/jpeg',
           }}
           onClose={() => setShowImageLightbox(false)}

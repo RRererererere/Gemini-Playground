@@ -138,6 +138,7 @@ export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers
       temperature: 0.8,
       maxOutputTokens: 8192,
       isActive: true,
+      deepThinkEnabled: false,
       skillIds: [],
       tools: [],
     };

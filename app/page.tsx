@@ -3163,7 +3163,7 @@ export default function Home() {
                         ? (arena.isStreaming && message.isStreaming === true)
                         : (isStreaming && message.id === streamingId)
                       }
-                      canRegenerate={appMode === 'arena' ? (!isStreaming && arena.activeSession && arena.activeSession.messages.some(m => m.role === 'model' && !m.isStreaming)) : (hasApiAndModel && !isStreaming)}
+                      canRegenerate={appMode === 'arena' ? (!isStreaming && !!arena.activeSession && arena.activeSession.messages.some(m => m.role === 'model' && !m.isStreaming)) : (hasApiAndModel && !isStreaming)}
                       onEdit={appMode === 'arena'
                         ? (id: string, newParts: Part[]) => arena.editMessage(id, newParts)
                         : handleEdit
@@ -3282,8 +3282,7 @@ export default function Home() {
             isStreaming={appMode === 'arena' ? arena.isStreaming : isStreaming}
             disabled={appMode === 'arena' ? !arena.activeSession : !hasApiAndModel}
             canContinue={appMode === 'arena' ? (
-              // Can continue if there's a streaming=false model message that was interrupted
-              arena.activeSession?.messages.some(m => m.role === 'model' && !m.isStreaming && m.parts.some(p => 'text' in p && (p as {text:string}).text.length > 0))
+              arena.activeSession?.messages.some(m => m.role === 'model' && !m.isStreaming && m.parts.some(p => 'text' in p && (p as {text:string}).text.length > 0)) ?? false
             ) : canContinue}
             onContinue={appMode === 'arena' ? () => {
               // Continue the last incomplete model message
@@ -3291,8 +3290,7 @@ export default function Home() {
               if (lastModelMsg) arena.continueAgentStream(lastModelMsg.id);
             } : handleContinue}
             canRun={appMode === 'arena' ? (
-              // Can run (regenerate all) if there are messages and not streaming
-              arena.activeSession && arena.activeSession.messages.length > 0 && !arena.isStreaming
+              !!arena.activeSession && arena.activeSession.messages.length > 0 && !arena.isStreaming
             ) : (messages.length > 0 && !isStreaming && hasApiAndModel)}
             onRun={appMode === 'arena' ? () => {
               // Regenerate all agent responses from the last user message
