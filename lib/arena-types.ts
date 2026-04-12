@@ -12,6 +12,7 @@ export interface ArenaAgent {
   temperature: number;
   maxOutputTokens: number;
   isActive: boolean;
+  deepThinkEnabled: boolean; // DeepThink per-agent
   // reserved:
   skillIds: string[];
   tools: ChatTool[];
@@ -71,6 +72,7 @@ export function createDefaultAgent(index: number): ArenaAgent {
     temperature: 0.8,
     maxOutputTokens: 4096,
     isActive: true,
+    deepThinkEnabled: false,
     skillIds: [],
     tools: [],
   };

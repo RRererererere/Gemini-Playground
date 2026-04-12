@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronLeft, ChevronDown, Download, Plus, Trash2, X, Zap } from 'lucide-react';
+import { ChevronLeft, ChevronDown, Download, Plus, Trash2, X, Zap, Brain } from 'lucide-react';
 import type { ArenaAgent, ArenaSession } from '@/lib/arena-types';
 import { AGENT_EMOJIS, AGENT_COLORS } from '@/lib/arena-types';
 import type { UniversalModel, ApiKeyEntry, SavedChat, Provider } from '@/types';
@@ -283,6 +283,23 @@ function AgentCard({
               className="sr-only peer"
             />
             <div className="w-9 h-5 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+          </label>
+        </div>
+
+        {/* DeepThink toggle */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Brain size={13} className="text-purple-400/70" />
+            <span className="text-xs text-[var(--text-muted)]">DeepThink</span>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={draft.deepThinkEnabled}
+              onChange={e => setDraft({ ...draft, deepThinkEnabled: e.target.checked })}
+              className="sr-only peer"
+            />
+            <div className="w-9 h-5 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-500"></div>
           </label>
         </div>
 

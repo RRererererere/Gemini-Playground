@@ -116,7 +116,7 @@ function ImageGallery({ artifacts, onAnnotationClick }: GroupProps) {
         <img
           src={src}
           alt={currentArtifact.label || 'Artifact'}
-          className="max-w-full max-h-[200px] h-auto rounded-xl cursor-zoom-in transition-all duration-200"
+          className="max-w-full max-h-[360px] h-auto rounded-xl cursor-zoom-in transition-all duration-200 hover:scale-[1.02] hover:shadow-xl"
           style={{
             border: '1.5px solid rgba(255, 255, 255, 0.08)',
             boxShadow: `
@@ -250,7 +250,7 @@ function ArtifactImage({ artifact, onAnnotationClick }: Props) {
         <img
           src={src}
           alt={artifact.label || 'Artifact'}
-          className="max-w-full max-h-[200px] h-auto rounded-xl cursor-zoom-in transition-all duration-200"
+          className="max-w-full max-h-[320px] h-auto rounded-xl cursor-zoom-in transition-all duration-200 hover:scale-[1.02] hover:shadow-xl"
           style={{
             border: '1.5px solid rgba(255, 255, 255, 0.08)',
             boxShadow: `

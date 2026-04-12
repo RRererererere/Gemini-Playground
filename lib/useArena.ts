@@ -282,10 +282,15 @@ export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers
           const updatedSession = { ...activeSession, messages: currentMessages, updatedAt: Date.now() };
           updateUI(updatedSession);
         },
-        onDone: (parts) => {
+        onDone: (parts, thinking) => {
           // Просто снимаем флаг стриминга, текст уже добавлен
           currentMessages = currentMessages.map(m =>
-            m.id === messageId ? { ...m, isStreaming: false } : m
+            m.id === messageId ? {
+              ...m,
+              parts: parts.length > 0 ? parts : m.parts,
+              isStreaming: false,
+              ...(thinking ? { thinking } : {}),
+            } : m
           );
           const finalSession = { ...activeSession, messages: currentMessages, updatedAt: Date.now() };
           updateUI(finalSession);
@@ -359,9 +364,14 @@ export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers
           });
           onUpdate({ ...updatedSession, messages: currentMessages });
         },
-        onDone: (parts) => {
+        onDone: (parts, thinking) => {
           currentMessages = currentMessages.map(m =>
-            m.id === targetMessageId ? { ...m, parts: parts.length > 0 ? parts : m.parts, isStreaming: false } : m
+            m.id === targetMessageId ? {
+              ...m,
+              parts: parts.length > 0 ? parts : m.parts,
+              isStreaming: false,
+              ...(thinking ? { thinking } : {}),
+            } : m
           );
           const finalSession = { ...updatedSession, messages: currentMessages };
           onUpdate(finalSession);
@@ -453,6 +463,107 @@ export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers
     );
   }, [activeSession, isStreaming, runAgentStream]);
 
+  // Regenerate specific agent response (delete their last message and re-stream)
+  const regenerateAgentResponse = useCallback(async (messageId: string) => {
+    if (!activeSession || isStreaming) return;
+
+    const msg = activeSession.messages.find(m => m.id === messageId);
+    if (!msg || msg.role !== 'model') return;
+
+    const agent = activeSession.agents.find(a => a.id === msg.arenaAgentId);
+    if (!agent) return;
+
+    // Удаляем это сообщение и все сообщения после него (кроме user)
+    const msgIdx = activeSession.messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+
+    // Находим все model-сообщения от того же агента начиная с msgIdx
+    const messagesBeforeRegen = activeSession.messages.slice(0, msgIdx);
+    // Сохраняем user-сообщения после (если есть)
+    const userMessagesAfter = activeSession.messages.slice(msgIdx + 1).filter(m => m.role === 'user');
+
+    const updateUI = (s: ArenaSession) => {
+      setSessions(prev => prev.map(existing => existing.id === s.id ? s : existing));
+    };
+
+    const sessionForRegen = {
+      ...activeSession,
+      messages: messagesBeforeRegen,
+      updatedAt: Date.now(),
+    };
+
+    updateUI(sessionForRegen);
+    saveArenaSession(sessionForRegen);
+
+    // Перестримливаем этого агента
+    const finalMessages = await runAgentStream(
+      sessionForRegen,
+      agent,
+      messagesBeforeRegen,
+      (s) => updateUI(s),
+    );
+
+    // Если были user-сообщения после — добавляем их обратно
+    if (userMessagesAfter.length > 0) {
+      const finalSession = {
+        ...activeSession,
+        messages: [...finalMessages, ...userMessagesAfter],
+        updatedAt: Date.now(),
+      };
+      updateUI(finalSession);
+      saveArenaSession(finalSession);
+    }
+  }, [activeSession, isStreaming, runAgentStream]);
+
+  // Regenerate all agent responses from a given point
+  const regenerateFromMessage = useCallback(async (fromMessageId: string) => {
+    if (!activeSession || isStreaming) return;
+
+    const msgIdx = activeSession.messages.findIndex(m => m.id === fromMessageId);
+    if (msgIdx === -1) return;
+
+    // Обрезаем до этого сообщения (исключая)
+    const messagesBefore = activeSession.messages.slice(0, msgIdx);
+    const userMessagesAfter = activeSession.messages.slice(msgIdx).filter(m => m.role === 'user');
+
+    const updateUI = (s: ArenaSession) => {
+      setSessions(prev => prev.map(existing => existing.id === s.id ? s : existing));
+    };
+
+    let session = {
+      ...activeSession,
+      messages: messagesBefore,
+      updatedAt: Date.now(),
+    };
+
+    updateUI(session);
+
+    // Перезапускаем всех активных агентов
+    const activeAgents = session.agents.filter(a => a.isActive);
+    let msgs = messagesBefore;
+
+    for (const agent of activeAgents) {
+      msgs = await runAgentStream(
+        { ...session, messages: msgs },
+        agent,
+        msgs,
+        (s) => {
+          session = s;
+          updateUI(s);
+        },
+      );
+    }
+
+    // Добавляем user-сообщения обратно
+    const finalSession = {
+      ...session,
+      messages: [...msgs, ...userMessagesAfter],
+      updatedAt: Date.now(),
+    };
+    updateUI(finalSession);
+    saveArenaSession(finalSession);
+  }, [activeSession, isStreaming, runAgentStream]);
+
   return {
     sessions,
     activeSession,
@@ -480,6 +591,8 @@ export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers
     // Messaging
     sendUserMessage,
     triggerAgent,
+    regenerateAgentResponse,
+    regenerateFromMessage,
     continueAgentStream,
     stopStreaming,
     toggleResponseMode,

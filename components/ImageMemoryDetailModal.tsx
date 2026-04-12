@@ -5,10 +5,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, Tag, Calendar, Eye, Link as LinkIcon, Image as ImageIcon, Trash2, Edit2, Check } from 'lucide-react';
+import { X, Tag, Calendar, Eye, Link as LinkIcon, Image as ImageIcon, Trash2, Edit2, Check, Maximize2 } from 'lucide-react';
 import type { ImageMemoryMeta } from '@/lib/image-memory-store';
 import { loadImageMemoryData, updateImageMemory, forgetImageMemory, getImageMemoryIndex } from '@/lib/image-memory-store';
 import { getMemories, type Memory } from '@/lib/memory-store';
+import ImageLightbox from './ImageLightbox';
 
 interface ImageMemoryDetailModalProps {
   memoryId: string;
@@ -29,6 +30,7 @@ export default function ImageMemoryDetailModal({
   const [editedEntities, setEditedEntities] = useState<string[]>([]);
   const [relatedImages, setRelatedImages] = useState<ImageMemoryMeta[]>([]);
   const [relatedTextMemories, setRelatedTextMemories] = useState<Memory[]>([]);
+  const [showImageLightbox, setShowImageLightbox] = useState(false);
   
   useEffect(() => {
     loadMemoryData();
@@ -172,12 +174,21 @@ export default function ImageMemoryDetailModal({
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Left: Image */}
             <div className="space-y-4">
-              <div className="rounded-xl overflow-hidden border border-[var(--border)] bg-[var(--surface-2)]">
+              <div
+                className="rounded-xl overflow-hidden border border-[var(--border)] bg-[var(--surface-2)] cursor-pointer group relative"
+                onClick={() => setShowImageLightbox(true)}
+              >
                 <img
                   src={displayImage}
                   alt={memory.description}
                   className="w-full h-auto"
                 />
+                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
+                  <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2 px-3 py-1.5 rounded-lg bg-black/60 backdrop-blur-sm text-white text-xs">
+                    <Maximize2 size={12} />
+                    Увеличить
+                  </div>
+                </div>
               </div>
               
               {/* Metadata */}
@@ -378,6 +389,22 @@ export default function ImageMemoryDetailModal({
           </div>
         </div>
       </div>
+
+      {/* Lightbox для полноразмерного просмотра с зумом */}
+      {showImageLightbox && displayImage && (
+        <ImageLightbox
+          src={displayImage}
+          alt={memory.description}
+          imageId={memory.id}
+          fileName={memory.description}
+          metadata={{
+            width: memory.width,
+            height: memory.height,
+            type: 'image/jpeg',
+          }}
+          onClose={() => setShowImageLightbox(false)}
+        />
+      )}
     </div>
   );
 }

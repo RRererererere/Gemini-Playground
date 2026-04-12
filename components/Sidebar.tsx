@@ -157,6 +157,11 @@ export interface SidebarSharedProps {
   onDeleteChat: (id: string) => void;
   memoryEnabled: boolean;
   onMemoryEnabledChange: (enabled: boolean) => void;
+  // Advanced limits
+  maxToolRounds: number;
+  onMaxToolRoundsChange: (v: number) => void;
+  maxMemoryCalls: number;
+  onMaxMemoryCallsChange: (v: number) => void;
   onSkillsChanged?: () => void;
   onClose?: () => void;
   // Agents
@@ -764,6 +769,10 @@ export function SettingsSidebar({
   onLoadChat,
   memoryEnabled,
   onMemoryEnabledChange,
+  maxToolRounds,
+  onMaxToolRoundsChange,
+  maxMemoryCalls,
+  onMaxMemoryCallsChange,
   onSkillsChanged,
   onClose,
 }: SidebarSharedProps) {
@@ -1444,6 +1453,66 @@ export function SettingsSidebar({
                       </button>
                     )}
                   </div>
+
+                  {/* Advanced Limits */}
+                  <details className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] group">
+                    <summary className="flex cursor-pointer items-center justify-between px-4 py-3 text-xs font-medium text-[var(--text-muted)] select-none hover:text-[var(--text-primary)] transition-colors list-none">
+                      <div className="flex items-center gap-2">
+                        <SlidersHorizontal size={13} />
+                        <span>Лимиты циклов</span>
+                      </div>
+                      <ChevronDown size={12} className="transition-transform group-open:rotate-180 text-[var(--text-dim)]" />
+                    </summary>
+                    <div className="px-4 pb-4 space-y-4">
+                      <p className="text-[10px] text-[var(--text-dim)] leading-relaxed">
+                        Максимальное количество раундов вызова инструментов за один запрос. Защита от бесконечных циклов.
+                      </p>
+
+                      {/* Max Tool Rounds */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-[11px] text-[var(--text-muted)]">Макс. раундов инструментов</label>
+                          <span className="rounded-md border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 text-xs font-mono text-[var(--text-primary)] min-w-[3rem] text-center">
+                            {maxToolRounds}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="1"
+                          max="50"
+                          step="1"
+                          value={maxToolRounds}
+                          onChange={e => onMaxToolRoundsChange(parseInt(e.target.value, 10))}
+                        />
+                        <div className="mt-1 flex justify-between text-[9px] text-[var(--text-dim)]">
+                          <span>1</span>
+                          <span>50</span>
+                        </div>
+                      </div>
+
+                      {/* Max Memory Calls */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-[11px] text-[var(--text-muted)]">Макс. вызовов памяти за turn</label>
+                          <span className="rounded-md border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 text-xs font-mono text-[var(--text-primary)] min-w-[3rem] text-center">
+                            {maxMemoryCalls}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="1"
+                          max="200"
+                          step="5"
+                          value={maxMemoryCalls}
+                          onChange={e => onMaxMemoryCallsChange(parseInt(e.target.value, 10))}
+                        />
+                        <div className="mt-1 flex justify-between text-[9px] text-[var(--text-dim)]">
+                          <span>1</span>
+                          <span>200</span>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
 
                   {/* Skills - встроенные инструменты */}
                   <SkillsSection onSkillsChanged={onSkillsChanged} />

@@ -39,7 +39,7 @@ export async function streamArenaAgent(params: {
   providers: Provider[];
   targetMessageId: string;
   onChunk: (text: string) => void;
-  onDone: (parts: Part[]) => void;
+  onDone: (parts: Part[], thinking?: string) => void;
   onError: (error: string, type?: string) => void;
   signal?: AbortSignal;
 }): Promise<void> {
@@ -91,12 +91,12 @@ export async function streamArenaAgent(params: {
       temperature: agent.temperature,
       apiKey,
       maxOutputTokens: agent.maxOutputTokens,
-      includeThoughts: false,
+      includeThoughts: agent.deepThinkEnabled,
     };
     if (provider.type === 'openai') {
       requestBody.baseUrl = provider.baseUrl;
     } else {
-      requestBody.thinkingBudget = 0;
+      requestBody.thinkingBudget = agent.deepThinkEnabled ? -1 : 0; // -1 = auto
     }
 
     const response = await fetch(endpoint, {
@@ -115,6 +115,7 @@ export async function streamArenaAgent(params: {
     const decoder = new TextDecoder();
     let buffer = '';
     let accumulatedText = '';
+    let accumulatedThinking = '';
 
     while (true) {
       const { done, value } = await reader.read();
@@ -143,6 +144,10 @@ export async function streamArenaAgent(params: {
             return;
           }
 
+          if (parsed.thinking) {
+            accumulatedThinking += parsed.thinking;
+          }
+
           if (parsed.text) {
             accumulatedText += parsed.text;
             onChunk(parsed.text);
@@ -152,7 +157,7 @@ export async function streamArenaAgent(params: {
     }
 
     const parts: Part[] = accumulatedText ? [{ text: accumulatedText }] : [];
-    onDone(parts);
+    onDone(parts, accumulatedThinking || undefined);
   } catch (e: any) {
     if (e.name !== 'AbortError') {
       onError(e.message || 'Ошибка стриминга');

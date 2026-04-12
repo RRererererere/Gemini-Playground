@@ -224,6 +224,8 @@ export default function Home() {
   const [thinkingBudget, setThinkingBudget] = useState<number>(-1); // -1=авто
   const [maxOutputTokens, setMaxOutputTokens] = useState<number>(8192);
   const [memoryEnabled, setMemoryEnabled] = useState<boolean>(true);
+  const [maxToolRounds, setMaxToolRounds] = useState<number>(20);
+  const [maxMemoryCalls, setMaxMemoryCalls] = useState<number>(100);
   const [showMemoryModal, setShowMemoryModal] = useState(false);
 
   // Skills state
@@ -400,6 +402,8 @@ export default function Home() {
       const savedSettingsSidebar = localStorage.getItem('gemini_settings_sidebar');
       const savedThinking = localStorage.getItem('gemini_thinking_budget');
       const savedMemoryEnabled = localStorage.getItem('gemini_memory_enabled');
+      const savedMaxToolRounds = localStorage.getItem('gemini_max_tool_rounds');
+      const savedMaxMemoryCalls = localStorage.getItem('gemini_max_memory_calls');
       const savedDeepThinkPrompt = loadDeepThinkSystemPrompt();
       const mobileViewport = window.matchMedia('(max-width: 767px)').matches;
 
@@ -413,6 +417,8 @@ export default function Home() {
       }
       if (savedThinking !== null) setThinkingBudget(parseInt(savedThinking));
       if (savedMemoryEnabled !== null) setMemoryEnabled(savedMemoryEnabled === 'true');
+      if (savedMaxToolRounds !== null) setMaxToolRounds(parseInt(savedMaxToolRounds));
+      if (savedMaxMemoryCalls !== null) setMaxMemoryCalls(parseInt(savedMaxMemoryCalls));
 
       const chats = await loadSavedChats();
       setSavedChats(chats);
@@ -471,6 +477,8 @@ export default function Home() {
   useEffect(() => { localStorage.setItem('gemini_settings_sidebar', settingsSidebarOpen.toString()); }, [settingsSidebarOpen]);
   useEffect(() => { localStorage.setItem('gemini_thinking_budget', thinkingBudget.toString()); }, [thinkingBudget]);
   useEffect(() => { localStorage.setItem('gemini_memory_enabled', memoryEnabled.toString()); }, [memoryEnabled]);
+  useEffect(() => { localStorage.setItem('gemini_max_tool_rounds', maxToolRounds.toString()); }, [maxToolRounds]);
+  useEffect(() => { localStorage.setItem('gemini_max_memory_calls', maxMemoryCalls.toString()); }, [maxMemoryCalls]);
 
 
 
@@ -909,10 +917,19 @@ export default function Home() {
       // Накапливаем раунды tool calls/responses
       const completedRounds: Array<{ calls: any[]; responses: any[] }> = [];
       let memoryCallsThisTurn = 0;
-      const MAX_MEMORY_CALLS = 100; // Увеличен лимит до 100
+      const MAX_MEMORY_CALLS_LOCAL = maxMemoryCalls; // Из настроек UI
+      const MAX_TOOL_ROUNDS_LOCAL = maxToolRounds; // Из настроек UI
+      let toolRoundCount = 0;
       let shouldContinueLoop = true;
-      
+
       while (shouldContinueLoop) {
+        // ЗАЩИТА: ограничиваем максимальное количество раундов
+        if (toolRoundCount >= MAX_TOOL_ROUNDS_LOCAL) {
+          console.warn(`[TOOL LOOP] Превышен лимит раундов (${MAX_TOOL_ROUNDS_LOCAL}), цикл остановлен`);
+          break;
+        }
+        toolRoundCount++;
+
         shouldContinueLoop = false; // по умолчанию — выходим после одного прохода
         
         // Строим историю с накопленными tool calls/responses от предыдущих раундов
@@ -967,8 +984,8 @@ export default function Home() {
           systemInstruction: effectiveSystemPromptWithImages,
           tools: tools,
           memoryTools: [
-            ...(memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS ? MEMORY_TOOLS : []),
-            ...(memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS ? IMAGE_MEMORY_TOOLS : []),
+            ...(memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS_LOCAL ? MEMORY_TOOLS : []),
+            ...(memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS_LOCAL ? IMAGE_MEMORY_TOOLS : []),
             ...skillTools,
           ],
           temperature,
@@ -996,7 +1013,7 @@ export default function Home() {
         });
         
         // Debug: проверяем что IMAGE_MEMORY_TOOLS отправляются
-        if (memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS) {
+        if (memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS_LOCAL) {
           console.log('[DEBUG] Sending IMAGE_MEMORY_TOOLS:', IMAGE_MEMORY_TOOLS.map(t => t.name));
         }
 
@@ -1307,11 +1324,11 @@ export default function Home() {
               
               if (isMemoryTool) {
                 // Лимит вызовов за turn
-                if (memoryCallsThisTurn >= MAX_MEMORY_CALLS) continue;
+                if (memoryCallsThisTurn >= MAX_MEMORY_CALLS_LOCAL) continue;
                 memoryCallsThisTurn++;
-                
+
                 let memoryResult: { success: boolean; id?: string; error?: string } = { success: false };
-                
+
                 if (name === 'save_memory') {
                   try {
                     const memory = saveMemory(
@@ -1433,7 +1450,7 @@ export default function Home() {
                 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
                 console.log('[IMAGE MEMORY] Tool called:', name, 'args:', args);
                 // Лимит вызовов за turn
-                if (memoryCallsThisTurn >= MAX_MEMORY_CALLS) continue;
+                if (memoryCallsThisTurn >= MAX_MEMORY_CALLS_LOCAL) continue;
                 memoryCallsThisTurn++;
                 
                 let imageMemoryResult: any = { success: false };
@@ -1863,7 +1880,7 @@ export default function Home() {
         }
       }, 100); // 100ms достаточно для React batching
     }
-  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, memoryEnabled, activeProvider, maxOutputTokens, handleSkillEvent]);
+  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, memoryEnabled, activeProvider, maxOutputTokens, handleSkillEvent, maxToolRounds, maxMemoryCalls]);
 
   // Auto-open sheet for ai_interactive sites when streaming ends
   useEffect(() => {
@@ -2850,6 +2867,10 @@ export default function Home() {
     onDeleteChat: handleDeleteSavedChat,
     memoryEnabled,
     onMemoryEnabledChange: setMemoryEnabled,
+    maxToolRounds,
+    onMaxToolRoundsChange: setMaxToolRounds,
+    maxMemoryCalls,
+    onMaxMemoryCallsChange: setMaxMemoryCalls,
     onSkillsChanged: () => setSkillsRevision(r => r + 1),
   };
 
@@ -3142,7 +3163,7 @@ export default function Home() {
                         ? (arena.isStreaming && message.isStreaming === true)
                         : (isStreaming && message.id === streamingId)
                       }
-                      canRegenerate={appMode === 'arena' ? false : (hasApiAndModel && !isStreaming)}
+                      canRegenerate={appMode === 'arena' ? (!isStreaming && arena.activeSession && arena.activeSession.messages.some(m => m.role === 'model' && !m.isStreaming)) : (hasApiAndModel && !isStreaming)}
                       onEdit={appMode === 'arena'
                         ? (id: string, newParts: Part[]) => arena.editMessage(id, newParts)
                         : handleEdit
@@ -3151,7 +3172,11 @@ export default function Home() {
                         ? (id: string) => arena.deleteMessage(id)
                         : handleDelete
                       }
-                      onRegenerate={appMode === 'arena' ? () => {} : handleRegenerate}
+                      onRegenerate={appMode === 'arena' ? () => {
+                        // Regenerate last model message
+                        const lastModelMsg = [...(arena.activeSession?.messages || [])].reverse().find(m => m.role === 'model');
+                        if (lastModelMsg) arena.regenerateAgentResponse(lastModelMsg.id);
+                      } : handleRegenerate}
                       onContinue={appMode === 'arena' ? () => arena.continueAgentStream(message.id) : handleContinue}
                       onBranch={() => handleBranch(message.id)}
                       onSubmitToolResults={appMode === 'arena' ? () => {} : handleSubmitToolResults}
@@ -3256,15 +3281,31 @@ export default function Home() {
             onAddUserMessage={appMode === 'arena' ? () => {} : handleAddUserMessage}
             isStreaming={appMode === 'arena' ? arena.isStreaming : isStreaming}
             disabled={appMode === 'arena' ? !arena.activeSession : !hasApiAndModel}
-            canContinue={appMode === 'arena' ? false : canContinue}
-            onContinue={appMode === 'arena' ? () => {} : handleContinue}
-            canRun={appMode === 'arena' ? false : (messages.length > 0 && !isStreaming && hasApiAndModel)}
-            onRun={appMode === 'arena' ? () => {} : handleRegenerate}
+            canContinue={appMode === 'arena' ? (
+              // Can continue if there's a streaming=false model message that was interrupted
+              arena.activeSession?.messages.some(m => m.role === 'model' && !m.isStreaming && m.parts.some(p => 'text' in p && (p as {text:string}).text.length > 0))
+            ) : canContinue}
+            onContinue={appMode === 'arena' ? () => {
+              // Continue the last incomplete model message
+              const lastModelMsg = [...(arena.activeSession?.messages || [])].reverse().find(m => m.role === 'model' && !m.isStreaming);
+              if (lastModelMsg) arena.continueAgentStream(lastModelMsg.id);
+            } : handleContinue}
+            canRun={appMode === 'arena' ? (
+              // Can run (regenerate all) if there are messages and not streaming
+              arena.activeSession && arena.activeSession.messages.length > 0 && !arena.isStreaming
+            ) : (messages.length > 0 && !isStreaming && hasApiAndModel)}
+            onRun={appMode === 'arena' ? () => {
+              // Regenerate all agent responses from the last user message
+              const lastUserMsg = [...(arena.activeSession?.messages || [])].reverse().find(m => m.role === 'user');
+              if (lastUserMsg) {
+                arena.regenerateFromMessage(lastUserMsg.id);
+              }
+            } : handleRegenerate}
             pendingCanvasElement={pendingCanvasElement}
             onCanvasElementConsumed={() => setPendingCanvasElement(null)}
             onAnnotationClick={() => {}}
-            deepThinkEnabled={deepThinkState.enabled}
-            onDeepThinkToggle={toggleDeepThink}
+            deepThinkEnabled={appMode === 'arena' ? false : deepThinkState.enabled}
+            onDeepThinkToggle={appMode === 'arena' ? () => {} : toggleDeepThink}
           />
           {/* Arena Input Bar */}
           {appMode === 'arena' && arena.activeSession && (

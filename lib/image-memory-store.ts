@@ -6,9 +6,8 @@ import { nanoid } from 'nanoid';
 import { saveFileData, loadFileData, deleteFileData } from './fileStorage';
 import { 
   computeCryptoHash, 
-  computePerceptualHash, 
+  computePerceptualHash,
   hammingDistance,
-  createThumbnail 
 } from './image-memory-hash';
 
 export type ImageMemoryScope = 'local' | 'global';
@@ -132,11 +131,13 @@ export async function saveImageMemory(data: {
   relatedImageIds?: string[];
 }): Promise<ImageMemory> {
   // Вычисляем хэши
-  const [cryptoHash, pHash, thumbnail] = await Promise.all([
+  const [cryptoHash, pHash] = await Promise.all([
     computeCryptoHash(data.base64),
     computePerceptualHash(data.base64, data.mimeType),
-    createThumbnail(data.base64, data.mimeType, 80)
   ]);
+
+  // Сохраняем ОРИГИНАЛ как thumbnail для UI — без сжатия
+  const thumbnail = data.base64;
   
   // Проверяем дубликаты
   const index = getImageMemoryIndex();

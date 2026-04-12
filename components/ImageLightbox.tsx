@@ -36,6 +36,10 @@ export default function ImageLightbox({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [imgDimensions, setImgDimensions] = useState({ width: 0, height: 0 });
 
+  // Pinch-to-zoom state for mobile
+  const [pinchStart, setPinchStart] = useState<number>(0);
+  const [pinchScaleStart, setPinchScaleStart] = useState<number>(1);
+
   // Закрытие по Escape
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -50,6 +54,48 @@ export default function ImageLightbox({
     e.preventDefault();
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
     setScale(prev => Math.max(0.5, Math.min(5, prev * delta)));
+  }, []);
+
+  // Pinch-to-zoom для мобильных
+  const getTouchDistance = (touches: React.TouchList) => {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      // Pinch start
+      setPinchStart(getTouchDistance(e.touches));
+      setPinchScaleStart(scale);
+    } else if (e.touches.length === 1 && scale > 1) {
+      // Drag start
+      const touch = e.touches[0];
+      setIsDragging(true);
+      setDragStart({ x: touch.clientX - position.x, y: touch.clientY - position.y });
+    }
+  }, [scale, position]);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length === 2 && pinchStart > 0) {
+      // Pinch move
+      e.preventDefault();
+      const distance = getTouchDistance(e.touches);
+      const scaleFactor = distance / pinchStart;
+      setScale(prev => Math.max(0.5, Math.min(5, pinchScaleStart * scaleFactor)));
+    } else if (e.touches.length === 1 && isDragging) {
+      // Drag move
+      const touch = e.touches[0];
+      setPosition({
+        x: touch.clientX - dragStart.x,
+        y: touch.clientY - dragStart.y,
+      });
+    }
+  }, [isDragging, dragStart, pinchStart, pinchScaleStart]);
+
+  const handleTouchEnd = useCallback(() => {
+    setIsDragging(false);
+    setPinchStart(0);
   }, []);
 
   // Двойной клик — сброс зума
@@ -119,11 +165,11 @@ export default function ImageLightbox({
     >
       {/* Контейнер модала */}
       <div
-        className="relative flex flex-col max-w-[90vw] max-h-[90vh]"
+        className="relative flex flex-col w-[95vw] sm:max-w-[90vw] max-h-[95vh] sm:max-h-[90vh]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Топбар */}
-        <div className="flex items-center justify-between px-4 py-3 bg-black/40 backdrop-blur-sm rounded-t-lg border-b border-white/10">
+        <div className="flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 bg-black/40 backdrop-blur-sm rounded-t-lg border-b border-white/10">
           <div className="flex items-center gap-3">
             {imageId && (
               <button
@@ -166,10 +212,11 @@ export default function ImageLightbox({
             </button>
             <button
               onClick={onClose}
-              className="p-2 text-white/70 hover:text-white hover:bg-white/10 rounded transition-colors"
+              className="p-2 sm:p-2 min-w-[44px] min-h-[44px] flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 rounded transition-colors"
               title="Закрыть"
             >
-              <X size={18} />
+              <X size={18} className="sm:hidden" />
+              <X size={20} className="hidden sm:block" />
             </button>
           </div>
         </div>
@@ -188,6 +235,9 @@ export default function ImageLightbox({
             src={src}
             alt={alt}
             onDoubleClick={handleDoubleClick}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
             onLoad={handleImageLoad}
             style={{
               transform: `scale(${scale}) translate(${position.x / scale}px, ${position.y / scale}px)`,
