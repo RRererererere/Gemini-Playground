@@ -511,10 +511,10 @@ export function saveDeepThinkSystemPrompt(prompt: string): void {
 
 export function exportAllSettings(): void {
   if (typeof window === 'undefined') return;
-  
+
   // Импортируем функцию экспорта памяти
   const { exportAllMemories } = require('./memory-store');
-  
+
   const data = {
     version: 2, // bump версии
     exportedAt: Date.now(),
@@ -525,20 +525,24 @@ export function exportAllSettings(): void {
     temperature: localStorage.getItem('gemini_temperature') || '1',
     thinkingBudget: localStorage.getItem('gemini_thinking_budget') || '-1',
     systemPrompt: localStorage.getItem('gemini_sys_prompt') || '',
-    
+
     // ↓ НОВЫЕ ПОЛЯ для Arena
     arenaSessions: localStorage.getItem('arena_sessions') || '[]',
     arenaActiveSession: localStorage.getItem('arena_active_session_id') || '',
-    
+
     // ↓ НОВЫЕ ПОЛЯ для Memory
     memories: exportAllMemories(),
-    
+
     // ↓ НОВЫЕ ПОЛЯ для Agents
     agents: localStorage.getItem('gemini_agents') || '[]',
-    
+
     // ↓ НОВЫЕ ПОЛЯ для Skills
     skillPrompts: localStorage.getItem('gemini_skill_prompts') || '{}',
     deepThinkPrompt: localStorage.getItem('gemini_deepthink_system_prompt') || '',
+
+    // ↓ НОВЫЕ ПОЛЯ для Ghost Nudge Protocol
+    ghostNudgeEnabled: localStorage.getItem(GNP_ENABLED_KEY) || String(GNP_ENABLED_DEFAULT),
+    ghostNudgeMaxRetries: localStorage.getItem(GNP_MAX_RETRIES_KEY) || String(GNP_MAX_RETRIES_DEFAULT),
   };
   
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -598,7 +602,11 @@ export async function importAllSettings(file: File): Promise<void> {
           // ↓ НОВЫЕ ПОЛЯ для Skills
           if (raw.skillPrompts) localStorage.setItem('gemini_skill_prompts', raw.skillPrompts);
           if (raw.deepThinkPrompt) localStorage.setItem('gemini_deepthink_system_prompt', raw.deepThinkPrompt);
-          
+
+          // ↓ НОВЫЕ ПОЛЯ для Ghost Nudge Protocol
+          if (raw.ghostNudgeEnabled !== undefined) localStorage.setItem(GNP_ENABLED_KEY, String(raw.ghostNudgeEnabled));
+          if (raw.ghostNudgeMaxRetries !== undefined) localStorage.setItem(GNP_MAX_RETRIES_KEY, String(raw.ghostNudgeMaxRetries));
+
           window.location.reload();
           resolve();
         } else {
@@ -616,6 +624,41 @@ export async function importAllSettings(file: File): Promise<void> {
 // ====================== SKILL PROMPTS ======================
 
 const SKILL_PROMPTS_KEY = 'gemini_skill_prompts';
+
+// Ghost Nudge Protocol settings keys
+const GNP_ENABLED_KEY = 'gemini_ghost_nudge_enabled';
+const GNP_MAX_RETRIES_KEY = 'gemini_ghost_nudge_max_retries';
+
+// Default values
+export const GNP_ENABLED_DEFAULT = true;
+export const GNP_MAX_RETRIES_DEFAULT = 3;
+
+export function loadGhostNudgeEnabled(): boolean {
+  if (typeof window === 'undefined') return GNP_ENABLED_DEFAULT;
+  const val = localStorage.getItem(GNP_ENABLED_KEY);
+  if (val === null) return GNP_ENABLED_DEFAULT;
+  return val === 'true';
+}
+
+export function saveGhostNudgeEnabled(enabled: boolean): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(GNP_ENABLED_KEY, enabled.toString());
+}
+
+export function loadGhostNudgeMaxRetries(): number {
+  if (typeof window === 'undefined') return GNP_MAX_RETRIES_DEFAULT;
+  const val = localStorage.getItem(GNP_MAX_RETRIES_KEY);
+  if (val === null) return GNP_MAX_RETRIES_DEFAULT;
+  const parsed = parseInt(val, 10);
+  if (isNaN(parsed) || parsed < 1 || parsed > 5) return GNP_MAX_RETRIES_DEFAULT;
+  return parsed;
+}
+
+export function saveGhostNudgeMaxRetries(max: number): void {
+  if (typeof window === 'undefined') return;
+  const clamped = Math.max(1, Math.min(5, max));
+  localStorage.setItem(GNP_MAX_RETRIES_KEY, clamped.toString());
+}
 
 export interface SkillPromptOverride {
   skillId: string;

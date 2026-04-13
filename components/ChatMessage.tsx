@@ -11,7 +11,7 @@ import {
   User, Sparkles, Copy, Check, Edit2, Trash2, RefreshCw,
   ChevronDown, ChevronUp, FileText, Image as ImageIcon, Volume2, Braces,
   Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square, Wrench, Video, MonitorPlay,
-  Send, Calculator, ClipboardList, MessageSquare, Globe, GitBranch
+  Send, Calculator, ClipboardList, MessageSquare, Globe, GitBranch, Ghost
 } from 'lucide-react';
 import type { Message, AttachedFile, Part, DeepThinkAnalysis, BridgePayload } from '@/types';
 import MemoryPill from './MemoryPill';
@@ -1835,6 +1835,45 @@ export default function ChatMessage({
         {message.files && message.files.length > 0 && (
           <div className={`flex flex-wrap gap-2 mb-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
             {message.files.map(f => <FilePreview key={f.id} file={f} />)}
+          </div>
+        )}
+
+        {/* Ghost Nudge Protocol: индикатор перегенерации */}
+        {message.ghostRetrying && (
+          <div className="flex items-center gap-2 py-2 px-3 mb-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm text-amber-400/80 animate-in fade-in duration-300">
+            <RefreshCw size={14} className="animate-spin shrink-0" />
+            <span>
+              Gemini вернул пустой ответ · Перегенерация
+              <span className="text-amber-400/50 ml-1">
+                ({message.ghostRetryAttempt}/{message.ghostRetryMax})
+              </span>
+            </span>
+          </div>
+        )}
+
+        {/* Ghost Nudge Protocol: все попытки исчерпаны */}
+        {message.ghostRetryFailed && !message.ghostRetrying && (
+          <div className="flex flex-col gap-2 py-2 px-3 mb-2 rounded-lg bg-red-500/10 border border-red-500/20">
+            <div className="flex items-center gap-2 text-sm text-red-400/70">
+              <Ghost size={14} className="shrink-0" />
+              <span>
+                Gemini не смог ответить после {message.ghostRetryMax} попыток
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => onRegenerate()}
+                className="text-xs px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 transition-colors text-red-300/80"
+              >
+                ↺ Попробовать ещё раз
+              </button>
+              <button
+                onClick={() => onDelete(message.id)}
+                className="text-xs px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 transition-colors text-red-400/70"
+              >
+                ✕ Убрать
+              </button>
+            </div>
           </div>
         )}
 

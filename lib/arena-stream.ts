@@ -42,8 +42,19 @@ export async function streamArenaAgent(params: {
   onDone: (parts: Part[], thinking?: string) => void;
   onError: (error: string, type?: string) => void;
   signal?: AbortSignal;
+  // Ghost Nudge Protocol
+  gnpEnabled?: boolean;
+  gnpMaxRetries?: number;
+  onGhostRetry?: (attempt: number, max: number) => void;
 }): Promise<void> {
-  const { agent, session, messages, globalApiKeys, providers, targetMessageId, onChunk, onDone, onError, signal } = params;
+  const {
+    agent, session, messages, globalApiKeys, providers, targetMessageId,
+    onChunk, onDone, onError, signal,
+    gnpEnabled, gnpMaxRetries, onGhostRetry,
+  } = params;
+
+  const MAX_RETRIES = gnpMaxRetries ?? 3;
+  let ghostRetryCount = 0;
 
   // Провайдер агента
   const providerId = agent.providerId || 'google';
@@ -52,6 +63,9 @@ export async function streamArenaAgent(params: {
     onError('Провайдер не найден');
     return;
   }
+  const providerType = provider.type;
+  const providerName = provider.name;
+  const providerBaseUrl = provider.baseUrl;
 
   // Определяем API ключ
   let apiKey = agent.apiKey;
@@ -60,7 +74,7 @@ export async function streamArenaAgent(params: {
     const pool = globalApiKeys[providerId] || [];
     const available = pool.find(k => k.key);
     if (!available) {
-      onError(`Нет доступного ключа для ${provider.name}. Добавьте в настройках.`, 'invalid_key');
+      onError(`Нет доступного ключа для ${providerName}. Добавьте в настройках.`, 'invalid_key');
       return;
     }
     apiKey = available.key;
@@ -77,90 +91,125 @@ export async function streamArenaAgent(params: {
   const agentHistory = buildAgentHistory(messages, agent.id, session.agents);
   const systemPrompt = buildArenaSystemPrompt(agent, session);
 
-  // Строим contents для API
-  const contentsForRequest = buildChatRequestMessages(agentHistory);
+  // Функция одной попытки стрима
+  async function attemptStream(contentsOverride?: any[]): Promise<boolean> {
+    const contentsForRequest = contentsOverride || buildChatRequestMessages(agentHistory);
 
-  try {
-    const endpoint = provider.type === 'openai' ? '/api/openai-chat' : '/api/chat';
-    const requestBody: any = {
-      messages: contentsForRequest,
-      model: modelName,
-      systemInstruction: systemPrompt,
-      tools: [],
-      memoryTools: [],
-      temperature: agent.temperature,
-      apiKey,
-      maxOutputTokens: agent.maxOutputTokens,
-      includeThoughts: agent.deepThinkEnabled,
-    };
-    if (provider.type === 'openai') {
-      requestBody.baseUrl = provider.baseUrl;
-    } else {
-      requestBody.thinkingBudget = agent.deepThinkEnabled ? -1 : 0; // -1 = auto
-    }
-
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal,
-      body: JSON.stringify(requestBody),
-    });
-
-    if (!response.ok) {
-      onError(`API error: ${response.status}`);
-      return;
-    }
-
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let accumulatedText = '';
-    let accumulatedThinking = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data: ')) continue;
-        const jsonStr = trimmed.slice(6);
-        if (jsonStr === '[DONE]') break;
-
-        try {
-          const parsed = JSON.parse(jsonStr);
-
-          if (parsed.error) {
-            onError(String(parsed.error), parsed.errorType);
-            return;
-          }
-
-          if (parsed.isBlocked) {
-            onError(`Ответ заблокирован: ${parsed.finishReason || 'safety'}`, 'bad_request');
-            return;
-          }
-
-          if (parsed.thinking) {
-            accumulatedThinking += parsed.thinking;
-          }
-
-          if (parsed.text) {
-            accumulatedText += parsed.text;
-            onChunk(parsed.text);
-          }
-        } catch {}
+    try {
+      const endpoint = providerType === 'openai' ? '/api/openai-chat' : '/api/chat';
+      const requestBody: any = {
+        messages: contentsForRequest,
+        model: modelName,
+        systemInstruction: systemPrompt,
+        tools: [],
+        memoryTools: [],
+        temperature: agent.temperature,
+        apiKey,
+        maxOutputTokens: agent.maxOutputTokens,
+        includeThoughts: agent.deepThinkEnabled,
+      };
+      if (providerType === 'openai') {
+        requestBody.baseUrl = providerBaseUrl;
+      } else {
+        requestBody.thinkingBudget = agent.deepThinkEnabled ? -1 : 0; // -1 = auto
       }
-    }
 
-    const parts: Part[] = accumulatedText ? [{ text: accumulatedText }] : [];
-    onDone(parts, accumulatedThinking || undefined);
-  } catch (e: any) {
-    if (e.name !== 'AbortError') {
-      onError(e.message || 'Ошибка стриминга');
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!response.ok) {
+        onError(`API error: ${response.status}`);
+        return true; // не пустой ответ, это ошибка — не ретраим
+      }
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let accumulatedText = '';
+      let accumulatedThinking = '';
+      let hadError = false;
+      let wasBlocked = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data: ')) continue;
+          const jsonStr = trimmed.slice(6);
+          if (jsonStr === '[DONE]') break;
+
+          try {
+            const parsed = JSON.parse(jsonStr);
+
+            if (parsed.error) {
+              hadError = true;
+              onError(String(parsed.error), parsed.errorType);
+              return true; // ошибка — не пустой ответ
+            }
+
+            if (parsed.isBlocked) {
+              wasBlocked = true;
+              onError(`Ответ заблокирован: ${parsed.finishReason || 'safety'}`, 'bad_request');
+              return true; // block — не пустой ответ
+            }
+
+            if (parsed.thinking) {
+              accumulatedThinking += parsed.thinking;
+            }
+
+            if (parsed.text) {
+              accumulatedText += parsed.text;
+              onChunk(parsed.text);
+            }
+          } catch {}
+        }
+      }
+
+      // Если текст есть или была ошибка/block — это не пустой ответ
+      if (accumulatedText.trim() || hadError || wasBlocked) {
+        const parts: Part[] = accumulatedText ? [{ text: accumulatedText }] : [];
+        onDone(parts, accumulatedThinking || undefined);
+        return true;
+      }
+      return false; // пустой ответ
+    } catch (e: any) {
+      if (e.name !== 'AbortError') {
+        onError(e.message || 'Ошибка стриминга');
+      }
+      return true; // ошибка — не пустой ответ
     }
+  }
+
+  // Основная логика с retry
+  let contentsForRequest = buildChatRequestMessages(agentHistory);
+  let success = await attemptStream(contentsForRequest);
+
+  // GNP retry только для Gemini провайдеров
+  const isGeminiProvider = providerType === 'gemini';
+  while (!success && gnpEnabled && isGeminiProvider && ghostRetryCount < MAX_RETRIES) {
+    ghostRetryCount++;
+    if (onGhostRetry) onGhostRetry(ghostRetryCount, MAX_RETRIES);
+    console.log(`👻 [GNP/Arena:${agent.name}] Retry ${ghostRetryCount}/${MAX_RETRIES}`);
+
+    contentsForRequest = [
+      ...contentsForRequest,
+      { role: 'model' as const, parts: [{ text: '...' }] },
+      { role: 'user'  as const, parts: [{ text: '...' }] },
+    ];
+    success = await attemptStream(contentsForRequest);
+  }
+
+  if (!success) {
+    onError('👻 Gemini не смог сгенерировать ответ после нескольких попыток', 'empty_response');
   }
 }

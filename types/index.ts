@@ -153,6 +153,12 @@ export interface Message {
     timestamp: number;
     appliedToRegeneration?: boolean;
   };
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Ghost Nudge Protocol — ephemeral, не сохраняется в IndexedDB
+  ghostRetrying?: boolean;       // перегенерация после пустого ответа
+  ghostRetryAttempt?: number;    // текущая попытка (1, 2, 3...)
+  ghostRetryMax?: number;        // максимум попыток из настроек
+  ghostRetryFailed?: boolean;    // все попытки исчерпаны
 }
 
 // Артефакт скилла (импортируется из lib/skills/types.ts в рантайме)

@@ -43,6 +43,8 @@ import {
   saveSystemPrompts,
   createSystemPrompt,
   revokePreviewUrls,
+  loadGhostNudgeEnabled, saveGhostNudgeEnabled,
+  loadGhostNudgeMaxRetries, saveGhostNudgeMaxRetries,
 } from '@/lib/storage';
 import {
   DEFAULT_DEEPTHINK_SYSTEM_PROMPT,
@@ -226,6 +228,9 @@ export default function Home() {
   const [memoryEnabled, setMemoryEnabled] = useState<boolean>(true);
   const [maxToolRounds, setMaxToolRounds] = useState<number>(20);
   const [maxMemoryCalls, setMaxMemoryCalls] = useState<number>(100);
+  // Ghost Nudge Protocol
+  const [ghostNudgeEnabled, setGhostNudgeEnabled] = useState<boolean>(true);
+  const [ghostNudgeMaxRetries, setGhostNudgeMaxRetries] = useState<number>(3);
   const [showMemoryModal, setShowMemoryModal] = useState(false);
 
   // Skills state
@@ -303,7 +308,7 @@ export default function Home() {
   const activeProvider = providers.find(p => p.id === (activeModel?.providerId || activeProviderId));
 
   // Arena hook
-  const arena = useArena(apiKeys, providers, activeModel, allModels);
+  const arena = useArena(apiKeys, providers, activeModel, allModels, { enabled: ghostNudgeEnabled, maxRetries: ghostNudgeMaxRetries });
 
   // Restore & persist appMode
   useEffect(() => {
@@ -405,6 +410,9 @@ export default function Home() {
       const savedMaxToolRounds = localStorage.getItem('gemini_max_tool_rounds');
       const savedMaxMemoryCalls = localStorage.getItem('gemini_max_memory_calls');
       const savedDeepThinkPrompt = loadDeepThinkSystemPrompt();
+      // GNP settings
+      const savedGhostNudgeEnabled = loadGhostNudgeEnabled();
+      const savedGhostNudgeMaxRetries = loadGhostNudgeMaxRetries();
       const mobileViewport = window.matchMedia('(max-width: 767px)').matches;
 
       if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
@@ -419,6 +427,8 @@ export default function Home() {
       if (savedMemoryEnabled !== null) setMemoryEnabled(savedMemoryEnabled === 'true');
       if (savedMaxToolRounds !== null) setMaxToolRounds(parseInt(savedMaxToolRounds));
       if (savedMaxMemoryCalls !== null) setMaxMemoryCalls(parseInt(savedMaxMemoryCalls));
+      setGhostNudgeEnabled(savedGhostNudgeEnabled);
+      setGhostNudgeMaxRetries(savedGhostNudgeMaxRetries);
 
       const chats = await loadSavedChats();
       setSavedChats(chats);
@@ -479,6 +489,8 @@ export default function Home() {
   useEffect(() => { localStorage.setItem('gemini_memory_enabled', memoryEnabled.toString()); }, [memoryEnabled]);
   useEffect(() => { localStorage.setItem('gemini_max_tool_rounds', maxToolRounds.toString()); }, [maxToolRounds]);
   useEffect(() => { localStorage.setItem('gemini_max_memory_calls', maxMemoryCalls.toString()); }, [maxMemoryCalls]);
+  useEffect(() => { saveGhostNudgeEnabled(ghostNudgeEnabled); }, [ghostNudgeEnabled]);
+  useEffect(() => { saveGhostNudgeMaxRetries(ghostNudgeMaxRetries); }, [ghostNudgeMaxRetries]);
 
 
 
@@ -922,6 +934,18 @@ export default function Home() {
       let toolRoundCount = 0;
       let shouldContinueLoop = true;
 
+      // ── Ghost Nudge Protocol ──
+      const activeProviderInfo = providers.find(p => p.id === (activeModel?.providerId || ''));
+      const gnpEnabled = ghostNudgeEnabled && activeProviderInfo?.type !== 'openai';
+      const MAX_GHOST_RETRIES = ghostNudgeMaxRetries;
+      let ghostRetryCount = 0;
+      let ghostNudgePending = false;
+      // Локальные флаги для детекции пустого ответа (сбрасываются каждую итерацию)
+      let localAccText = '';
+      let localHadToolCalls = false;
+      let localHadError = false;
+      let localWasBlocked = false;
+
       while (shouldContinueLoop) {
         // ЗАЩИТА: ограничиваем максимальное количество раундов
         if (toolRoundCount >= MAX_TOOL_ROUNDS_LOCAL) {
@@ -931,10 +955,16 @@ export default function Home() {
         toolRoundCount++;
 
         shouldContinueLoop = false; // по умолчанию — выходим после одного прохода
-        
+
+        // ── Сброс локальных флагов GNP ──
+        localAccText = '';
+        localHadToolCalls = false;
+        localHadError = false;
+        localWasBlocked = false;
+
         // Строим историю с накопленными tool calls/responses от предыдущих раундов
         const messagesForRequest = buildChatRequestMessages(history);
-        
+
         // Если есть завершённые раунды — добавляем их как отдельные model/user turns
         let contentsForRequest = messagesForRequest;
         if (completedRounds.length > 0) {
@@ -947,7 +977,7 @@ export default function Home() {
                 ...(tc.thoughtSignature ? { thoughtSignature: tc.thoughtSignature } : {}),
               })),
             });
-            
+
             // Добавляем user turn с functionResponses + extraParts этого раунда
             contentsForRequest.push({
               role: 'user',
@@ -965,7 +995,18 @@ export default function Home() {
             });
           }
         }
-        
+
+        // ── Ghost Nudge инъекция (если pending) ──
+        if (ghostNudgePending) {
+          ghostNudgePending = false;
+          console.log(`👻 [GNP] Injecting ghost nudge (attempt ${ghostRetryCount}/${MAX_GHOST_RETRIES})`);
+          contentsForRequest = [
+            ...contentsForRequest,
+            { role: 'model' as const, parts: [{ text: '...' }] },
+            { role: 'user'  as const, parts: [{ text: '...' }] },
+          ];
+        }
+
         // Собираем skill tools
         const skillTools = collectSkillTools();
         
@@ -1165,6 +1206,7 @@ export default function Home() {
 
             // Ошибка (Gemini / сеть / quota / invalid key ...)
             if (parsed.error) {
+              localHadError = true;  // GNP flag
               const errMsg = String(parsed.error || 'Gemini API error');
               const isRl = Boolean(parsed.isRateLimit) || isRateLimitError(errMsg);
               const errType = (parsed.errorType as Message['errorType']) || (isRl ? 'rate_limit' : 'unknown');
@@ -1200,6 +1242,7 @@ export default function Home() {
 
             // Контент заблокирован
             if (parsed.isBlocked) {
+              localWasBlocked = true;  // GNP flag
               setMessages(prev => prev.map(m =>
                 m.id !== targetMessageId ? m : {
                   ...m,
@@ -1807,6 +1850,7 @@ export default function Home() {
 
             // Текст ответа
             if (parsed.text) {
+              localAccText += parsed.text;  // GNP: трекаем для детекции пустого ответа
               pendingText += parsed.text;
               scheduleFlush();
             }
@@ -1815,6 +1859,11 @@ export default function Home() {
 
         // Flush any buffered chunks before finishing.
         flush();
+
+        // GNP: отмечаем если были tool calls
+        if (roundToolCalls.length > 0) {
+          localHadToolCalls = true;
+        }
 
         // Если были tool calls в этом раунде — сохраняем раунд для следующей итерации
         if (roundToolCalls.length > 0 && roundToolResponses.length > 0) {
@@ -1835,7 +1884,48 @@ export default function Home() {
             return { ...m, isStreaming: true };
           }));
         }
-      } // конец while (true)
+
+        // ── Ghost Nudge Protocol: проверка пустого ответа ──
+        if (
+          gnpEnabled &&
+          !localAccText.trim() &&
+          !localHadToolCalls &&
+          !localHadError &&
+          !localWasBlocked &&
+          !shouldContinueLoop  // цикл не продолжится по tool calls
+        ) {
+          if (ghostRetryCount < MAX_GHOST_RETRIES) {
+            ghostRetryCount++;
+            console.log(`👻 [GNP] Empty response — retry ${ghostRetryCount}/${MAX_GHOST_RETRIES}`);
+            ghostNudgePending = true;
+            shouldContinueLoop = true;
+
+            // Показываем индикатор перегенерации
+            setMessages(prev => prev.map(m =>
+              m.id === targetMessageId ? {
+                ...m,
+                isStreaming: true,
+                ghostRetrying: true,
+                ghostRetryAttempt: ghostRetryCount,
+                ghostRetryMax: MAX_GHOST_RETRIES,
+              } : m
+            ));
+          } else {
+            console.warn(`👻 [GNP] All ${MAX_GHOST_RETRIES} retries exhausted`);
+            // Все попытки исчерпаны
+            setMessages(prev => prev.map(m =>
+              m.id === targetMessageId ? {
+                ...m,
+                ghostRetrying: false,
+                ghostRetryFailed: true,
+                isStreaming: false,
+                error: 'Gemini не смог сгенерировать ответ после нескольких попыток',
+                errorType: 'unknown' as const,
+              } : m
+            ));
+          }
+        }
+      } // конец while (shouldContinueLoop)
     } // конец try
 
     } catch (e: any) {
@@ -1852,7 +1942,7 @@ export default function Home() {
       
       // Помечаем сообщение завершённым
       setMessages(prev => prev.map(m =>
-        m.id === targetMessageId ? { ...m, isStreaming: false } : m
+        m.id === targetMessageId ? { ...m, isStreaming: false, ghostRetrying: false } : m
       ));
       
       // Небольшая задержка чтобы дать React время обновить messagesRef
@@ -2871,6 +2961,11 @@ export default function Home() {
     onMaxToolRoundsChange: setMaxToolRounds,
     maxMemoryCalls,
     onMaxMemoryCallsChange: setMaxMemoryCalls,
+    // Ghost Nudge Protocol
+    ghostNudgeEnabled,
+    onGhostNudgeEnabledChange: setGhostNudgeEnabled,
+    ghostNudgeMaxRetries,
+    onGhostNudgeMaxRetriesChange: setGhostNudgeMaxRetries,
     onSkillsChanged: () => setSkillsRevision(r => r + 1),
   };
 

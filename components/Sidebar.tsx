@@ -162,6 +162,11 @@ export interface SidebarSharedProps {
   onMaxToolRoundsChange: (v: number) => void;
   maxMemoryCalls: number;
   onMaxMemoryCallsChange: (v: number) => void;
+  // Ghost Nudge Protocol
+  ghostNudgeEnabled: boolean;
+  onGhostNudgeEnabledChange: (enabled: boolean) => void;
+  ghostNudgeMaxRetries: number;
+  onGhostNudgeMaxRetriesChange: (v: number) => void;
   onSkillsChanged?: () => void;
   onClose?: () => void;
   // Agents
@@ -773,6 +778,10 @@ export function SettingsSidebar({
   onMaxToolRoundsChange,
   maxMemoryCalls,
   onMaxMemoryCallsChange,
+  ghostNudgeEnabled,
+  onGhostNudgeEnabledChange,
+  ghostNudgeMaxRetries,
+  onGhostNudgeMaxRetriesChange,
   onSkillsChanged,
   onClose,
 }: SidebarSharedProps) {
@@ -1513,6 +1522,50 @@ export function SettingsSidebar({
                       </div>
                     </div>
                   </details>
+
+                  {/* Ghost Nudge Protocol */}
+                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[13px]">👻</span>
+                        <span className="text-xs font-medium text-[var(--text-primary)]">Ghost Nudge Protocol</span>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={ghostNudgeEnabled}
+                          onChange={e => onGhostNudgeEnabledChange(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-9 h-5 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
+                      </label>
+                    </div>
+                    <p className="text-[10px] text-[var(--text-muted)] leading-relaxed mb-2">
+                      Gemini иногда присылает пустой ответ. GNP автоматически повторяет запрос
+                    </p>
+                    {ghostNudgeEnabled && (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[11px] text-[var(--text-muted)]">Попыток:</span>
+                          <div className="flex gap-1">
+                            {[1, 2, 3, 4, 5].map(n => (
+                              <button
+                                key={n}
+                                onClick={() => onGhostNudgeMaxRetriesChange(n)}
+                                className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-all ${
+                                  ghostNudgeMaxRetries === n
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                    : 'bg-[var(--surface-3)] text-[var(--text-muted)] border border-transparent hover:bg-[var(--surface-4)]'
+                                }`}
+                              >
+                                {n}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
 
                   {/* Skills - встроенные инструменты */}
                   <SkillsSection onSkillsChanged={onSkillsChanged} />

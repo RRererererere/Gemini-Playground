@@ -132,7 +132,32 @@ export function useDeepThink() {
       }
 
       if (!enhancedPrompt) {
-        throw new Error('Пустой ответ от DeepThink');
+        // GNP: retry при пустом ответе (отдельно от network/timeout retry)
+        if (retryAttempt < MAX_RETRIES) {
+          const delay = Math.pow(2, retryAttempt) * 1000;
+          console.log(`👻 [GNP/DeepThink] Empty analysis — retrying in ${delay}ms (attempt ${retryAttempt + 1}/${MAX_RETRIES})`);
+
+          setState(prev => ({
+            ...prev,
+            error: `Переподключение... (${retryAttempt + 1}/${MAX_RETRIES})`,
+            retryCount: retryAttempt + 1,
+          }));
+
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return analyze(messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, onThinkingUpdate, retryAttempt + 1);
+        }
+
+        // Все попытки исчерпаны — возвращаем пустой, не крашим
+        console.warn(`👻 [GNP/DeepThink] All retries exhausted, proceeding with empty analysis`);
+        setState(prev => ({
+          ...prev,
+          isAnalyzing: false,
+          lastAnalysis: null,
+          error: null,
+          errorType: null,
+          retryCount: 0,
+        }));
+        return { enhancedPrompt: messages[messages.length - 1]?.parts.find(p => 'text' in p)?.text || '', analysis: null, error: null };
       }
 
       setState(prev => ({
