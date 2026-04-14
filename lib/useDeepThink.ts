@@ -1,10 +1,11 @@
 import { useState, useCallback, useRef } from 'react';
-import type { Message, DeepThinkAnalysis } from '@/types';
+import type { Message, DeepThinkAnalysis, SceneState } from '@/types';
 
 export interface DeepThinkState {
   enabled: boolean;
   isAnalyzing: boolean;
   lastAnalysis: DeepThinkAnalysis | null;
+  lastSceneState: SceneState | null;
   error: string | null;
   errorType: 'network' | 'timeout' | 'api' | 'unknown' | null;
   retryCount: number;
@@ -17,6 +18,7 @@ export function useDeepThink() {
     enabled: false,
     isAnalyzing: false,
     lastAnalysis: null,
+    lastSceneState: null,
     error: null,
     errorType: null,
     retryCount: 0,
@@ -53,7 +55,8 @@ export function useDeepThink() {
     deepThinkSystemPrompt: string,
     onThinkingUpdate?: (thinking: string) => void,
     retryAttempt: number = 0,
-  ): Promise<{ enhancedPrompt: string; analysis: DeepThinkAnalysis | null; error: string | null }> => {
+    sceneStateConfig?: { enabledCategories?: string[]; aiInstructions?: string },
+  ): Promise<{ enhancedPrompt: string; analysis: DeepThinkAnalysis | null; sceneState: SceneState | null; error: string | null }> => {
     setState(prev => ({ ...prev, isAnalyzing: true, error: null, errorType: null }));
 
     // Создаём новый AbortController для этого запроса
@@ -72,7 +75,7 @@ export function useDeepThink() {
       const response = await fetch('/api/deepthink', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, systemInstruction, apiKey, model, deepThinkSystemPrompt }),
+        body: JSON.stringify({ messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, sceneStateConfig }),
         signal: abortControllerRef.current.signal,
       });
 
@@ -88,11 +91,14 @@ export function useDeepThink() {
         throw new Error(errorMessage);
       }
 
-      reader = response.body!.getReader();
-      const decoder = new TextDecoder();
+      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
       let buffer = '';
       let thinkingAccumulator = '';
       let enhancedPrompt = '';
+      let sceneState: SceneState | null = null;
+
+      reader = response.body!.getReader();
+      const decoder = new TextDecoder();
 
       while (true) {
         const { done, value } = await reader.read();
@@ -124,6 +130,10 @@ export function useDeepThink() {
             if (parsed.enhancedPrompt) {
               enhancedPrompt = parsed.enhancedPrompt;
             }
+
+            if (parsed.sceneState) {
+              sceneState = parsed.sceneState as SceneState;
+            }
           } catch (parseErr) {
             // Игнорируем ошибки парсинга отдельных SSE сообщений
             console.debug('[DeepThink] SSE parse skip:', parseErr);
@@ -144,7 +154,7 @@ export function useDeepThink() {
           }));
 
           await new Promise(resolve => setTimeout(resolve, delay));
-          return analyze(messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, onThinkingUpdate, retryAttempt + 1);
+          return analyze(messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, onThinkingUpdate, retryAttempt + 1, sceneStateConfig);
         }
 
         // Все попытки исчерпаны — возвращаем пустой, не крашим
@@ -153,23 +163,25 @@ export function useDeepThink() {
           ...prev,
           isAnalyzing: false,
           lastAnalysis: null,
+          lastSceneState: null,
           error: null,
           errorType: null,
           retryCount: 0,
         }));
-        return { enhancedPrompt: messages[messages.length - 1]?.parts.find(p => 'text' in p)?.text || '', analysis: null, error: null };
+        return { enhancedPrompt: messages[messages.length - 1]?.parts.find(p => 'text' in p)?.text || '', analysis: null, sceneState: null, error: null };
       }
 
       setState(prev => ({
         ...prev,
         isAnalyzing: false,
         lastAnalysis: null,
+        lastSceneState: sceneState,
         error: null,
         errorType: null,
         retryCount: 0,
       }));
 
-      return { enhancedPrompt, analysis: null, error: null };
+      return { enhancedPrompt, analysis: null, sceneState, error: null };
 
     } catch (err: any) {
       // Проверяем, была ли отмена пользователем
@@ -180,7 +192,7 @@ export function useDeepThink() {
           error: 'Отменено пользователем',
           errorType: null,
         }));
-        return { enhancedPrompt: systemInstruction, analysis: null, error: 'Cancelled' };
+        return { enhancedPrompt: systemInstruction, analysis: null, sceneState: null, error: 'Cancelled' };
       }
 
       clearTimeout(timeoutId);
@@ -201,7 +213,7 @@ export function useDeepThink() {
 
         await new Promise(resolve => setTimeout(resolve, delay));
 
-        return analyze(messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, onThinkingUpdate, retryAttempt + 1);
+        return analyze(messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, onThinkingUpdate, retryAttempt + 1, sceneStateConfig);
       }
 
       // Финальная ошибка — не фатальная, DeepThink optional
@@ -218,7 +230,7 @@ export function useDeepThink() {
         retryCount: 0,
       }));
 
-      return { enhancedPrompt: systemInstruction, analysis: null, error: friendlyMessage };
+      return { enhancedPrompt: systemInstruction, analysis: null, sceneState: null, error: friendlyMessage };
 
     } finally {
       clearTimeout(timeoutId);

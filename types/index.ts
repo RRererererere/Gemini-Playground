@@ -159,6 +159,11 @@ export interface Message {
   ghostRetryAttempt?: number;    // текущая попытка (1, 2, 3...)
   ghostRetryMax?: number;        // максимум попыток из настроек
   ghostRetryFailed?: boolean;    // все попытки исчерпаны
+  // Continue Generation
+  isPartial?: boolean;
+  interruptedChunk?: InterruptedChunk;
+  // Scene State (DeepThink)
+  sceneState?: SceneState;
 }
 
 // Артефакт скилла (импортируется из lib/skills/types.ts в рантайме)
@@ -412,4 +417,66 @@ export interface Agent {
   creatorChatId: string;
   createdAt: number;
   updatedAt: number;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Scene State (DeepThink)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SceneStateEntry {
+  id: string;           // уникальный ключ категории
+  label?: string;       // отображаемое название (опционально, берётся из config)
+  icon?: string;        // emoji (опционально, берётся из config)
+  content: string;      // текущее значение
+  priority: 'high' | 'medium' | 'low';
+  enabled: boolean;
+}
+
+export interface SceneState {
+  entries: SceneStateEntry[];
+  generatedAt: number;
+  turnIndex: number;
+}
+
+export interface SceneStateConfig {
+  enabledCategories: string[];        // ids включённых категорий
+  customCategories: SceneStateEntry[]; // пользовательские категории
+  categoryOrder: string[];            // порядок отображения
+  aiInstructions: string;             // доп. инструкции для ИИ
+  pinned: boolean;                    // пинить панель
+  autoEnabled: boolean;               // включать вместе с DeepThink
+}
+
+export type SceneStateCategory = {
+  id: string;
+  label: string;
+  icon: string;
+  priority: 'high' | 'medium' | 'low';
+  enabled: boolean;
+  custom?: boolean;
+};
+
+export const DEFAULT_SCENE_CATEGORIES: Omit<SceneStateCategory, 'enabled' | 'custom'>[] = [
+  { id: 'spatial',    label: 'Пространство',     icon: '🗺️', priority: 'high' },
+  { id: 'characters', label: 'Персонажи',        icon: '👤', priority: 'high' },
+  { id: 'narrative',  label: 'Нарратив/Сюжет',   icon: '📖', priority: 'high' },
+  { id: 'mood',       label: 'Атмосфера',        icon: '🎭', priority: 'medium' },
+  { id: 'objects',    label: 'Предметы/Инвентарь', icon: '🎒', priority: 'medium' },
+  { id: 'tasks',      label: 'Задачи/Цели',      icon: '🎯', priority: 'medium' },
+  { id: 'visual',     label: 'Визуальная сцена',  icon: '🎨', priority: 'low' },
+  { id: 'lore',       label: 'Лор/Правила мира',  icon: '📜', priority: 'low' },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Interrupted Chunk (Continue Generation)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type InterruptReason = 'network' | 'timeout' | 'user_stop' | 'model_stop' | 'unknown';
+
+export interface InterruptedChunk {
+  type: 'chat' | 'deepthink_thinking' | 'deepthink_prompt' | 'deepthink_scene';
+  messageId: string;
+  partialContent: string;
+  interruptedAt: number;
+  reason: InterruptReason;
 }

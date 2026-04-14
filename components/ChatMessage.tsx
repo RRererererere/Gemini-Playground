@@ -22,6 +22,7 @@ import { SkillArtifactsGroup } from './SkillArtifactRenderer';
 import AnnotationRefDisplay from './AnnotationRefDisplay';
 import ImageLightbox from './ImageLightbox';
 import MessageFeedback from './MessageFeedback';
+import { SceneStatePanel } from './SceneStatePanel';
 
 interface ChatMessageProps {
   message: Message;
@@ -32,7 +33,7 @@ interface ChatMessageProps {
   onEdit: (id: string, newParts: Part[]) => void;
   onDelete: (id: string) => void;
   onRegenerate: () => void;
-  onContinue: () => void;
+  onContinue?: (chunk?: import('@/types').InterruptedChunk) => void;
   onBranch?: () => void;
   onSubmitToolResults?: (messageId: string, responses: Array<{ toolCallId: string; rawResponse: string }>) => void;
   onEditPreviousUserMessage?: (modelMessageId: string) => void;
@@ -48,6 +49,10 @@ interface ChatMessageProps {
   onEditDeepThinking?: (messageId: string, newThinking: string) => void;
   onContinueDeepThink?: (messageId: string) => void;
   onSkipDeepThink?: (messageId: string) => void;
+  onSceneStateSettingsOpen?: () => void;
+  isSceneStatePinned?: boolean;
+  onToggleSceneStatePin?: () => void;
+  onRequestSceneCategory?: (request: { id: string; content: string }) => void;
 }
 
 function FilePreview({ file }: { file: AttachedFile }) {
@@ -1666,7 +1671,8 @@ function BridgeDataBlock({ bridgeData }: { bridgeData: BridgePayload }) {
 
 export default function ChatMessage({
   message, index, isLast, isStreaming,
-  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat, onFeedback, onRegenerateWithFeedback, onRegenerateTextOnly, onDismissBlocked, onEditDeepThinking, onContinueDeepThink, onSkipDeepThink
+  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat, onFeedback, onRegenerateWithFeedback, onRegenerateTextOnly, onDismissBlocked, onEditDeepThinking, onContinueDeepThink, onSkipDeepThink,
+  onSceneStateSettingsOpen, isSceneStatePinned, onToggleSceneStatePin, onRequestSceneCategory
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -1951,6 +1957,17 @@ export default function ChatMessage({
               />
             )}
 
+            {/* Scene State Panel */}
+            {!isUser && message.sceneState && (
+              <SceneStatePanel 
+                sceneState={message.sceneState}
+                onSettingsOpen={onSceneStateSettingsOpen || (() => {})}
+                onTogglePin={onToggleSceneStatePin || (() => {})}
+                isPinned={isSceneStatePinned || false}
+                onRequestCategory={onRequestSceneCategory}
+              />
+            )}
+
             {/* DeepThink Error block - только если не interrupted (в interrupted случае UI уже в DeepThinkingBlock) */}
             {!isUser && deepThinkError && !message.deepThinkInterrupted && (
               <DeepThinkErrorBlock error={deepThinkError} />
@@ -2186,15 +2203,22 @@ export default function ChatMessage({
             );
           })()}
 
-          {!isUser && isLast && messageText && (
-            <button
-              onClick={onContinue}
-              className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--gem-teal)] hover:bg-[rgba(45,212,191,0.08)] rounded-md transition-all"
-              title="Продолжить"
-            >
-              <span className="text-[9px]">▶</span>
-              <span className="hidden sm:inline">Продолжить</span>
-            </button>
+          {/* Continue button UI */}
+          {!isUser && isLast && message.isPartial && message.interruptedChunk && onContinue && (
+            <div className="flex flex-col gap-1.5 mt-2 mb-1 w-full border-t border-[var(--border-subtle)] pt-2">
+              <span className="text-[10px] text-[var(--text-dim)] flex items-center gap-1.5">
+                <AlertCircle size={10} className="text-amber-500/70" />
+                ✂️ Генерация прервана · {message.interruptedChunk.reason}
+              </span>
+              <button
+                onClick={() => onContinue(message.interruptedChunk)}
+                className="flex items-center self-start gap-1.5 px-3 py-1.5 text-[11px] text-[var(--gem-teal)] hover:bg-[rgba(45,212,191,0.08)] bg-[rgba(45,212,191,0.04)] border border-[rgba(45,212,191,0.2)] rounded-lg transition-all font-medium"
+                title="Продолжить"
+              >
+                <span className="text-[10px]">▶</span>
+                <span className="inline">Продолжить генерацию</span>
+              </button>
+            </div>
           )}
 
           {/* Feedback кнопки - только для model сообщений */}

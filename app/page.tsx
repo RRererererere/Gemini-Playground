@@ -27,7 +27,9 @@ import AgentMessageHeader from '@/components/AgentMessageHeader';
 import ArenaInputBar from '@/components/ArenaInputBar';
 import ArenaAgentsSidebar from '@/components/ArenaAgentsSidebar';
 import { useArena } from '@/lib/useArena';
-import type { ChatTool, Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis, ToolResponse, SavedSystemPrompt, SkillArtifact, CanvasElement, WebsiteType, OpenFile, FileDiffOp, Provider, UniversalModel, ActiveModel } from '@/types';
+import { SceneStateSettingsModal } from '@/components/SceneStateSettingsModal';
+import { loadSceneStateConfig, saveSceneStateConfig } from '@/lib/scene-state-storage';
+import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, ToolResponse, SavedSystemPrompt, SkillArtifact, CanvasElement, Provider, UniversalModel, ActiveModel, Message, AttachedFile, Part, DeepThinkAnalysis, WebsiteType, OpenFile, FileDiffOp } from '@/types';
 import {
   loadApiKeys, saveApiKeys, isRateLimitError, addApiKey, removeApiKey, getNextAvailableKey, markKeyBlocked, markKeyUsed, unblockExpiredKeys, migrateOldApiKeys,
 } from '@/lib/apiKeyManager';
@@ -90,6 +92,7 @@ import {
 import { useSkillsUI } from '@/lib/useSkillsUI';
 import { SkillsMarket } from '@/components/SkillsMarket';
 import { HFSpaceManager } from '@/components/HFSpaceManager';
+import { useAppState } from '@/lib/useAppState';
 
 function generateId() {
   // Используем crypto.randomUUID для гарантированной уникальности
@@ -188,522 +191,115 @@ ${analysis.futureStrategy ? `План на будущее: ${analysis.futureStra
 }
 
 export default function Home() {
-  // Multi-provider support
-  const [providers, setProviders] = useState<Provider[]>([GOOGLE_PROVIDER]);
-  const [activeProviderId, setActiveProviderIdState] = useState('google');
-  
-  // API Keys (per provider)
-  const [apiKeys, setApiKeys] = useState<Record<string, ApiKeyEntry[]>>({});
-  const [activeKeyIndex, setActiveKeyIndex] = useState<Record<string, number>>({});
+  const app = useAppState();
 
-  // Models (unified)
-  const [activeModel, setActiveModelState] = useState<ActiveModel | null>(null);
-  const [allModels, setAllModels] = useState<UniversalModel[]>([]);
+  // Destructure all for backward compatibility
+  const {
+    providers, setProviders, activeProviderId, activeProvider,
+    apiKeys, activeKeyIndex, activeModel, setActiveModel: setActiveModelState, allModels, setAllModels,
+    model, models, effectiveProviderId, currentProviderKeys, currentKeyIndex,
+    selectedApiKeyEntry, selectedApiKey, selectedApiKeySuffix,
+    setActiveProviderId: setActiveProviderIdState,
+    systemPrompt, setSystemPrompt, tools, setTools,
+    deepThinkSystemPrompt, setDeepThinkSystemPrompt,
+    temperature, setTemperature, thinkingBudget, setThinkingBudget,
+    maxOutputTokens, maxMemoryCalls, maxToolRounds,
+    memoryEnabled, ghostNudgeEnabled, ghostNudgeMaxRetries,
+    savedPrompts, setSavedPrompts,
+    messages, setMessages, messagesRef,
+    savedChats, setSavedChats,
+    currentChatId, setCurrentChatId, chatTitle, setChatTitle, unsaved, setUnsaved,
+    isStreaming, setIsStreaming, streamingId, setStreamingId,
+    error, setError, abortControllerRef,
+    showLiveCanvas, setShowLiveCanvas, liveCode, setLiveCode,
+    websiteType, setWebsiteType, showInsights, setShowInsights,
+    livePreviewRef,
+    openFiles, setOpenFiles, activeFileId, setActiveFileId,
+    showFileEditor, setShowFileEditor, pendingEdits, setPendingEdits,
+    mobileCanvasState, setMobileCanvasState, pendingCanvasElement, setPendingCanvasElement,
+    appMode, setAppMode, arena,
+    showToolBuilder, setShowToolBuilder, editingTool, setEditingTool,
+    showSavePromptDialog, setShowSavePromptDialog, newPromptName, setNewPromptName,
+    showDeepThinkDialog, setShowDeepThinkDialog, deepThinkDraft, setDeepThinkDraft,
+    chatSidebarOpen, setChatSidebarOpen,
+    settingsSidebarOpen, setSettingsSidebarOpen,
+    isMobile,
+    showSkillsMarket, setShowSkillsMarket, showHFSpaces, setShowHFSpaces,
+    skillsRevision, setSkillsRevision,
+    handleSkillEvent,
+    showScrollBottom, isAtBottomRef, chatEndRef, handleScroll, scrollToBottom,
+    tokenCount, setTokenCount, isCountingTokens, countTokens, scheduleTokenCount,
+    showMemoryModal, setShowMemoryModal,
+    deepThink,
+    settingsSidebarProps,
+    chatSidebarArenaProps,
+    checkFilesForEditor,
+  } = app;
 
-  // Legacy compatibility helpers
-  const model = activeModel?.modelId || '';
-  const models = allModels.filter(m => m.providerId === activeProviderId);
-  // Берём ключи из провайдера ВЫБРАННОЙ модели, а не из активного таба сайдбара
-  const effectiveProviderId = activeModel?.providerId || activeProviderId;
-  const currentProviderKeys = apiKeys[effectiveProviderId] || [];
-  const currentKeyIndex = activeKeyIndex[effectiveProviderId] || 0;
+  // Arena: add onOpenAgent to chatSidebarArenaProps
+  const chatSidebarArenaPropsWithAgent = {
+    ...chatSidebarArenaProps,
+    onOpenAgent: null as any, // будет установлен ниже
+  };
 
-  // Arena mode — start 'chat' to match SSR, restore in useEffect
-  const [appMode, setAppMode] = useState<'chat' | 'arena'>('chat');
+  const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze, abort: abortDeepThink } = deepThink;
 
-  // Settings
-  const [systemPrompt, setSystemPrompt] = useState<string>('');
-  const [tools, setTools] = useState<ChatTool[]>([]);
-  const [showToolBuilder, setShowToolBuilder] = useState(false);
-  const [editingTool, setEditingTool] = useState<ChatTool | null>(null);
-  const [showSavePromptDialog, setShowSavePromptDialog] = useState(false);
-  const [newPromptName, setNewPromptName] = useState('');
-  const [savedPrompts, setSavedPrompts] = useState<SavedSystemPrompt[]>([]);
-  const [showDeepThinkDialog, setShowDeepThinkDialog] = useState(false);
-  const [deepThinkDraft, setDeepThinkDraft] = useState('');
-  const [deepThinkSystemPrompt, setDeepThinkSystemPrompt] = useState<string>(DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
-  const [temperature, setTemperature] = useState<number>(1.0);
-  const [thinkingBudget, setThinkingBudget] = useState<number>(-1); // -1=авто
-  const [maxOutputTokens, setMaxOutputTokens] = useState<number>(8192);
-  const [memoryEnabled, setMemoryEnabled] = useState<boolean>(true);
-  const [maxToolRounds, setMaxToolRounds] = useState<number>(20);
-  const [maxMemoryCalls, setMaxMemoryCalls] = useState<number>(100);
-  // Ghost Nudge Protocol
-  const [ghostNudgeEnabled, setGhostNudgeEnabled] = useState<boolean>(true);
-  const [ghostNudgeMaxRetries, setGhostNudgeMaxRetries] = useState<number>(3);
-  const [showMemoryModal, setShowMemoryModal] = useState(false);
-
-  // Skills state
-  const [showSkillsMarket, setShowSkillsMarket] = useState(false);
-  const [showHFSpaces, setShowHFSpaces] = useState(false);
-  const [skillsRevision, setSkillsRevision] = useState(0); // триггер пересборки tools
-  const { handleSkillEvent } = useSkillsUI();
-
-  // UI state
-  const [chatSidebarOpen, setChatSidebarOpen] = useState(true);
-  const [settingsSidebarOpen, setSettingsSidebarOpen] = useState(true);
-  const [isMobile, setIsMobile] = useState(false);
-
-  // Chat state
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [streamingId, setStreamingId] = useState<string | null>(null);
-  const [tokenCount, setTokenCount] = useState(0);
-  const [isCountingTokens, setIsCountingTokens] = useState(false);
-  const [error, setError] = useState<string>('');
-  const [showLiveCanvas, setShowLiveCanvas] = useState(false);
-  const [liveCode, setLiveCode] = useState('');
-  const [websiteType, setWebsiteType] = useState<WebsiteType>(null);
-  const [showInsights, setShowInsights] = useState(false);
-  
-  // File Editor state
-  const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
-  const [activeFileId, setActiveFileId] = useState<string | null>(null);
-  const [showFileEditor, setShowFileEditor] = useState(false);
-  const [pendingEdits, setPendingEdits] = useState<Map<string, FileDiffOp[]>>(new Map());
-  
-  // Mobile canvas state: 'hidden' | 'sheet' (55%) | 'fullscreen'
-  type MobileCanvasState = 'hidden' | 'sheet' | 'fullscreen';
-  const [mobileCanvasState, setMobileCanvasState] = useState<MobileCanvasState>('hidden');
-  
-  const [pendingCanvasElement, setPendingCanvasElement] = useState<CanvasElement | null>(null);
-
-  // Saved chats
-  const [savedChats, setSavedChats] = useState<SavedChat[]>([]);
-  const [currentChatId, setCurrentChatId] = useState<string | null>(null);
-  const [chatTitle, setChatTitle] = useState('');
-  const [unsaved, setUnsaved] = useState(false);
-
-  // Scroll state
-  const [showScrollBottom, setShowScrollBottom] = useState(false);
-  const isAtBottomRef = useRef(true);
-  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-    const distanceToBottom = scrollHeight - scrollTop - clientHeight;
-    const atBottom = distanceToBottom <= 40;
-    isAtBottomRef.current = atBottom;
-
-    if (distanceToBottom > 150) {
-      setShowScrollBottom(true);
-    } else {
-      setShowScrollBottom(false);
+  const [isSceneStatePinned, setIsSceneStatePinned] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return loadSceneStateConfig().pinned;
     }
-  }, []);
+    return false;
+  });
+  const [isSceneStateSettingsOpen, setIsSceneStateSettingsOpen] = useState(false);
 
-  const scrollToBottom = useCallback(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, []);
-
-  // Refs
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const tokenDebounceRef = useRef<NodeJS.Timeout | null>(null);
-  const livePreviewRef = useRef<any>(null);
-  const messagesRef = useRef<Message[]>([]); // Keep latest messages to avoid stale closure
-
-  const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze, abort: abortDeepThink } = useDeepThink();
-  const selectedApiKeyEntry = currentProviderKeys[currentKeyIndex] || null;
-  const selectedApiKey = selectedApiKeyEntry?.key || '';
-  const selectedApiKeySuffix = getApiKeySuffix(selectedApiKeyEntry?.key);
-  const activeProvider = providers.find(p => p.id === (activeModel?.providerId || activeProviderId));
-
-  // Arena hook
-  const arena = useArena(apiKeys, providers, activeModel, allModels, { enabled: ghostNudgeEnabled, maxRetries: ghostNudgeMaxRetries });
-
-  // Restore & persist appMode
-  useEffect(() => {
-    const saved = localStorage.getItem('gemini_app_mode') as 'chat' | 'arena' | null;
-    if (saved === 'arena') setAppMode('arena');
-  }, []);
-  useEffect(() => {
-    localStorage.setItem('gemini_app_mode', appMode);
-  }, [appMode]);
-
-  // Keep messagesRef in sync with messages state
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
-
-  // Detect mobile only when crossing breakpoint.
-  // Keyboard open/close on mobile fires resize, so we avoid closing panels on every resize event.
-  useEffect(() => {
-    const query = window.matchMedia('(max-width: 767px)');
-
-    const applyViewportMode = (mobile: boolean) => {
-      setIsMobile(prev => {
-        if (prev !== mobile && mobile) {
-          setChatSidebarOpen(false);
-          setSettingsSidebarOpen(false);
-        }
-        return mobile;
-      });
-    };
-
-    applyViewportMode(query.matches);
-
-    const onMediaChange = (event: MediaQueryListEvent) => {
-      applyViewportMode(event.matches);
-    };
-
-    query.addEventListener('change', onMediaChange);
-    return () => query.removeEventListener('change', onMediaChange);
-  }, []);
-
-  // Load from localStorage
-  useEffect(() => {
-    const loadData = async () => {
-      // Миграция старых данных
-      migrateOldApiKeys();
-      migrateOldModelSelection();
-      
-      // Load providers
-      const loadedProviders = loadProviders();
-      setProviders(loadedProviders);
-      
-      // Load active provider
-      const savedActiveProviderId = getActiveProviderId();
-      setActiveProviderIdState(savedActiveProviderId);
-      
-      // Load API keys per provider
-      const keysMap: Record<string, ApiKeyEntry[]> = {};
-      const keyIndexMap: Record<string, number> = {};
-      
-      for (const provider of loadedProviders) {
-        const providerKeys = sanitizeApiKeys(loadApiKeys(provider.id));
-        keysMap[provider.id] = providerKeys;
-        saveApiKeys(provider.id, providerKeys);
-        
-        const savedIndex = parseInt(localStorage.getItem(`${provider.id}_active_key_index`) || '0', 10);
-        if (providerKeys.length > 0 && Number.isFinite(savedIndex)) {
-          keyIndexMap[provider.id] = Math.min(Math.max(savedIndex, 0), providerKeys.length - 1);
-        } else {
-          keyIndexMap[provider.id] = 0;
-        }
-      }
-      
-      setApiKeys(keysMap);
-      setActiveKeyIndex(keyIndexMap);
-      
-      // Load models cache
-      const modelsMap: UniversalModel[] = [];
-      for (const provider of loadedProviders) {
-        const cache = loadModelsCache(provider.id);
-        if (cache && cache.models) {
-          modelsMap.push(...cache.models);
-        }
-      }
-      setAllModels(modelsMap);
-      
-      // Load active model
-      const savedActiveModel = getActiveModel();
-      if (savedActiveModel) {
-        setActiveModelState(savedActiveModel);
-      }
-
-      const savedSysPrompt = localStorage.getItem('gemini_sys_prompt');
-      const savedTemp = localStorage.getItem('gemini_temperature');
-      const savedLegacySidebar = localStorage.getItem('gemini_sidebar');
-      const savedChatSidebar = localStorage.getItem('gemini_chats_sidebar');
-      const savedSettingsSidebar = localStorage.getItem('gemini_settings_sidebar');
-      const savedThinking = localStorage.getItem('gemini_thinking_budget');
-      const savedMemoryEnabled = localStorage.getItem('gemini_memory_enabled');
-      const savedMaxToolRounds = localStorage.getItem('gemini_max_tool_rounds');
-      const savedMaxMemoryCalls = localStorage.getItem('gemini_max_memory_calls');
-      const savedDeepThinkPrompt = loadDeepThinkSystemPrompt();
-      // GNP settings
-      const savedGhostNudgeEnabled = loadGhostNudgeEnabled();
-      const savedGhostNudgeMaxRetries = loadGhostNudgeMaxRetries();
-      const mobileViewport = window.matchMedia('(max-width: 767px)').matches;
-
-      if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
-      if (savedTemp) setTemperature(parseFloat(savedTemp));
-      setDeepThinkSystemPrompt(savedDeepThinkPrompt || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
-      if (!mobileViewport) {
-        if (savedChatSidebar !== null) setChatSidebarOpen(savedChatSidebar === 'true');
-        else if (savedLegacySidebar !== null) setChatSidebarOpen(savedLegacySidebar === 'true');
-        if (savedSettingsSidebar !== null) setSettingsSidebarOpen(savedSettingsSidebar === 'true');
-      }
-      if (savedThinking !== null) setThinkingBudget(parseInt(savedThinking));
-      if (savedMemoryEnabled !== null) setMemoryEnabled(savedMemoryEnabled === 'true');
-      if (savedMaxToolRounds !== null) setMaxToolRounds(parseInt(savedMaxToolRounds));
-      if (savedMaxMemoryCalls !== null) setMaxMemoryCalls(parseInt(savedMaxMemoryCalls));
-      setGhostNudgeEnabled(savedGhostNudgeEnabled);
-      setGhostNudgeMaxRetries(savedGhostNudgeMaxRetries);
-
-      const chats = await loadSavedChats();
-      setSavedChats(chats);
-
-      const activeChatId = getActiveChatId();
-      if (activeChatId) {
-        const chat = chats.find(c => c.id === activeChatId);
-        if (chat) {
-          setMessages(chat.messages);
-          setCurrentChatId(chat.id);
-          setChatTitle(chat.title);
-          // Restore model from chat (legacy format)
-          if (chat.model && savedActiveModel) {
-            setActiveModelState({ providerId: savedActiveProviderId, modelId: chat.model });
-          }
-          setSystemPrompt(chat.systemPrompt || savedSysPrompt || '');
-          setDeepThinkSystemPrompt(chat.deepThinkSystemPrompt || savedDeepThinkPrompt || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
-          setTools(chat.tools || []);
-          setTemperature(chat.temperature ?? parseFloat(savedTemp || '1'));
-        }
-      }
-    };
-    loadData();
-  }, []);
-
-  // Load saved prompts
-  useEffect(() => {
-    setSavedPrompts(loadSystemPrompts());
-  }, []);
-
-  // Update deepThinkDraft when dialog opens
-  useEffect(() => {
-    if (!showDeepThinkDialog) return;
-    setDeepThinkDraft(deepThinkSystemPrompt || loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
-  }, [showDeepThinkDialog, deepThinkSystemPrompt]);
-
-  // Persist simple settings
-  useEffect(() => { 
-    if (activeModel) {
-      setActiveModel(activeModel);
-      localStorage.setItem('gemini_model', activeModel.modelId); // legacy
-    }
-  }, [activeModel]);
-  useEffect(() => { 
-    setActiveProviderId(activeProviderId);
-  }, [activeProviderId]);
-  useEffect(() => { localStorage.setItem('gemini_sys_prompt', systemPrompt); }, [systemPrompt]);
-  useEffect(() => { localStorage.setItem('gemini_temperature', temperature.toString()); }, [temperature]);
-  useEffect(() => { 
-    // Persist per-provider active key index
-    Object.entries(activeKeyIndex).forEach(([providerId, idx]) => {
-      localStorage.setItem(`${providerId}_active_key_index`, idx.toString());
+  const handleToggleSceneStatePin = useCallback(() => {
+    setIsSceneStatePinned(prev => {
+      const next = !prev;
+      const config = loadSceneStateConfig();
+      saveSceneStateConfig({ ...config, pinned: next });
+      return next;
     });
-  }, [activeKeyIndex]);
-  useEffect(() => { localStorage.setItem('gemini_chats_sidebar', chatSidebarOpen.toString()); }, [chatSidebarOpen]);
-  useEffect(() => { localStorage.setItem('gemini_settings_sidebar', settingsSidebarOpen.toString()); }, [settingsSidebarOpen]);
-  useEffect(() => { localStorage.setItem('gemini_thinking_budget', thinkingBudget.toString()); }, [thinkingBudget]);
-  useEffect(() => { localStorage.setItem('gemini_memory_enabled', memoryEnabled.toString()); }, [memoryEnabled]);
-  useEffect(() => { localStorage.setItem('gemini_max_tool_rounds', maxToolRounds.toString()); }, [maxToolRounds]);
-  useEffect(() => { localStorage.setItem('gemini_max_memory_calls', maxMemoryCalls.toString()); }, [maxMemoryCalls]);
-  useEffect(() => { saveGhostNudgeEnabled(ghostNudgeEnabled); }, [ghostNudgeEnabled]);
-  useEffect(() => { saveGhostNudgeMaxRetries(ghostNudgeMaxRetries); }, [ghostNudgeMaxRetries]);
+  }, []);
 
-
-
-  // Auto-scroll (only when user is near bottom; avoid smooth on every streamed chunk)
-  useEffect(() => {
-    if (messages.length === 0) return;
-    if (!isAtBottomRef.current) return;
-    chatEndRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
-  }, [messages, isStreaming]);
-
-  // Mark unsaved when messages change
-  useEffect(() => {
-    if (messages.length > 0) setUnsaved(true);
-  }, [messages]);
-
-  // RPG Style Profile - периодическая компрессия
-  useEffect(() => {
-    const profile = loadRPGProfile();
-    if (!needsCondensation(profile)) return;
-
-    // Запустить компрессию в фоне (fire and forget, не блокировать UI)
-    const doCondense = async () => {
-      const prompt = buildCondensationPrompt(profile);
-      try {
-        const key = selectedApiKeyEntry?.key;
-        if (!key) return;
-        
-        // Один вызов к Gemini, короткий, без стриминга
-        const result = await callGeminiOnce(key, model, prompt, 300);
-        const updatedProfile = {
-          ...profile,
-          condensedRules: result,
-          lastCondensedAt: Date.now(),
-          entries: profile.entries.slice(-5) // оставить только 5 последних сырых
-        };
-        saveRPGProfile(updatedProfile);
-      } catch (e) {
-        // Тихо игнорировать ошибку компрессии
-        console.error('RPG profile condensation failed:', e);
-      }
-    };
-    doCondense();
-  }, [messages.length, model, selectedApiKeyEntry]);
-
-  // Token counting
-  const tokenCountRequestIdRef = useRef(0);
-  const tokenCountAbortRef = useRef<AbortController | null>(null);
-  
-  const countTokens = useCallback(async (msgs: Message[], sys: string, mod: string, apiKey: string) => {
-    if (!apiKey || !mod || msgs.length === 0) { setTokenCount(0); return; }
-    
-    // Cancel previous request
-    if (tokenCountAbortRef.current) {
-      tokenCountAbortRef.current.abort();
-    }
-    
-    // Increment request ID to track latest request
-    const requestId = ++tokenCountRequestIdRef.current;
-    const abortController = new AbortController();
-    tokenCountAbortRef.current = abortController;
-    
-    setIsCountingTokens(true);
-    
-    // Строим полный системный промпт с memory + skills
-    const userMessages = msgs
-      .filter(m => m.role === 'user')
-      .map(m => getVisibleMessageText(m.parts));
-    
-    const { prompt: memoryPrompt, usedMemoryIds: _usedMemoryIds, usedImageMemoryIds: _usedImageMemoryIds } = buildMemoryPrompt(
-      userMessages,
-      currentChatId || undefined,
-      memoryEnabled
-    );
-    
-    const skillsPromptInjection = buildSkillsSystemPrompt(
-      currentChatId || '',
-      msgs,
-      handleSkillEvent
-    );
-    
-    // Добавляем контекст изображений
-    const imageContext = buildImageContext(msgs, currentChatId || undefined);
-    
-    let effectiveSystemPrompt = sys;
-    if (memoryPrompt) {
-      effectiveSystemPrompt = memoryPrompt + '\n\n' + sys;
-    }
-    if (skillsPromptInjection) {
-      effectiveSystemPrompt = effectiveSystemPrompt + skillsPromptInjection;
-    }
-    if (imageContext) {
-      effectiveSystemPrompt = effectiveSystemPrompt + imageContext;
-    }
-    
-    try {
-      const res = await fetch('/api/tokens', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: abortController.signal,
-        body: JSON.stringify({
-          messages: buildChatRequestMessages(msgs),
-          model: mod,
-          systemInstruction: effectiveSystemPrompt, // Используем полный промпт
-          apiKey,
-        }),
+  const handleRequestSceneCategory = useCallback((request: { id: string; content: string }) => {
+    const config = loadSceneStateConfig();
+    if (!config.customCategories.find(c => c.id === request.id)) {
+      const newCategory = {
+        id: request.id,
+        label: request.id.charAt(0).toUpperCase() + request.id.slice(1),
+        icon: '🤖',
+        priority: 'medium' as const,
+        enabled: true,
+        content: request.content,
+      };
+      saveSceneStateConfig({
+        ...config,
+        customCategories: [...config.customCategories, newCategory],
+        enabledCategories: [...config.enabledCategories, request.id],
+        categoryOrder: [...config.categoryOrder, request.id],
       });
-      const data = await res.json();
-      
-      // Only update if this is still the latest request
-      if (requestId === tokenCountRequestIdRef.current) {
-        setTokenCount(data.totalTokens || 0);
-      }
-    } catch (e: any) {
-      // Ignore abort errors
-      if (e.name !== 'AbortError') {
-        console.error('[Token Count Error]:', e);
-      }
     }
-    
-    // Only clear loading state if this is still the latest request
-    if (requestId === tokenCountRequestIdRef.current) {
-      setIsCountingTokens(false);
-      tokenCountAbortRef.current = null;
-    }
-  }, [currentChatId, memoryEnabled, handleSkillEvent]);
+  }, []);
 
-  useEffect(() => {
-    if (tokenDebounceRef.current) clearTimeout(tokenDebounceRef.current);
-    if (isStreaming) return;
-    tokenDebounceRef.current = setTimeout(() => {
-      countTokens(messages, systemPrompt, model, selectedApiKey);
-    }, 400);
-    return () => { 
-      if (tokenDebounceRef.current) clearTimeout(tokenDebounceRef.current);
-      // Cleanup abort controller on unmount
-      if (tokenCountAbortRef.current) {
-        tokenCountAbortRef.current.abort();
-        tokenCountAbortRef.current = null;
-      }
-    };
-  }, [messages, systemPrompt, model, selectedApiKey, countTokens, isStreaming, skillsRevision]);
+  // ============ SIDEBAR PROPS SETUP ============
+  // onLoadChat, onNewChat, onDeleteChat — будут установлены ниже после определения handlers
 
-  // ============ FILE EDITOR SYNC ============
-  // Синхронизация openFiles с file-editor skill storage
-  useEffect(() => {
-    if (!currentChatId) return;
-    
-    // Ключ с привязкой к чату: skill_data_{skillId}_{chatId}_{key}
-    const storageKey = `skill_data_file-editor_${currentChatId}_file_editor_open_files`;
-    
-    const syncFiles = () => {
-      const stored = localStorage.getItem(storageKey);
-      if (stored) {
-        try {
-          const files = JSON.parse(stored) as OpenFile[];
-          console.log('[FILE EDITOR SYNC] Found files in storage:', files.length, files.map(f => f.name));
-          setOpenFiles(prev => {
-            // Проверяем, изменились ли файлы
-            if (JSON.stringify(prev) !== JSON.stringify(files)) {
-              console.log('[FILE EDITOR SYNC] Files changed, updating state');
-              if (files.length > 0) {
-                setShowFileEditor(true);
-                console.log('[FILE EDITOR SYNC] Opening FileEditor');
-                if (!activeFileId && files.length > 0) {
-                  setActiveFileId(files[0].id);
-                  console.log('[FILE EDITOR SYNC] Setting active file:', files[0].id);
-                }
-              } else {
-                // Если файлов нет, закрываем редактор
-                setShowFileEditor(false);
-                setActiveFileId(null);
-              }
-              return files;
-            }
-            return prev;
-          });
-        } catch (e) {
-          console.error('[FILE EDITOR SYNC] Failed to load open files:', e);
-        }
-      } else {
-        // Если нет файлов в storage, очищаем state
-        if (openFiles.length > 0) {
-          console.log('[FILE EDITOR SYNC] No files in storage, clearing state');
-          setOpenFiles([]);
-          setShowFileEditor(false);
-          setActiveFileId(null);
-        }
-      }
-    };
-    
-    // Синхронизируем сразу
-    syncFiles();
-    
-    // И каждые 500ms проверяем изменения
-    const interval = setInterval(syncFiles, 500);
-    
-    return () => clearInterval(interval);
-  }, [currentChatId, activeFileId, openFiles.length]);
-
-  // Автоматически открываем FileEditor когда прикрепляется code-файл или текстовый файл
+  // ============ FILE EDITOR AUTO-OPEN ============
   useEffect(() => {
     const lastMessage = messages[messages.length - 1];
     if (lastMessage?.role === 'user' && lastMessage.files) {
-      const editableFiles = lastMessage.files.filter(f => 
-        (f.mimeType.startsWith('text/') || f.mimeType === 'application/json') &&
-        !openFiles.some(of => of.id === f.id)
-      );
-      
-      if (editableFiles.length > 0) {
-        setShowFileEditor(true);
-      }
+      checkFilesForEditor(lastMessage.files);
     }
-  }, [messages, openFiles]);
+  }, [messages]);
+
+  // ============ TOKEN COUNTING (auto-debounced) ============
+  useEffect(() => {
+    scheduleTokenCount(
+      messages, systemPrompt, model, selectedApiKey,
+      currentChatId, memoryEnabled, handleSkillEvent,
+      isStreaming, skillsRevision
+    );
+  }, [messages, systemPrompt, model, selectedApiKey, currentChatId, memoryEnabled, handleSkillEvent, isStreaming, skillsRevision]);
 
   // ============ SAVE CHAT ============
   const saveCurrentChat = useCallback(async (msgs: Message[], title?: string, updateCurrentId: boolean = true) => {
@@ -722,14 +318,14 @@ export default function Home() {
       updatedAt: Date.now(),
     };
     // Если чат уже существует, сохраняем createdAt
-    const existing = savedChats.find(c => c.id === chatId);
+    const existing = savedChats.find((c: SavedChat) => c.id === chatId);
     if (existing) chatObj.createdAt = existing.createdAt;
 
     await saveChatToStorage(chatObj);
     
     // Оптимизация: обновляем savedChats локально вместо перезагрузки всех чатов
-    setSavedChats(prev => {
-      const idx = prev.findIndex(c => c.id === chatId);
+    setSavedChats((prev: SavedChat[]) => {
+      const idx = prev.findIndex((c: SavedChat) => c.id === chatId);
       if (idx >= 0) {
         const updated = [...prev];
         updated[idx] = chatObj;
@@ -823,8 +419,11 @@ export default function Home() {
     // после каждого zoom_region вызова (новые изображения добавляются в историю)
     let finalAnalysis: DeepThinkAnalysis | null = null;
     
-    if (deepThinkState.enabled && !customAnalysis && !prebuiltSystemPrompt) {
-      // Путь 1: DeepThink enabled, нет customAnalysis, нет prebuiltSystemPrompt
+    // Получаем текущее сообщение для возможного восстановления промпта при isAppending
+    const targetMsg = history.find(m => m.id === targetMessageId);
+
+    if (deepThinkState.enabled && !customAnalysis && !prebuiltSystemPrompt && !isAppending) {
+      // Путь 1: DeepThink enabled, нет customAnalysis, нет prebuiltSystemPrompt, это не продолжение
       // Сохраняем исходный prompt ДО DeepThink для diff в Insights
       const originalPromptBeforeDeepThink = effectiveSystemPrompt;
       
@@ -916,6 +515,11 @@ export default function Home() {
       // Путь 3: Готовый prompt (регенерация текста без DeepThink)
       effectiveSystemPrompt = prebuiltSystemPrompt;
       // DeepThink НЕ запускается, deepThinking на сообщении НЕ трогается
+    } else if (isAppending && targetMsg) {
+      // Путь 4: Продолжение разорванной генерации (реюз старого промпта)
+      if (targetMsg.deepThinkEnhancedPrompt) {
+        effectiveSystemPrompt = targetMsg.deepThinkEnhancedPrompt;
+      }
     }
 
     // Cleanup tracker для таймеров
@@ -1253,6 +857,24 @@ export default function Home() {
                 }
               ));
               continue;
+            }
+
+            // Обработка прерываний из-за лимита токенов
+            if (parsed.finishReason === 'MAX_TOKENS') {
+              setMessages(prev => prev.map(m =>
+                m.id !== targetMessageId ? m : {
+                  ...m,
+                  finishReason: parsed.finishReason,
+                  isPartial: true,
+                  interruptedChunk: {
+                    type: 'chat',
+                    messageId: m.id,
+                    partialContent: getVisibleMessageText(m.parts),
+                    interruptedAt: Date.now(),
+                    reason: 'unknown' // or 'max_tokens' if added to the type InterruptReason 
+                  }
+                }
+              ));
             }
 
             // Размышления
@@ -2053,12 +1675,23 @@ export default function Home() {
     await streamGeneration(messages.slice(0, actualIdx), newMsgId, false);
   }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
 
-  const handleContinue = useCallback(async () => {
+  const handleContinue = useCallback(async (chunk?: import('@/types').InterruptedChunk) => {
     if (isStreaming) return;
     const lastMsg = messages[messages.length - 1];
     if (!lastMsg || lastMsg.role !== 'model') return;
 
-    const lastText = (lastMsg.parts.find(p => 'text' in p) as any)?.text || '';
+    const lastText = getVisibleMessageText(lastMsg.parts);
+
+    // Очищаем флаги прерывания перед продолжением
+    setMessages(prev => prev.map((m, i) => {
+      if (i === prev.length - 1) {
+        const resetMsg = { ...m };
+        delete resetMsg.isPartial;
+        delete resetMsg.interruptedChunk;
+        return resetMsg;
+      }
+      return m;
+    }));
 
     // Если последнее сообщение модели — это DeepThink без финального текста,
     // создаём новое сообщение модели (обычная генерация)
@@ -2074,7 +1707,7 @@ export default function Home() {
       };
       // История: всё до DeepThink-сообщения включительно, кроме него
       const historyUpTo = messages.slice(0, messages.length - 1);
-      setMessages([...messages, assistantMsg]);
+      setMessages(prev => [...prev, assistantMsg]);
       await streamGeneration(historyUpTo, newMsgId, false);
       return;
     }
@@ -2733,7 +2366,7 @@ export default function Home() {
     await deleteChatFromStorage(id);
     
     // Оптимизация: удаляем из state локально вместо перезагрузки
-    setSavedChats(prev => prev.filter(c => c.id !== id));
+    setSavedChats((prev: SavedChat[]) => prev.filter((c: SavedChat) => c.id !== id));
     
     if (currentChatId === id) {
       handleClearChat();
@@ -2833,153 +2466,10 @@ export default function Home() {
     };
   }, [isMobile, settingsSidebarOpen]);
 
-  const settingsSidebarProps = {
-    // Multi-provider support
-    providers,
-    onProvidersChange: (newProviders: Provider[]) => {
-      setProviders(newProviders);
-      // Save custom providers
-      const customProviders = newProviders.filter(p => !p.isBuiltin);
-      customProviders.forEach(p => saveCustomProvider(p));
-    },
-    activeProviderId,
-    onActiveProviderChange: (id: string) => {
-      setActiveProviderIdState(id);
-      setActiveProviderId(id);
-    },
-    
-    // API Keys (per provider)
-    apiKeys,
-    onApiKeysChange: (providerId: string, keys: ApiKeyEntry[]) => {
-      setApiKeys(prev => ({ ...prev, [providerId]: keys }));
-      saveApiKeys(providerId, keys);
-    },
-    activeKeyIndex,
-    onActiveKeyIndexChange: (providerId: string, idx: number) => {
-      setActiveKeyIndex(prev => ({ ...prev, [providerId]: idx }));
-    },
-    
-    // Models (unified)
-    activeModel,
-    onActiveModelChange: (model: ActiveModel) => {
-      setActiveModelState(model);
-      setActiveModel(model);
-    },
-    allModels,
-    onModelsLoad: (providerId: string, models: UniversalModel[]) => {
-      // Update allModels by replacing models for this provider
-      setAllModels(prev => {
-        const filtered = prev.filter(m => m.providerId !== providerId);
-        return [...filtered, ...models];
-      });
-      // Save to cache
-      saveModelsCache({ providerId, models, fetchedAt: Date.now() });
-    },
-    onRefreshModels: async (providerId: string) => {
-      const provider = providers.find(p => p.id === providerId);
-      const providerKeys = apiKeys[providerId] || [];
-      const keyIdx = activeKeyIndex[providerId] || 0;
-      const key = providerKeys[keyIdx]?.key;
-      
-      if (!key || !provider) return;
-      
-      try {
-        if (provider.type === 'gemini') {
-          const res = await fetch(`/api/models?apiKey=${encodeURIComponent(key)}`);
-          const data = await res.json();
-          if (res.ok && data.models) {
-            const geminiModels: UniversalModel[] = data.models.map((m: any) => ({
-              id: m.name,
-              displayName: m.displayName,
-              providerId,
-              inputTokenLimit: m.inputTokenLimit,
-              outputTokenLimit: m.outputTokenLimit,
-              supportedGenerationMethods: m.supportedGenerationMethods,
-            }));
-            settingsSidebarProps.onModelsLoad(providerId, geminiModels);
-          }
-        } else {
-          const res = await fetch(`/api/openai-models?apiKey=${encodeURIComponent(key)}&baseUrl=${encodeURIComponent(provider.baseUrl)}`);
-          const data = await res.json();
-          if (res.ok && data.models) {
-            const openaiModels: UniversalModel[] = data.models.map((m: any) => ({
-              id: m.id,
-              displayName: m.displayName,
-              providerId,
-              inputTokenLimit: m.inputTokenLimit,
-            }));
-            settingsSidebarProps.onModelsLoad(providerId, openaiModels);
-          }
-        }
-      } catch (error) {
-        console.error('Failed to refresh models:', error);
-      }
-    },
-    
-    systemPrompt,
-    onSystemPromptChange: setSystemPrompt,
-    tools,
-    onToolsChange: setTools,
-    onOpenToolBuilder: (tool?: ChatTool) => {
-      setEditingTool(tool || null);
-      setShowToolBuilder(true);
-    },
-    onOpenSavePromptDialog: () => {
-      setNewPromptName('');
-      setShowSavePromptDialog(true);
-    },
-    onOpenDeepThinkDialog: () => {
-      setShowDeepThinkDialog(true);
-    },
-    onOpenMemoryModal: () => {
-      setShowMemoryModal(true);
-    },
-    onOpenSkillsMarket: () => {
-      setShowSkillsMarket(true);
-    },
-    onOpenHFSpaces: () => {
-      setShowHFSpaces(true);
-    },
-    deepThinkSystemPrompt,
-    onDeepThinkSystemPromptChange: setDeepThinkSystemPrompt,
-    temperature,
-    onTemperatureChange: setTemperature,
-    thinkingBudget,
-    onThinkingBudgetChange: setThinkingBudget,
-    tokenCount,
-    isCountingTokens,
-    isStreaming,
-    savedChats,
-    onSavedChatsChange: handleSavedChatsChange,
-    currentChatId,
-    onLoadChat: handleLoadChat,
-    onNewChat: handleNewChat,
-    onDeleteChat: handleDeleteSavedChat,
-    memoryEnabled,
-    onMemoryEnabledChange: setMemoryEnabled,
-    maxToolRounds,
-    onMaxToolRoundsChange: setMaxToolRounds,
-    maxMemoryCalls,
-    onMaxMemoryCallsChange: setMaxMemoryCalls,
-    // Ghost Nudge Protocol
-    ghostNudgeEnabled,
-    onGhostNudgeEnabledChange: setGhostNudgeEnabled,
-    ghostNudgeMaxRetries,
-    onGhostNudgeMaxRetriesChange: setGhostNudgeMaxRetries,
-    onSkillsChanged: () => setSkillsRevision(r => r + 1),
-  };
-
-  // Common arena sidebar props
-  const chatSidebarArenaProps = {
-    appMode,
-    onAppModeChange: setAppMode,
-    arenaSessions: arena.sessions,
-    activeArenaSessionId: arena.activeSessionId,
-    onLoadArenaSession: arena.loadSession,
-    onNewArenaSession: arena.createSession,
-    onDeleteArenaSession: arena.deleteSession,
-    onOpenAgent: handleOpenAgent,
-  };
+  // Connect handlers to sidebar props
+  settingsSidebarProps.onLoadChat = handleLoadChat;
+  settingsSidebarProps.onNewChat = handleNewChat;
+  settingsSidebarProps.onDeleteChat = handleDeleteSavedChat;
 
   // Messages to display: in arena mode use arena session messages
   const displayMessages = appMode === 'arena'
@@ -3314,6 +2804,10 @@ export default function Home() {
                       onEditDeepThinking={appMode === 'arena' ? undefined : handleEditDeepThinking}
                       onContinueDeepThink={appMode === 'arena' ? undefined : handleContinueDeepThink}
                       onSkipDeepThink={appMode === 'arena' ? undefined : handleSkipDeepThink}
+                      onSceneStateSettingsOpen={() => setIsSceneStateSettingsOpen(true)}
+                      isSceneStatePinned={isSceneStatePinned}
+                      onToggleSceneStatePin={handleToggleSceneStatePin}
+                      onRequestSceneCategory={handleRequestSceneCategory}
                     />
                   </div>
                 );
@@ -3879,6 +3373,11 @@ export default function Home() {
         onOpenSettings={() => setSettingsSidebarOpen(true)}
         onOpenMemory={() => setShowMemoryModal(true)}
         onToggleCanvas={() => setShowLiveCanvas(prev => !prev)}
+      />
+
+      <SceneStateSettingsModal 
+        isOpen={isSceneStateSettingsOpen}
+        onClose={() => setIsSceneStateSettingsOpen(false)}
       />
 
       {/* Selection Toolbar */}

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { DEEPTHINK_MEMORY_MARKER } from '@/lib/gemini';
 import { classifyGeminiError, extractRetryAfterSeconds } from '@/lib/gemini-errors';
+import { getEnabledCategoryIdsForPrompt } from '@/lib/scene-state-storage';
 
 export const maxDuration = 30;
 export const dynamic = 'force-dynamic';
@@ -24,7 +25,32 @@ const DEFAULT_DEEPTHINK_SYSTEM = `Ты — внутренний наблюдат
 ---СИСТЕМНЫЙ ПРОМПТ---
 [готовый промпт для нейронки]`;
 
-const DEEPTHINK_PROMPT = (history: string, originalSystem: string) => `
+const DEEPTHINK_PROMPT = (history: string, originalSystem: string, enabledCategoryIds?: string[], aiInstructions?: string) => {
+  const sceneStateBlock = enabledCategoryIds && enabledCategoryIds.length > 0 ? `
+
+--- SCENE STATE INSTRUCTIONS ---
+После размышлений — заполни блок состояния сцены для текущего момента истории.
+
+---SCENE_STATE---
+Верни ТОЛЬКО валидный JSON массив (без markdown-обёрток) следующего вида:
+[
+  { "id": "spatial", "content": "Таверна «Золотой Петух», второй этаж, комната 7. Окно выходит на восток." },
+  { "id": "characters", "content": "Арвен (ГГ): сидит на кровати, устала. Страж Морн: стоит у двери снаружи." },
+  { "id": "narrative", "content": "Арвен только что узнала что Морн — двойной агент. Ещё не решила что делать." }
+]
+
+Заполняй ТОЛЬКО категории из списка: ${enabledCategoryIds.join(', ')}.
+Будь конкретен, не абстрактен. Пиши как ремарки режиссёра, не как описание.
+${aiInstructions ? `Дополнительные инструкции от пользователя: ${aiInstructions}` : ''}
+
+Если тебе не хватает какой-то категории — запроси её добавление в конце массива:
+{ "id": "__request__", "content": "Мне нужна категория 'Эмоциональное состояние' — я постоянно теряю трек того кто что чувствует" }
+
+---END_SCENE_STATE---
+
+` : '';
+
+  return `
 Оригинальный системный промпт:
 """
 ${originalSystem || 'не задан — обычный ассистент'}
@@ -35,8 +61,7 @@ ${originalSystem || 'не задан — обычный ассистент'}
 ${history}
 """
 
-Проанализируй. Подумай вслух. Напиши итоговый системный промпт.
-
+Проанализируй. Подумай вслух. Напиши итоговый системный промпт.${sceneStateBlock}
 Правила для системного промпта:
 — если задача техническая (код, математика, анализ) — опиши стиль мышления, на что обратить внимание, как структурировать ответ, какие детали важны именно для этого человека
 — если разговор или вопрос про личность ("кто ты", "расскажи о себе") — придумай конкретного персонажа: имя, возраст, характер, история, что сейчас делает, где находится, настроение в эту секунду, манера речи, маленькие детали которые делают его живым. Всё это вшей в промпт
@@ -46,6 +71,7 @@ ${history}
 — всегда: никакой шаблонности, никаких списков в ответе, живой текст
 
 Помни: нейронка которая получит этот промпт ничего не знает о твоём анализе. Всё важное должно быть прямо в промпте.`;
+};
 
 const DEEPTHINK_PROMPT_WITH_MULTIMODAL_CONTEXT = (originalSystem: string) => `
 Original system prompt for the main chat:
@@ -92,7 +118,7 @@ function buildDeepThinkContents(messages: any[]) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { messages, systemInstruction, apiKey, model, deepThinkSystemPrompt } = body;
+    const { messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, sceneStateConfig } = body;
 
     if (!apiKey) {
       return Response.json({ error: 'API key required' }, { status: 400 });
@@ -102,6 +128,11 @@ export async function POST(request: NextRequest) {
     }
 
     const historyContents = buildDeepThinkContents(Array.isArray(messages) ? messages : []);
+    const enabledIds = sceneStateConfig?.enabledCategories || [];
+    const aiInstructions = sceneStateConfig?.aiInstructions || '';
+
+    // Считаем turnIndex по количеству user сообщений
+    const turnIndex = historyContents.filter(m => m.role === 'user').length;
 
     const modelId = (model || 'gemini-2.0-flash').replace('models/', '');
     // Поддерживают ли модели режим размышлений (thinkingConfig)
@@ -111,12 +142,19 @@ export async function POST(request: NextRequest) {
     const MAX_HISTORY_MESSAGES = 20;
     const limitedHistory = historyContents.slice(-MAX_HISTORY_MESSAGES);
 
+    // Используем DEEPTHINK_PROMPT который включает SCENE_STATE блок
+    const historyText = limitedHistory.map(m => {
+      const role = m.role === 'model' ? 'Assistant' : 'User';
+      const texts = (m.parts || []).filter((p: any) => p.text).map((p: any) => p.text).join(' ');
+      return `${role}: ${texts}`;
+    }).join('\n\n');
+
     const requestBody: any = {
       contents: [
         ...limitedHistory,
         {
           role: 'user',
-          parts: [{ text: DEEPTHINK_PROMPT_WITH_MULTIMODAL_CONTEXT(systemInstruction || '') }],
+          parts: [{ text: DEEPTHINK_PROMPT(historyText, systemInstruction || '', enabledIds.length > 0 ? enabledIds : undefined, aiInstructions) }],
         },
       ],
       systemInstruction: {
@@ -253,15 +291,37 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Извлекаем системный промпт из текста
+        // Извлекаем SCENE_STATE и системный промпт из текста
         const marker = '---СИСТЕМНЫЙ ПРОМПТ---';
         const idx = textAccumulator.indexOf(marker);
         const enhancedPrompt = idx !== -1
           ? textAccumulator.slice(idx + marker.length).trim()
           : textAccumulator.trim();
 
+        // Парсим SCENE_STATE
+        let sceneState: any = null;
+        const sceneStateMatch = textAccumulator.match(/---SCENE_STATE---\n([\s\S]*?)---END_SCENE_STATE---/);
+        if (sceneStateMatch) {
+          try {
+            // Попробуем распарсить JSON (иногда он может быть в markdown-блоке)
+            let jsonStr = sceneStateMatch[1].trim();
+            // Уберём markdown обёртки если есть
+            jsonStr = jsonStr.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+            const entries = JSON.parse(jsonStr);
+            if (Array.isArray(entries)) {
+              sceneState = {
+                entries,
+                generatedAt: Date.now(),
+                turnIndex,
+              };
+            }
+          } catch (e) {
+            console.warn('[DeepThink] Failed to parse SCENE_STATE:', e);
+          }
+        }
+
         await writer.write(
-          encoder.encode(`data: ${JSON.stringify({ enhancedPrompt })}\n\n`)
+          encoder.encode(`data: ${JSON.stringify({ enhancedPrompt, sceneState })}\n\n`)
         );
         await writer.write(encoder.encode('data: [DONE]\n\n'));
       } catch (error: any) {

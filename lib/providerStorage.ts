@@ -1,4 +1,4 @@
-import type { Provider, ProviderModelsCache, UniversalModel, ActiveModel } from '@/types';
+import type { Provider, ProviderModelsCache, UniversalModel, ActiveModel, ApiKeyEntry } from '@/types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage Keys
@@ -8,6 +8,26 @@ const PROVIDERS_KEY = 'providers_registry';
 const MODELS_CACHE_PREFIX = 'models_cache_';
 const ACTIVE_PROVIDER_KEY = 'active_provider_id';
 const ACTIVE_MODEL_KEY = 'active_model';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// API Key Sanitization
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function sanitizeApiKeys(keys: ApiKeyEntry[]): ApiKeyEntry[] {
+  const now = Date.now();
+  return keys.map(k => {
+    const next: ApiKeyEntry = { ...k };
+    if (next.blockedUntil && next.blockedUntil <= now) next.blockedUntil = undefined;
+    if (next.blockedByModel) {
+      const cleaned: Record<string, number> = {};
+      for (const [m, until] of Object.entries(next.blockedByModel)) {
+        if (typeof until === 'number' && until > now) cleaned[m] = until;
+      }
+      next.blockedByModel = Object.keys(cleaned).length ? cleaned : undefined;
+    }
+    return next;
+  });
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Providers
