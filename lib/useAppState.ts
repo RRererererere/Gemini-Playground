@@ -126,8 +126,8 @@ export interface UseAppStateReturn {
   setPendingCanvasElement: React.Dispatch<React.SetStateAction<any>>;
 
   // Arena
-  appMode: 'chat' | 'arena';
-  setAppMode: React.Dispatch<React.SetStateAction<'chat' | 'arena'>>;
+  appMode: 'chat' | 'arena' | 'agents' | 'agents_history';
+  setAppMode: React.Dispatch<React.SetStateAction<'chat' | 'arena' | 'agents' | 'agents_history'>>;
   arena: ReturnType<typeof useArena>;
 
   // UI State
@@ -255,7 +255,7 @@ export function useAppState(): UseAppStateReturn {
   // ═══════════════════════════════════════════
   // ARENA MODE
   // ═══════════════════════════════════════════
-  const [appMode, setAppMode] = useState<'chat' | 'arena'>('chat');
+  const [appMode, setAppMode] = useState<'chat' | 'arena' | 'agents' | 'agents_history'>('chat');
 
   // ═══════════════════════════════════════════
   // UI STATE (dialogs, modals, sidebar)
@@ -337,8 +337,10 @@ export function useAppState(): UseAppStateReturn {
 
   // Restore & persist appMode
   useEffect(() => {
-    const saved = localStorage.getItem('gemini_app_mode') as 'chat' | 'arena' | null;
+    const saved = localStorage.getItem('gemini_app_mode') as 'chat' | 'arena' | 'agents' | 'agents_history' | null;
     if (saved === 'arena') setAppMode('arena');
+    else if (saved === 'agents') setAppMode('agents');
+    else if (saved === 'agents_history') setAppMode('agents_history');
   }, []);
   useEffect(() => { localStorage.setItem('gemini_app_mode', appMode); }, [appMode]);
 

@@ -93,6 +93,8 @@ import { useSkillsUI } from '@/lib/useSkillsUI';
 import { SkillsMarket } from '@/components/SkillsMarket';
 import { HFSpaceManager } from '@/components/HFSpaceManager';
 import { useAppState } from '@/lib/useAppState';
+import { AgentEditor } from '@/components/agent-editor/AgentEditor';
+import { AgentsHistory } from '@/components/agent-editor/AgentsHistory';
 
 function generateId() {
   // Используем crypto.randomUUID для гарантированной уникальности
@@ -2601,6 +2603,15 @@ export default function Home() {
             >
               <PanelLeft size={15} />
             </button>
+            <div className="hidden md:flex items-center gap-1 mx-2 bg-[var(--surface-2)] p-0.5 rounded-lg border border-[var(--border)]">
+              <button onClick={() => setAppMode('chat')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'chat' || appMode === 'arena' ? 'bg-[var(--surface-4)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Chat</button>
+              <button onClick={() => setAppMode('agents')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors flex items-center gap-1 ${appMode === 'agents' ? 'bg-indigo-500/20 text-indigo-400 shadow-sm border border-indigo-500/30' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>
+                Agent Editor
+              </button>
+              <button onClick={() => setAppMode('agents_history')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors flex items-center gap-1 ${appMode === 'agents_history' ? 'bg-indigo-500/20 text-indigo-400 shadow-sm border border-indigo-500/30' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>
+                History
+              </button>
+            </div>
             <div className="flex items-center gap-2 min-w-0">
               {appMode === 'arena' && (
                 <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-full flex-shrink-0">
@@ -2712,7 +2723,15 @@ export default function Home() {
           className="flex-1 overflow-y-auto chat-messages-area px-6 py-8 relative"
           onScroll={handleScroll}
         >
-          {(appMode === 'arena' ? (arena.activeSession?.messages ?? []) : messages).length === 0 ? (
+          {appMode === 'agents' ? (
+            <AgentEditor 
+              allModels={allModels} 
+              activeModel={activeModel} 
+              apiKeys={apiKeys} 
+            />
+          ) : appMode === 'agents_history' ? (
+            <AgentsHistory />
+          ) : (appMode === 'arena' ? (arena.activeSession?.messages ?? []) : messages).length === 0 ? (
             appMode === 'arena' ? (
               <ArenaEmptyState
                 hasSession={!!arena.activeSession}
@@ -2815,9 +2834,9 @@ export default function Home() {
               <div ref={chatEndRef} />
             </div>
           )}
-
+          
           {/* Плавающая кнопка скролла вниз */}
-          {showScrollBottom && messages.length > 0 && (
+          {showScrollBottom && messages.length > 0 && appMode !== 'agents' && appMode !== 'agents_history' && (
             <button
               onClick={scrollToBottom}
               className="fixed bottom-24 p-2.5 bg-[var(--surface-3)] text-[var(--text-primary)] border border-[var(--border)] rounded-full shadow-glow-sm hover:bg-[var(--surface-4)] transition-all animate-fade-in z-20"
@@ -2841,7 +2860,7 @@ export default function Home() {
         </div>
 
         {/* Input */}
-        <div className="flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper">
+        <div className={`flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper ${appMode === 'agents' || appMode === 'agents_history' ? 'hidden' : ''}`}>
           {appMode === 'chat' && (
             <div className="px-4 mb-2 flex items-center justify-end gap-2">
               <DeepThinkToggle

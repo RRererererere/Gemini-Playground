@@ -616,3 +616,27 @@ input[type='range']::-moz-range-thumb {
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
+
+/* ==================== AGENT NODE EDITOR ==================== */
+
+/* Handles — cursor */
+.react-flow__handle {
+  cursor: crosshair !important;
+}
+
+/* Hover — scale up handle */
+.react-flow__handle:hover {
+  transform: translateY(-50%) scale(1.5) !important;
+  transition: transform 0.12s ease !important;
+}
+
+/* ReactFlow node — overflow visible для выступающих handles */
+.react-flow__node {
+  overflow: visible !important;
+}
+
+/* Edge - выделение при клике */
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke-opacity: 1 !important;
+  filter: drop-shadow(0 0 4px rgba(99,102,241,0.8));
+}

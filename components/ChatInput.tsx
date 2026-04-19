@@ -314,11 +314,80 @@ export default function ChatInput({
   }, [pendingCanvasElement, onCanvasElementConsumed]);
 
   useEffect(() => {
-    const handleWindowDragOver = (e: DragEvent) => {
-      setIsDragging(true);
+    let dragCounter = 0;
+    let dragLeaveTimeout: NodeJS.Timeout | null = null;
+
+    const handleWindowDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter++;
+      
+      // Проверяем что это файлы, а не ноды из ReactFlow
+      const types = e.dataTransfer?.types || [];
+      const isFiles = types.includes('Files');
+      const isReactFlow = types.includes('application/reactflow');
+      
+      // Активируем только для файлов, не для нод
+      if (isFiles && !isReactFlow) {
+        if (dragLeaveTimeout) {
+          clearTimeout(dragLeaveTimeout);
+          dragLeaveTimeout = null;
+        }
+        setIsDragging(true);
+      }
     };
+
+    const handleWindowDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      
+      // Проверяем что это файлы
+      const types = e.dataTransfer?.types || [];
+      const isFiles = types.includes('Files');
+      const isReactFlow = types.includes('application/reactflow');
+      
+      if (isFiles && !isReactFlow) {
+        if (dragLeaveTimeout) {
+          clearTimeout(dragLeaveTimeout);
+          dragLeaveTimeout = null;
+        }
+      }
+    };
+
+    const handleWindowDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter--;
+      
+      // Используем debounce чтобы избежать мерцания при переходе между элементами
+      if (dragCounter <= 0) {
+        dragCounter = 0;
+        if (dragLeaveTimeout) clearTimeout(dragLeaveTimeout);
+        dragLeaveTimeout = setTimeout(() => {
+          setIsDragging(false);
+        }, 100);
+      }
+    };
+
+    const handleWindowDrop = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter = 0;
+      if (dragLeaveTimeout) {
+        clearTimeout(dragLeaveTimeout);
+        dragLeaveTimeout = null;
+      }
+      setIsDragging(false);
+    };
+
+    window.addEventListener('dragenter', handleWindowDragEnter);
     window.addEventListener('dragover', handleWindowDragOver);
-    return () => window.removeEventListener('dragover', handleWindowDragOver);
+    window.addEventListener('dragleave', handleWindowDragLeave);
+    window.addEventListener('drop', handleWindowDrop);
+    
+    return () => {
+      window.removeEventListener('dragenter', handleWindowDragEnter);
+      window.removeEventListener('dragover', handleWindowDragOver);
+      window.removeEventListener('dragleave', handleWindowDragLeave);
+      window.removeEventListener('drop', handleWindowDrop);
+      if (dragLeaveTimeout) clearTimeout(dragLeaveTimeout);
+    };
   }, []);
 
   const processFile = useCallback(async (file: File): Promise<AttachedFile | null> => {
@@ -550,6 +619,7 @@ export default function ChatInput({
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragging(false);
     
     try {
@@ -579,6 +649,34 @@ export default function ChatInput({
     handleFiles(e.dataTransfer.files);
   };
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Проверяем что это файлы
+    const types = Array.from(e.dataTransfer.types);
+    const isFiles = types.includes('Files');
+    const isReactFlow = types.includes('application/reactflow');
+    
+    if (isFiles && !isReactFlow) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Проверяем что действительно покинули область (не переход к дочернему элементу)
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX;
+    const y = e.clientY;
+    
+    if (x <= rect.left || x >= rect.right || y <= rect.top || y >= rect.bottom) {
+      setIsDragging(false);
+    }
+  };
+
   const hasContent = text.trim().length > 0 || files.length > 0 || canvasPreview !== null || annotationRefs.length > 0;
 
   return (
@@ -600,8 +698,8 @@ export default function ChatInput({
             ? 'border-[var(--accent)] shadow-glow-md'
             : 'border-[var(--border-subtle)] hover:border-[var(--border-strong)] focus-within:border-[var(--accent)] focus-within:shadow-glow-sm'
         }`}
-        onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
-        onDragLeave={() => setIsDragging(false)}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
         {/* Annotation reference markers */}

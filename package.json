@@ -9,9 +9,12 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@vitalets/google-translate-api": "^9.2.1",
+    "@xyflow/react": "^12.10.2",
     "clsx": "^2.1.1",
     "d3": "^7.9.0",
+    "dagre": "^0.8.5",
     "docx": "^9.6.1",
     "highlight.js": "^11.9.0",
     "katex": "^0.16.43",
