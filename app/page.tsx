@@ -14,7 +14,8 @@ import { SelectionToolbar } from '@/components/SelectionToolbar';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,
-  Save, X, ArrowDown, RefreshCw, MonitorPlay, Zap, FilePen, BarChart2
+  Save, X, ArrowDown, RefreshCw, MonitorPlay, Zap, FilePen, BarChart2,
+  Brain, Loader2, CheckCircle2
 } from 'lucide-react';
 // @ts-ignore
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
@@ -93,8 +94,12 @@ import { useSkillsUI } from '@/lib/useSkillsUI';
 import { SkillsMarket } from '@/components/SkillsMarket';
 import { HFSpaceManager } from '@/components/HFSpaceManager';
 import { useAppState } from '@/lib/useAppState';
-import { AgentEditor } from '@/components/agent-editor/AgentEditor';
 import { AgentsHistory } from '@/components/agent-editor/AgentsHistory';
+import { GraphExecutor } from '@/lib/agent-engine/executor';
+import { getGraphById } from '@/lib/agent-engine/graph-storage';
+import { AgentGraph, AgentRun } from '@/lib/agent-engine/types';
+import remarkGfm from 'remark-gfm';
+import ReactMarkdown from 'react-markdown';
 
 function generateId() {
   // Используем crypto.randomUUID для гарантированной уникальности
@@ -219,7 +224,7 @@ export default function Home() {
     openFiles, setOpenFiles, activeFileId, setActiveFileId,
     showFileEditor, setShowFileEditor, pendingEdits, setPendingEdits,
     mobileCanvasState, setMobileCanvasState, pendingCanvasElement, setPendingCanvasElement,
-    appMode, setAppMode, arena,
+    appMode, setAppMode, activeAgentId, setActiveAgentId, arena,
     showToolBuilder, setShowToolBuilder, editingTool, setEditingTool,
     showSavePromptDialog, setShowSavePromptDialog, newPromptName, setNewPromptName,
     showDeepThinkDialog, setShowDeepThinkDialog, deepThinkDraft, setDeepThinkDraft,
@@ -238,10 +243,17 @@ export default function Home() {
     checkFilesForEditor,
   } = app;
 
+  // Agent Chat State
+  const [agentTrace, setAgentTrace] = useState<{ id: string; name: string; status: 'running' | 'success' | 'error'; startTime: number; duration?: number }[]>([]);
+  const [agentInputRequest, setAgentInputRequest] = useState<{ source: string; context: any; resolve: (val: any) => void } | null>(null);
+  const [currentExecutor, setCurrentExecutor] = useState<GraphExecutor | null>(null);
+
   // Arena: add onOpenAgent to chatSidebarArenaProps
   const chatSidebarArenaPropsWithAgent = {
     ...chatSidebarArenaProps,
     onOpenAgent: null as any, // будет установлен ниже
+    activeAgentId,
+    onSelectAgent: (id: string | null) => setActiveAgentId(id),
   };
 
   const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze, abort: abortDeepThink } = deepThink;
@@ -2203,7 +2215,103 @@ export default function Home() {
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort();
     abortDeepThink(); // Отменяем DeepThink если он работает
-  }, [abortDeepThink]);
+    if (currentExecutor) {
+      currentExecutor.cancel();
+      setCurrentExecutor(null);
+    }
+  }, [abortDeepThink, currentExecutor]);
+
+  const handleAgentSend = useCallback(async (text: string, files: AttachedFile[]) => {
+    if (!activeAgentId || isStreaming) return;
+    
+    const graph = getGraphById(activeAgentId);
+    if (!graph) {
+      setError('Agent graph not found');
+      return;
+    }
+
+    setError('');
+    setIsStreaming(true);
+    setAgentTrace([]);
+    
+    // 1. Создаем ID чата если его нет
+    const chatId = currentChatId || `agent_chat_${activeAgentId}_${Date.now()}`;
+    if (!currentChatId) {
+      setCurrentChatId(chatId);
+      setActiveChatId(chatId);
+    }
+
+    // 2. Добавляем сообщение пользователя
+    const userMsg: Message = {
+      id: generateId(),
+      role: 'user',
+      parts: [{ text }],
+      files: files.length > 0 ? files : undefined,
+    };
+    
+    // 3. Создаем пустое сообщение агента для стриминга
+    const assistantMsgId = generateId();
+    const assistantMsg: Message = {
+      id: assistantMsgId,
+      role: 'model',
+      parts: [{ text: '' }],
+      isStreaming: true,
+      modelName: 'Agent Graph',
+    };
+
+    const newMessages = [...messages, userMsg, assistantMsg];
+    setMessages(newMessages);
+
+    // 4. Запускаем Executor
+    const executor = new GraphExecutor(graph, {
+      chatId: chatId,
+      onNodeStart: (nodeId, nodeName) => {
+        setAgentTrace(prev => [...prev, { id: nodeId, name: nodeName, status: 'running', startTime: Date.now() }]);
+      },
+      onNodeComplete: (nodeId, output) => {
+        setAgentTrace(prev => prev.map(t => t.id === nodeId ? { ...t, status: 'success', duration: Date.now() - t.startTime } : t));
+      },
+      onNodeError: (nodeId, error) => {
+        setAgentTrace(prev => prev.map(t => t.id === nodeId ? { ...t, status: 'error' } : t));
+        setError(`Error in node ${nodeId}: ${error}`);
+      },
+      onNodeStream: (nodeId, chunk) => {
+        setMessages(prev => prev.map(m => {
+          if (m.id !== assistantMsgId) return m;
+          const textPart = m.parts.find(p => 'text' in p);
+          if (textPart) {
+            return {
+              ...m,
+              parts: m.parts.map(p => 'text' in p ? { text: (p as any).text + chunk } : p)
+            };
+          }
+          return { ...m, parts: [...m.parts, { text: chunk }] };
+        }));
+      },
+      onChatInputRequest: async (source, options) => {
+        // Human-in-the-loop: ставим на паузу и ждем ввода
+        setIsStreaming(false);
+        return new Promise((resolve) => {
+          setAgentInputRequest({ source, context: options, resolve });
+        });
+      }
+    });
+
+    setCurrentExecutor(executor);
+    
+    try {
+      const run = await executor.run(text);
+      // Финальное сохранение чата
+      saveCurrentChat([...messages, userMsg, { ...assistantMsg, isStreaming: false }]);
+    } catch (e: any) {
+      console.error('Agent execution failed:', e);
+      setError(e.message || 'Agent execution failed');
+    } finally {
+      setIsStreaming(false);
+      setStreamingId(null);
+      setCurrentExecutor(null);
+    }
+  }, [activeAgentId, isStreaming, messages, currentChatId, saveCurrentChat]);
 
   const handleAddUserMessage = useCallback(() => {
     const msg: Message = { id: generateId(), role: 'user', parts: [{ text: '' }] };
@@ -2500,7 +2608,7 @@ export default function Home() {
               onNewChat={handleNewChat}
               onDeleteChat={handleDeleteSavedChat}
               onClose={() => setChatSidebarOpen(false)}
-              {...chatSidebarArenaProps}
+              {...chatSidebarArenaPropsWithAgent}
             />
           </div>
         </div>
@@ -2545,7 +2653,7 @@ export default function Home() {
               onLoadChat={handleLoadChat}
               onNewChat={handleNewChat}
               onDeleteChat={handleDeleteSavedChat}
-              {...chatSidebarArenaProps}
+              {...chatSidebarArenaPropsWithAgent}
             />
           </div>
         </div>
@@ -2604,15 +2712,13 @@ export default function Home() {
               <PanelLeft size={15} />
             </button>
             <div className="hidden md:flex items-center gap-1 mx-2 bg-[var(--surface-2)] p-0.5 rounded-lg border border-[var(--border)]">
-              <button onClick={() => setAppMode('chat')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'chat' || appMode === 'arena' ? 'bg-[var(--surface-4)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Chat</button>
+              <button onClick={() => setAppMode('chat')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'chat' ? 'bg-[var(--surface-4)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Chat</button>
+              <button onClick={() => setAppMode('arena')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'arena' ? 'bg-amber-400/20 text-amber-400 shadow-sm border border-amber-400/30' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Arena</button>
               <button onClick={() => setAppMode('agents')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors flex items-center gap-1 ${appMode === 'agents' ? 'bg-indigo-500/20 text-indigo-400 shadow-sm border border-indigo-500/30' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>
-                Agent Editor
+                <Zap size={11} className={appMode === 'agents' ? 'fill-indigo-400/20' : ''} />
+                Agents
               </button>
-              <button onClick={() => setAppMode('agents_history')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors flex items-center gap-1 ${appMode === 'agents_history' ? 'bg-indigo-500/20 text-indigo-400 shadow-sm border border-indigo-500/30' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>
-                History
-              </button>
-            </div>
-            <div className="flex items-center gap-2 min-w-0">
+            </div>            <div className="flex items-center gap-2 min-w-0">
               {appMode === 'arena' && (
                 <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-full flex-shrink-0">
                   <Zap size={9} />
@@ -2724,13 +2830,47 @@ export default function Home() {
           onScroll={handleScroll}
         >
           {appMode === 'agents' ? (
-            <AgentEditor 
-              allModels={allModels} 
-              activeModel={activeModel} 
-              apiKeys={apiKeys} 
+            // Agent Chat Mode
+            activeAgentId ? (
+              // Show agent chat page (будет реализовано позже)
+              <div className="flex flex-col items-center justify-center h-full text-center p-8">
+                <div className="w-20 h-20 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mb-4">
+                  <Zap size={32} className="text-indigo-400" />
+                </div>
+                <h2 className="text-xl font-semibold text-[var(--text-primary)] mb-2">
+                  Агентный чат
+                </h2>
+                <p className="text-[var(--text-dim)] max-w-md mb-6">
+                  Функция агентного чата будет доступна в следующей версии.
+                  Пока вы можете создавать и редактировать агентов во вкладке "Agents" в навигации.
+                </p>
+                <button
+                  onClick={() => setActiveAgentId(null)}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors"
+                >
+                  Вернуться к списку
+                </button>
+              </div>
+            ) : (
+              // Show agent list (будет реализовано позже)
+              <div className="flex flex-col items-center justify-center h-full text-center p-8">
+                <div className="w-20 h-20 rounded-full bg-[var(--surface-2)] flex items-center justify-center mb-4">
+                  <Zap size={32} className="text-[var(--text-dim)]" />
+                </div>
+                <h2 className="text-xl font-semibold text-[var(--text-primary)] mb-2">
+                  Нет опубликованных агентов
+                </h2>
+                <p className="text-[var(--text-dim)] max-w-md mb-6">
+                  Создайте агента в редакторе графов (вкладка "Agents" в навигации) и опубликуйте его, чтобы начать чат
+                </p>
+              </div>
+            )
+          ) : showLiveCanvas ? (
+            <LivePreviewPanel
+              code={liveCode}
+              onClose={() => setShowLiveCanvas(false)}
+              websiteType={websiteType}
             />
-          ) : appMode === 'agents_history' ? (
-            <AgentsHistory />
           ) : (appMode === 'arena' ? (arena.activeSession?.messages ?? []) : messages).length === 0 ? (
             appMode === 'arena' ? (
               <ArenaEmptyState
@@ -2836,7 +2976,7 @@ export default function Home() {
           )}
           
           {/* Плавающая кнопка скролла вниз */}
-          {showScrollBottom && messages.length > 0 && appMode !== 'agents' && appMode !== 'agents_history' && (
+          {showScrollBottom && messages.length > 0 && appMode !== 'agents' && (
             <button
               onClick={scrollToBottom}
               className="fixed bottom-24 p-2.5 bg-[var(--surface-3)] text-[var(--text-primary)] border border-[var(--border)] rounded-full shadow-glow-sm hover:bg-[var(--surface-4)] transition-all animate-fade-in z-20"
@@ -2860,7 +3000,7 @@ export default function Home() {
         </div>
 
         {/* Input */}
-        <div className={`flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper ${appMode === 'agents' || appMode === 'agents_history' ? 'hidden' : ''}`}>
+        <div className={`flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper ${appMode === 'agents' ? 'hidden' : ''}`}>
           {appMode === 'chat' && (
             <div className="px-4 mb-2 flex items-center justify-end gap-2">
               <DeepThinkToggle
@@ -2883,12 +3023,14 @@ export default function Home() {
           <ChatInput
             onSend={appMode === 'arena'
               ? (text, files) => arena.sendUserMessage(text, files)
+              : appMode === 'agents'
+              ? handleAgentSend
               : handleSend
             }
             onStop={appMode === 'arena' ? arena.stopStreaming : handleStop}
             onAddUserMessage={appMode === 'arena' ? () => {} : handleAddUserMessage}
             isStreaming={appMode === 'arena' ? arena.isStreaming : isStreaming}
-            disabled={appMode === 'arena' ? !arena.activeSession : !hasApiAndModel}
+            disabled={appMode === 'arena' ? !arena.activeSession : appMode === 'agents' ? !activeAgentId : !hasApiAndModel}
             canContinue={appMode === 'arena' ? (
               arena.activeSession?.messages.some(m => m.role === 'model' && !m.isStreaming && m.parts.some(p => 'text' in p && (p as {text:string}).text.length > 0)) ?? false
             ) : canContinue}

@@ -53,6 +53,7 @@ interface ChatMessageProps {
   isSceneStatePinned?: boolean;
   onToggleSceneStatePin?: () => void;
   onRequestSceneCategory?: (request: { id: string; content: string }) => void;
+  hideActions?: boolean;
 }
 
 function FilePreview({ file }: { file: AttachedFile }) {
@@ -1672,7 +1673,7 @@ function BridgeDataBlock({ bridgeData }: { bridgeData: BridgePayload }) {
 export default function ChatMessage({
   message, index, isLast, isStreaming,
   canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat, onFeedback, onRegenerateWithFeedback, onRegenerateTextOnly, onDismissBlocked, onEditDeepThinking, onContinueDeepThink, onSkipDeepThink,
-  onSceneStateSettingsOpen, isSceneStatePinned, onToggleSceneStatePin, onRequestSceneCategory
+  onSceneStateSettingsOpen, isSceneStatePinned, onToggleSceneStatePin, onRequestSceneCategory, hideActions = false
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -2142,7 +2143,7 @@ export default function ChatMessage({
       </div>
 
       {/* Actions */}
-      {!isEditing && !isStreaming && (() => {
+      {!hideActions && !isEditing && !isStreaming && (() => {
         const hasFeedback = !isUser && !!message.feedback?.rating;
         return (
           <div className={`flex items-center gap-0.5 mt-1.5 transition-opacity ${

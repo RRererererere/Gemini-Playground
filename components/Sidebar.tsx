@@ -28,11 +28,15 @@ import {
   Trash2,
   Unlock,
   Upload,
+  Volume2,
   Wrench,
   X,
+  Zap,
   type LucideIcon,
-} from 'lucide-react';
-import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, SavedSystemPrompt, Provider, UniversalModel, ActiveModel } from '@/types';
+  } from 'lucide-react';
+  import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, SavedSystemPrompt, Provider, UniversalModel, ActiveModel } from '@/types';
+  import { AgentGraph } from '@/lib/agent-engine/types';
+  import { getGraphs, GRAPHS_UPDATED_EVENT } from '@/lib/agent-engine/graph-storage';
 import { addApiKey, removeApiKey, getKeyStatus, timeUntilUnblock, unblockKey } from '@/lib/apiKeyManager';
 import { loadProviders, saveCustomProvider, removeProvider, loadModelsCache, saveModelsCache, clearModelsCache } from '@/lib/providerStorage';
 import { ProviderModal } from './AddProviderModal';
@@ -289,41 +293,63 @@ export function ChatSidebar({
   onLoadArenaSession,
   onNewArenaSession,
   onDeleteArenaSession,
+  // Agent props
+  activeAgentId,
+  onSelectAgent,
 }: Pick<SidebarSharedProps, 'savedChats' | 'currentChatId' | 'onLoadChat' | 'onNewChat' | 'onDeleteChat' | 'onClose' | 'onOpenAgent'> & {
-  appMode?: 'chat' | 'arena';
-  onAppModeChange?: (mode: 'chat' | 'arena') => void;
+  appMode?: 'chat' | 'arena' | 'agents';
+  onAppModeChange?: (mode: 'chat' | 'arena' | 'agents') => void;
   arenaSessions?: Array<{ id: string; title: string; agents: any[]; messages: any[]; createdAt: number; updatedAt: number }>;
   activeArenaSessionId?: string | null;
   onLoadArenaSession?: (id: string) => void;
   onNewArenaSession?: () => void;
   onDeleteArenaSession?: (id: string) => void;
+  activeAgentId?: string | null;
+  onSelectAgent?: (id: string | null) => void;
 }) {
   const formatDate = (ts: number) => new Date(ts).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
   const isArena = appMode === 'arena';
+  const isAgentsMode = appMode === 'agents';
   
   // Agents state
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentGraphs, setAgentGraphs] = useState<AgentGraph[]>([]);
   const [collapsedChats, setCollapsedChats] = useState<Set<string>>(new Set());
   
   useEffect(() => {
     setAgents(getAgents());
+    const { getGraphs } = require('@/lib/agent-engine/graph-storage');
+    setAgentGraphs(getGraphs().filter((g: AgentGraph) => g.metadata.published));
     
     const handleAgentsUpdate = () => {
       setAgents(getAgents());
     };
+    const handleGraphsUpdate = () => {
+      const { getGraphs } = require('@/lib/agent-engine/graph-storage');
+      setAgentGraphs(getGraphs().filter((g: AgentGraph) => g.metadata.published));
+    };
     
     window.addEventListener(AGENTS_UPDATED_EVENT, handleAgentsUpdate);
-    return () => window.removeEventListener(AGENTS_UPDATED_EVENT, handleAgentsUpdate);
+    const { GRAPHS_UPDATED_EVENT } = require('@/lib/agent-engine/graph-storage');
+    window.addEventListener(GRAPHS_UPDATED_EVENT, handleGraphsUpdate);
+    return () => {
+      window.removeEventListener(AGENTS_UPDATED_EVENT, handleAgentsUpdate);
+      window.removeEventListener(GRAPHS_UPDATED_EVENT, handleGraphsUpdate);
+    };
   }, []);
   
-  // Группировка чатов по родителям
+  // Группировка чатов по родителям и фильтрация для агентов
   const { parentChats, subChatsByParent, standaloneChats } = useMemo(() => {
     const parents: SavedChat[] = [];
     const subChats: Record<string, SavedChat[]> = {};
     const standalone: SavedChat[] = [];
     
+    const filteredChats = isAgentsMode 
+      ? savedChats.filter(chat => chat.agentId === activeAgentId)
+      : savedChats;
+
     // Сначала собираем все подчаты
-    savedChats.forEach(chat => {
+    filteredChats.forEach(chat => {
       if (chat.isSubChat && chat.parentChatId) {
         if (!subChats[chat.parentChatId]) {
           subChats[chat.parentChatId] = [];
@@ -333,7 +359,7 @@ export function ChatSidebar({
     });
     
     // Теперь группируем родительские и standalone чаты
-    savedChats.forEach(chat => {
+    filteredChats.forEach(chat => {
       if (chat.isSubChat) {
         // Уже обработан выше
         return;
@@ -354,7 +380,7 @@ export function ChatSidebar({
     });
     
     return { parentChats: parents, subChatsByParent: subChats, standaloneChats: standalone };
-  }, [savedChats]);
+  }, [savedChats, isAgentsMode, activeAgentId]);
   
   // Автоматически раскрываем чат с активным подчатом
   useEffect(() => {
@@ -418,6 +444,49 @@ export function ChatSidebar({
               >
                 ⚡ Arena
               </button>
+              <button
+                onClick={() => onAppModeChange('agents')}
+                className={`flex-1 text-center py-1.5 text-xs font-medium rounded-md transition-all ${
+                  isAgentsMode
+                    ? 'bg-indigo-500/15 text-indigo-400 shadow-sm'
+                    : 'text-[var(--text-dim)] hover:text-[var(--text-muted)]'
+                }`}
+              >
+                🤖 Agents
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Published Agents List — only in Agents Mode */}
+        {isAgentsMode && agentGraphs.length > 0 && (
+          <div className="px-5 pt-4 pb-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-indigo-400 mb-3">
+              Агенты
+            </p>
+            <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-2">
+              {agentGraphs.map(graph => (
+                <button
+                  key={graph.id}
+                  onClick={() => onSelectAgent?.(graph.id)}
+                  className={`flex-shrink-0 flex flex-col items-center justify-center w-20 h-24 rounded-2xl border transition-all ${
+                    activeAgentId === graph.id
+                      ? 'border-indigo-500 bg-indigo-500/10 shadow-[0_0_15px_rgba(99,102,241,0.2)]'
+                      : 'border-[var(--border)] bg-[var(--surface-2)] hover:bg-[var(--surface-3)]'
+                  }`}
+                >
+                  <div className={`w-10 h-10 rounded-xl mb-2 flex items-center justify-center ${
+                    activeAgentId === graph.id ? 'bg-indigo-500/20' : 'bg-[var(--surface-3)]'
+                  }`}>
+                    <Zap size={20} className={activeAgentId === graph.id ? 'text-indigo-400' : 'text-[var(--text-dim)]'} />
+                  </div>
+                  <span className={`text-[10px] font-bold truncate w-full px-2 text-center ${
+                    activeAgentId === graph.id ? 'text-indigo-400' : 'text-[var(--text-muted)]'
+                  }`}>
+                    {graph.name}
+                  </span>
+                </button>
+              ))}
             </div>
           </div>
         )}

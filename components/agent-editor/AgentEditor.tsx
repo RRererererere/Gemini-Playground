@@ -17,13 +17,14 @@ import {
   reconnectEdge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Play, Square, Download, Upload, CheckCircle2, Loader2, AlertCircle, Undo2, Redo2, Wand2 } from 'lucide-react';
+import { Play, Square, Download, Upload, CheckCircle2, Loader2, AlertCircle, Undo2, Redo2, Wand2, Rocket } from 'lucide-react';
 import { UniversalModel, ActiveModel, ApiKeyEntry } from '@/types';
 import { AgentGraph, AgentRun, NodeData, EdgeData } from '@/lib/agent-engine/types';
 import { GraphExecutor } from '@/lib/agent-engine/executor';
 import { saveGraph, saveRun, exportGraph, importGraph } from '@/lib/agent-engine/graph-storage';
 import { getLayoutedElements } from '@/lib/agent-engine/layout';
 import useUndoRedo from '@/lib/agent-engine/useUndoRedo';
+import { createAgentConfig, getAgentConfigByGraphId, saveAgentConfig, deleteAgentConfig } from '@/lib/agent-engine/agent-chat-store';
 import { AgentEditorSidebar } from './AgentEditorSidebar';
 import { AgentEditorProperties } from './AgentEditorProperties';
 import { RunPanel } from './RunPanel';
@@ -181,6 +182,17 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
   const [showInputModal, setShowInputModal] = useState(false);
   const [pendingInputFields, setPendingInputFields] = useState<InputField[]>([]);
   const [feedbackRequest, setFeedbackRequest] = useState<FeedbackRequestState | null>(null);
+
+  // Publication state
+  const [isPublished, setIsPublished] = useState(false);
+
+  // Check if graph is published
+  useEffect(() => {
+    if (graph) {
+      const config = getAgentConfigByGraphId(graph.id);
+      setIsPublished(config?.isPublished || false);
+    }
+  }, [graph?.id]);
 
   // Close menus on global click
   useEffect(() => {
@@ -763,6 +775,70 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
     input.click();
   }, [onGraphChange, setNodes, setEdges, setViewport, showToast]);
 
+  // Publish/Unpublish agent
+  const handleTogglePublish = useCallback(() => {
+    if (!graph) return;
+
+    const existingConfig = getAgentConfigByGraphId(graph.id);
+
+    if (existingConfig && existingConfig.isPublished) {
+      // Unpublish
+      existingConfig.isPublished = false;
+      saveAgentConfig(existingConfig);
+      setIsPublished(false);
+      showToast('Агент снят с публикации', 'info');
+    } else {
+      // Find existing chat_input node
+      const chatInputNode = nodes.find(n => n.type === 'chat_input');
+      
+      if (chatInputNode) {
+        // Check if it's already in ask_user mode
+        const currentSource = (chatInputNode.data.settings as any)?.source;
+        
+        if (currentSource !== 'ask_user') {
+          // Switch to ask_user mode
+          const updatedNodes = nodes.map(n => {
+            if (n.id === chatInputNode.id) {
+              return {
+                ...n,
+                data: {
+                  ...n.data,
+                  settings: {
+                    ...(n.data.settings as any),
+                    source: 'ask_user',
+                  },
+                },
+              };
+            }
+            return n;
+          });
+          setNodes(updatedNodes);
+          takeSnapshot();
+          showToast('Нода "Chat Input" переключена в режим "Ask User"', 'info');
+        }
+      } else {
+        // No chat_input node found - show error
+        showToast('Для публикации агента нужна нода "Chat Input" (Получить ввод из чата)', 'error');
+        return;
+      }
+
+      // Create or update config
+      if (existingConfig) {
+        existingConfig.isPublished = true;
+        saveAgentConfig(existingConfig);
+      } else {
+        createAgentConfig(
+          graph.id,
+          graph.name,
+          graph.description || 'Агент без описания'
+        );
+      }
+
+      setIsPublished(true);
+      showToast('Агент опубликован! Доступен во вкладке "Агенты"', 'info');
+    }
+  }, [graph, nodes, setNodes, takeSnapshot, showToast]);
+
   // Показываем онбординг если только стартовая нода
   const showOnboarding = nodes.length === 1 && nodes[0]?.type === 'agent_input';
 
@@ -927,6 +1003,27 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
             }}
           >
             Save
+          </button>
+
+          <button
+            onClick={handleTogglePublish}
+            title={isPublished ? 'Снять публикацию' : 'Опубликовать как агента'}
+            style={{
+              padding: '5px 12px',
+              fontSize: 11,
+              fontWeight: 600,
+              background: isPublished ? 'rgba(16,185,129,0.15)' : 'rgba(99,102,241,0.15)',
+              border: isPublished ? '1px solid rgba(16,185,129,0.25)' : '1px solid rgba(99,102,241,0.25)',
+              color: isPublished ? '#34d399' : '#818cf8',
+              cursor: 'pointer',
+              borderRadius: 8,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+            }}
+          >
+            <Rocket size={11} />
+            {isPublished ? 'Опубликован ✓' : 'Опубликовать'}
           </button>
         </div>
 

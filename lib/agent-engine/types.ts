@@ -17,6 +17,7 @@ export interface AgentGraph {
     tags: string[];
     runCount: number;
     lastRunAt?: number;
+    published?: boolean;
   };
 }
 
@@ -67,7 +68,13 @@ export interface NodeRunResult {
 // Options for the GraphExecutor
 export interface ExecutorOptions {
   chatId?: string;
-  onNodeStart?: (nodeId: string) => void;
+  // Chat mode (NEW)
+  chatMode?: boolean;            // включить агентный режим
+  threadId?: string;             // ID текущего AgentChatThread
+  onAgentStep?: (step: import('./chat-types').AgentStep) => void;  // callback для шагов
+  onFeedbackRequest?: (req: import('./chat-types').FeedbackRequest) => Promise<import('./chat-types').FeedbackResponse>;
+  // Existing callbacks
+  onNodeStart?: (nodeId: string, nodeName: string) => void;
   onNodeComplete?: (nodeId: string, result: unknown) => void;
   onNodeError?: (nodeId: string, error: Error) => void;
   onNodeSkip?: (nodeId: string) => void;   // BUG-09: callback для пропущенных нод

@@ -106,7 +106,7 @@ export class GraphExecutor {
 
     try {
       if (this.options.onNodeStart) {
-        this.options.onNodeStart(node.id);
+        this.options.onNodeStart(node.id, node.data.label || node.type || 'unknown');
       }
 
       // Собираем входные данные из предыдущих узлов

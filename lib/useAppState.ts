@@ -126,8 +126,10 @@ export interface UseAppStateReturn {
   setPendingCanvasElement: React.Dispatch<React.SetStateAction<any>>;
 
   // Arena
-  appMode: 'chat' | 'arena' | 'agents' | 'agents_history';
-  setAppMode: React.Dispatch<React.SetStateAction<'chat' | 'arena' | 'agents' | 'agents_history'>>;
+  appMode: 'chat' | 'arena' | 'agents';
+  setAppMode: React.Dispatch<React.SetStateAction<'chat' | 'arena' | 'agents'>>;
+  activeAgentId: string | null;
+  setActiveAgentId: React.Dispatch<React.SetStateAction<string | null>>;
   arena: ReturnType<typeof useArena>;
 
   // UI State
@@ -255,7 +257,8 @@ export function useAppState(): UseAppStateReturn {
   // ═══════════════════════════════════════════
   // ARENA MODE
   // ═══════════════════════════════════════════
-  const [appMode, setAppMode] = useState<'chat' | 'arena' | 'agents' | 'agents_history'>('chat');
+  const [appMode, setAppMode] = useState<'chat' | 'arena' | 'agents'>('chat');
+  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
 
   // ═══════════════════════════════════════════
   // UI STATE (dialogs, modals, sidebar)
@@ -337,10 +340,9 @@ export function useAppState(): UseAppStateReturn {
 
   // Restore & persist appMode
   useEffect(() => {
-    const saved = localStorage.getItem('gemini_app_mode') as 'chat' | 'arena' | 'agents' | 'agents_history' | null;
+    const saved = localStorage.getItem('gemini_app_mode') as 'chat' | 'arena' | 'agents' | null;
     if (saved === 'arena') setAppMode('arena');
     else if (saved === 'agents') setAppMode('agents');
-    else if (saved === 'agents_history') setAppMode('agents_history');
   }, []);
   useEffect(() => { localStorage.setItem('gemini_app_mode', appMode); }, [appMode]);
 
@@ -530,7 +532,7 @@ export function useAppState(): UseAppStateReturn {
     mobileCanvasState, setMobileCanvasState, pendingCanvasElement, setPendingCanvasElement,
 
     // Arena
-    appMode, setAppMode, arena,
+    appMode, setAppMode, activeAgentId, setActiveAgentId, arena,
 
     // UI State
     showToolBuilder, setShowToolBuilder, editingTool, setEditingTool,

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Plus, Search, Play, Copy, Download, Archive, Trash2, 
   MoreVertical, Calendar, Zap, AlertCircle, CheckCircle2,
-  Filter, SortAsc, Pencil
+  Filter, SortAsc, Pencil, Sparkles, Eye, EyeOff
 } from 'lucide-react';
 import { AgentGraph } from '@/lib/agent-engine/types';
 import { 
@@ -95,6 +95,38 @@ export const AgentsList: React.FC<AgentsListProps> = ({ onOpenGraph, onCreateNew
     setMenuOpen(null);
   };
 
+  const handleTogglePublish = (graph: AgentGraph) => {
+    const isPublished = !graph.metadata.published;
+    
+    // При публикации — блокируем входы
+    const updatedNodes = graph.nodes.map(node => {
+      if (isPublished && (node.type === 'agent_input' || node.type === 'chat_input')) {
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            settings: {
+              ...node.data.settings,
+              inputType: 'user_input' // Всегда ждем ввода пользователя
+            }
+          }
+        };
+      }
+      return node;
+    });
+
+    saveGraph({
+      ...graph,
+      nodes: updatedNodes,
+      metadata: {
+        ...graph.metadata,
+        published: isPublished
+      },
+      updatedAt: Date.now()
+    });
+    setMenuOpen(null);
+  };
+
   const filteredAndSortedGraphs = graphs
     .filter(g => {
       const matchesSearch = g.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -116,6 +148,14 @@ export const AgentsList: React.FC<AgentsListProps> = ({ onOpenGraph, onCreateNew
     });
 
   const getStatusBadge = (graph: AgentGraph) => {
+    if (graph.metadata.published) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold bg-indigo-500/20 text-indigo-400 rounded-full border border-indigo-500/30 shadow-[0_0_10px_rgba(99,102,241,0.2)]">
+          <Sparkles size={10} />
+          Published
+        </span>
+      );
+    }
     if (graph.metadata.runCount === 0) {
       return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-slate-500/10 text-slate-400 rounded-full border border-slate-500/20">
@@ -310,6 +350,19 @@ export const AgentsList: React.FC<AgentsListProps> = ({ onOpenGraph, onCreateNew
 
                     {menuOpen === graph.id && (
                       <div className="absolute right-0 bottom-full mb-2 w-48 bg-[var(--surface-2)] border border-[var(--border)] rounded-lg shadow-xl z-50 py-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleTogglePublish(graph);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--surface-3)] transition-colors"
+                        >
+                          {graph.metadata.published ? (
+                            <><EyeOff size={14} className="text-amber-400" /> Unpublish</>
+                          ) : (
+                            <><Sparkles size={14} className="text-emerald-400" /> Publish</>
+                          )}
+                        </button>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();

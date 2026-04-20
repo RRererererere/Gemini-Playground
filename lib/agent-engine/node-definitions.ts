@@ -1333,6 +1333,345 @@ const FEEDBACK_NODE: NodeDef = {
   ]
 };
 
+// ============================================================================
+// AGENT CHAT NODES (NEW)
+// ============================================================================
+
+const USER_MESSAGE_INPUT_NODE: NodeDef = {
+  type: 'user_message_input',
+  label: 'User Message Input',
+  category: 'chat',
+  description: 'Точка входа для агентного чата. Принимает сообщение пользователя из активного треда.',
+  inputs: [],
+  outputs: [
+    {
+      id: 'message',
+      label: 'Message',
+      type: 'text',
+      required: true,
+      description: 'Текст сообщения пользователя'
+    },
+    {
+      id: 'metadata',
+      label: 'Metadata',
+      type: 'object',
+      required: false,
+      description: '{ threadId, timestamp, messageId }'
+    },
+    {
+      id: 'attachments',
+      label: 'Attachments',
+      type: 'array',
+      required: false,
+      description: 'Прикреплённые файлы (будущее)'
+    }
+  ],
+  settings: [
+    {
+      id: 'placeholder',
+      label: 'Placeholder',
+      type: 'text',
+      defaultValue: 'Введите сообщение...',
+      description: 'Текст placeholder в поле ввода чата'
+    },
+    {
+      id: 'allowAttachments',
+      label: 'Allow Attachments',
+      type: 'checkbox',
+      defaultValue: false,
+      description: 'Разрешить прикрепление файлов (v2)'
+    },
+    {
+      id: 'locked',
+      label: 'Locked (internal)',
+      type: 'checkbox',
+      defaultValue: false,
+      description: 'Скрывает поле редактирования в режиме публикации'
+    }
+  ]
+};
+
+const AGENT_RESPONSE_OUTPUT_NODE: NodeDef = {
+  type: 'agent_response_output',
+  label: 'Agent Response Output',
+  category: 'chat',
+  description: 'Финальная точка вывода. Отправляет результат в чат как финальный ответ агента.',
+  inputs: [
+    {
+      id: 'message',
+      label: 'Message',
+      type: 'any',
+      required: true,
+      description: 'Финальный ответ агента'
+    },
+    {
+      id: 'metadata',
+      label: 'Metadata',
+      type: 'object',
+      required: false,
+      description: 'Дополнительные данные'
+    }
+  ],
+  outputs: [],
+  settings: [
+    {
+      id: 'renderMode',
+      label: 'Render Mode',
+      type: 'select',
+      options: [
+        { value: 'markdown', label: 'Markdown' },
+        { value: 'plain_text', label: 'Plain Text' },
+        { value: 'code_block', label: 'Code Block' }
+      ],
+      defaultValue: 'markdown',
+      description: 'Формат отображения'
+    },
+    {
+      id: 'label',
+      label: 'Label',
+      type: 'text',
+      defaultValue: 'Ответ',
+      description: 'Метка для идентификации в шагах'
+    },
+    {
+      id: 'streamOutput',
+      label: 'Stream Output',
+      type: 'checkbox',
+      defaultValue: true,
+      description: 'Включить стриминг'
+    }
+  ]
+};
+
+const INLINE_FEEDBACK_NODE: NodeDef = {
+  type: 'inline_feedback',
+  label: 'Inline Feedback',
+  category: 'logic',
+  description: 'Приостанавливает выполнение и запрашивает оценку промежуточного результата.',
+  inputs: [
+    {
+      id: 'content',
+      label: 'Content',
+      type: 'any',
+      required: true,
+      description: 'Данные для оценки пользователем'
+    },
+    {
+      id: 'question',
+      label: 'Question',
+      type: 'text',
+      required: false,
+      description: 'Кастомный вопрос'
+    }
+  ],
+  outputs: [
+    {
+      id: 'feedback_result',
+      label: 'Feedback Result',
+      type: 'object',
+      required: true,
+      description: '{ reaction: "like"|"dislike", comment: string, timestamp: number }'
+    },
+    {
+      id: 'approved',
+      label: 'Approved',
+      type: 'boolean',
+      required: false,
+      description: 'true если "like"'
+    },
+    {
+      id: 'rejected',
+      label: 'Rejected',
+      type: 'boolean',
+      required: false,
+      description: 'true если "dislike"'
+    }
+  ],
+  settings: [
+    {
+      id: 'promptText',
+      label: 'Prompt Text',
+      type: 'text',
+      defaultValue: 'Оцените промежуточный результат',
+      description: 'Вопрос для пользователя'
+    },
+    {
+      id: 'showContent',
+      label: 'Show Content',
+      type: 'checkbox',
+      defaultValue: true,
+      description: 'Показывать ли content в inline-виджете'
+    },
+    {
+      id: 'allowComment',
+      label: 'Allow Comment',
+      type: 'checkbox',
+      defaultValue: true,
+      description: 'Показывать ли текстовое поле для комментария'
+    },
+    {
+      id: 'commentPlaceholder',
+      label: 'Comment Placeholder',
+      type: 'text',
+      defaultValue: 'Ваш комментарий...',
+      description: 'Placeholder для поля комментария'
+    },
+    {
+      id: 'timeout',
+      label: 'Timeout (seconds)',
+      type: 'number',
+      defaultValue: 0,
+      description: 'Таймаут в секундах (0 = бесконечно). При истечении — auto-skip'
+    }
+  ]
+};
+
+const CHAT_HISTORY_NODE: NodeDef = {
+  type: 'chat_history',
+  label: 'Chat History',
+  category: 'chat',
+  description: 'Читает историю сообщений текущего треда и преобразует в формат для LLM.',
+  inputs: [],
+  outputs: [
+    {
+      id: 'history_text',
+      label: 'History Text',
+      type: 'text',
+      required: true,
+      description: 'История в текстовом формате'
+    },
+    {
+      id: 'history_json',
+      label: 'History JSON',
+      type: 'array',
+      required: false,
+      description: 'Массив { role, content }'
+    },
+    {
+      id: 'last_n_messages',
+      label: 'Last N Messages',
+      type: 'array',
+      required: false,
+      description: 'Последние N сообщений'
+    }
+  ],
+  settings: [
+    {
+      id: 'limit',
+      label: 'Limit',
+      type: 'number',
+      defaultValue: 10,
+      description: 'Количество последних сообщений (0 = все)'
+    },
+    {
+      id: 'format',
+      label: 'Format',
+      type: 'select',
+      options: [
+        { value: 'text', label: 'Text' },
+        { value: 'json', label: 'JSON' },
+        { value: 'gemini_parts', label: 'Gemini Parts' }
+      ],
+      defaultValue: 'text',
+      description: 'Формат вывода'
+    },
+    {
+      id: 'includeSteps',
+      label: 'Include Steps',
+      type: 'checkbox',
+      defaultValue: false,
+      description: 'Включать ли шаги выполнения в историю'
+    },
+    {
+      id: 'roleFormat',
+      label: 'Role Format',
+      type: 'select',
+      options: [
+        { value: 'user/assistant', label: 'user/assistant' },
+        { value: 'Human/AI', label: 'Human/AI' },
+        { value: 'custom', label: 'Custom' }
+      ],
+      defaultValue: 'user/assistant'
+    }
+  ]
+};
+
+const CONTEXT_INJECTOR_NODE: NodeDef = {
+  type: 'context_injector',
+  label: 'Context Injector',
+  category: 'utilities',
+  description: 'Собирает несколько источников данных в единый контекст для LLM.',
+  inputs: [
+    {
+      id: 'user_message',
+      label: 'User Message',
+      type: 'text',
+      required: false,
+      description: 'Текущий вопрос пользователя'
+    },
+    {
+      id: 'chat_history',
+      label: 'Chat History',
+      type: 'text',
+      required: false,
+      description: 'История чата'
+    },
+    {
+      id: 'memory_context',
+      label: 'Memory Context',
+      type: 'text',
+      required: false,
+      description: 'Контекст из памяти'
+    },
+    {
+      id: 'additional_context',
+      label: 'Additional Context',
+      type: 'any',
+      required: false,
+      description: 'Произвольные данные'
+    }
+  ],
+  outputs: [
+    {
+      id: 'full_context',
+      label: 'Full Context',
+      type: 'text',
+      required: true,
+      description: 'Собранный контекст'
+    },
+    {
+      id: 'summary',
+      label: 'Summary',
+      type: 'text',
+      required: false,
+      description: 'Краткое резюме'
+    }
+  ],
+  settings: [
+    {
+      id: 'template',
+      label: 'Template',
+      type: 'textarea',
+      defaultValue: '{{user_message}}\n\n---\nHistory:\n{{chat_history}}\n\n---\nMemory:\n{{memory_context}}\n\n---\nAdditional:\n{{additional_context}}',
+      description: 'Шаблон сборки. Переменные: {{user_message}}, {{chat_history}}, {{memory_context}}, {{additional_context}}'
+    },
+    {
+      id: 'includeTimestamp',
+      label: 'Include Timestamp',
+      type: 'checkbox',
+      defaultValue: false,
+      description: 'Добавлять временные метки'
+    },
+    {
+      id: 'separator',
+      label: 'Separator',
+      type: 'text',
+      defaultValue: '\n---\n',
+      description: 'Разделитель между секциями'
+    }
+  ]
+};
+
 // REGISTRY
 // ============================================================================
 
@@ -1360,6 +1699,13 @@ export const NODE_DEFINITIONS: Record<string, NodeDef> = {
   chat_input: CHAT_INPUT_NODE,
   chat_output: CHAT_OUTPUT_NODE,
   database_hub: DATABASE_HUB_NODE,
+  
+  // Agent Chat (NEW)
+  user_message_input: USER_MESSAGE_INPUT_NODE,
+  agent_response_output: AGENT_RESPONSE_OUTPUT_NODE,
+  inline_feedback: INLINE_FEEDBACK_NODE,
+  chat_history: CHAT_HISTORY_NODE,
+  context_injector: CONTEXT_INJECTOR_NODE,
   
   // Utilities
   transform: TRANSFORM_NODE,
