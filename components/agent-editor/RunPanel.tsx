@@ -3,6 +3,8 @@ import {
   ChevronDown, ChevronUp, Clock, CheckCircle2, XCircle,
   AlertCircle, Loader2, Square, Maximize2, Minimize2
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { AgentRun } from '@/lib/agent-engine/types';
 
 interface RunPanelProps {
@@ -11,6 +13,7 @@ interface RunPanelProps {
   onStop?: () => void;
   currentNodeId?: string;
   streamingContent?: Record<string, string>; // nodeId → accumulated text
+  hasSidebar?: boolean;
 }
 
 export const RunPanel: React.FC<RunPanelProps> = ({
@@ -19,6 +22,7 @@ export const RunPanel: React.FC<RunPanelProps> = ({
   onStop,
   currentNodeId,
   streamingContent = {},
+  hasSidebar = false,
 }) => {
   const [isExpanded, setIsExpanded] = useState(true);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -69,9 +73,10 @@ export const RunPanel: React.FC<RunPanelProps> = ({
 
   return (
     <div
-      className={`absolute bottom-0 left-0 right-0 bg-[var(--surface-1)] border-t border-[var(--border)] shadow-[0_-4px_20px_rgba(0,0,0,0.3)] transition-all duration-300 z-30 ${
-        isMaximized ? 'top-0' : isExpanded ? 'h-80' : 'h-12'
+      className={`absolute bottom-0 left-0 bg-[var(--surface-1)] border-t border-[var(--border)] shadow-[0_-4px_20px_rgba(0,0,0,0.3)] transition-all duration-300 z-30 ${
+        isMaximized ? 'top-0 right-0' : isExpanded ? 'h-80' : 'h-12'
       }`}
+      style={{ right: isMaximized ? 0 : hasSidebar ? 320 : 0 }}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--border)] bg-[var(--surface-2)]">
@@ -260,8 +265,12 @@ export const RunPanel: React.FC<RunPanelProps> = ({
                 <CheckCircle2 size={12} />
                 Final Output
               </div>
-              <div className="text-sm text-[var(--text-primary)] whitespace-pre-wrap font-mono bg-[var(--surface-3)] rounded-lg p-3 max-h-48 overflow-y-auto leading-relaxed">
-                {typeof finalOutput === 'string' ? finalOutput : JSON.stringify(finalOutput, null, 2)}
+              <div className="text-sm text-[var(--text-primary)] bg-[var(--surface-3)] rounded-lg p-4 max-h-96 overflow-y-auto leading-relaxed prose prose-invert prose-sm max-w-none">
+                {typeof finalOutput === 'string' ? (
+                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{finalOutput}</ReactMarkdown>
+                ) : (
+                   <pre className="font-mono">{JSON.stringify(finalOutput, null, 2)}</pre>
+                )}
               </div>
             </div>
           )}

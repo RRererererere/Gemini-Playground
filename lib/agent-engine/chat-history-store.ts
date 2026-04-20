@@ -5,9 +5,14 @@ import { nanoid } from 'nanoid';
 
 export interface ChatHistoryMessage {
   id: string;           // nanoid
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'function';
   content: string;
   timestamp: number;
+  functionCall?: {      // for tool/function call messages
+    name: string;
+    args?: Record<string, any>;
+    result?: string;
+  };
   metadata?: Record<string, any>; // произвольные данные
 }
 
@@ -167,6 +172,46 @@ export function toGeminiMessages(
     role: m.role === 'assistant' ? 'model' : m.role,
     parts: [{ text: m.content }],
   }));
+}
+
+/**
+ * Удалить сообщение
+ */
+export function deleteMessage(chatId: string, storeId: string, messageId: string): void {
+  const store = getChatHistoryStore(chatId, storeId);
+  store.messages = store.messages.filter(m => m.id !== messageId);
+  saveChatHistoryStore(store);
+}
+
+/**
+ * Обновить текст сообщения
+ */
+export function updateMessageText(chatId: string, storeId: string, messageId: string, newContent: string): void {
+  const store = getChatHistoryStore(chatId, storeId);
+  const msg = store.messages.find(m => m.id === messageId);
+  if (msg) {
+    msg.content = newContent;
+    saveChatHistoryStore(store);
+  }
+}
+
+/**
+ * Переместить сообщение вверх или вниз
+ */
+export function moveMessage(chatId: string, storeId: string, messageId: string, direction: 'up' | 'down'): void {
+  const store = getChatHistoryStore(chatId, storeId);
+  const index = store.messages.findIndex(m => m.id === messageId);
+  if (index === -1) return;
+
+  const newIndex = direction === 'up' ? index - 1 : index + 1;
+  if (newIndex < 0 || newIndex >= store.messages.length) return;
+
+  // Swap
+  const temp = store.messages[index];
+  store.messages[index] = store.messages[newIndex];
+  store.messages[newIndex] = temp;
+
+  saveChatHistoryStore(store);
 }
 
 /**

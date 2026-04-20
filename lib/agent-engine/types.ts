@@ -50,6 +50,7 @@ export interface AgentRun {
   input?: unknown;
   output?: unknown;
   nodeResults: NodeRunResult[];
+  results: Record<string, NodeRunResult>; // Для удобного доступа по ID
   chatId?: string; // If launched from chat
 }
 
@@ -69,7 +70,12 @@ export interface ExecutorOptions {
   onNodeStart?: (nodeId: string) => void;
   onNodeComplete?: (nodeId: string, result: unknown) => void;
   onNodeError?: (nodeId: string, error: Error) => void;
+  onNodeSkip?: (nodeId: string) => void;   // BUG-09: callback для пропущенных нод
   onRunComplete?: (run: AgentRun) => void;
   // Стриминг LLM-ответов в реальном времени
   onNodeStream?: (nodeId: string, chunk: string, accumulated: string) => void;
+  // BUG-02: callback для получения сообщения из чата / feedback
+  onChatInputRequest?: (source: string, options?: Record<string, any>) => Promise<any>;
+  // BUG-03: callback для отправки сообщения в чат
+  onChatOutput?: (message: string, target: string) => Promise<void>;
 }

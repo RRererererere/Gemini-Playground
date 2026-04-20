@@ -22,7 +22,16 @@ export function getGraphs(): AgentGraph[] {
   try {
     const raw = localStorage.getItem(GRAPHS_KEY);
     if (!raw) return [];
-    return JSON.parse(raw) as AgentGraph[];
+    const graphs = JSON.parse(raw) as AgentGraph[];
+    // Dynamic up-migration
+    return graphs.map(g => ({
+      ...g,
+      nodes: g.nodes?.map(n => {
+        if (n.type === 'input') return { ...n, type: 'agent_input' };
+        if (n.type === 'output') return { ...n, type: 'agent_output' };
+        return n;
+      }) || []
+    }));
   } catch {
     return [];
   }
@@ -90,7 +99,16 @@ export function exportGraph(graph: AgentGraph): string {
  * Импортировать граф из JSON
  */
 export function importGraph(jsonString: string): AgentGraph {
-  const graph = JSON.parse(jsonString) as AgentGraph;
+  let graph = JSON.parse(jsonString) as AgentGraph;
+  
+  // Migrate nodes
+  if (graph.nodes) {
+    graph.nodes = graph.nodes.map(n => {
+      if (n.type === 'input') return { ...n, type: 'agent_input' };
+      if (n.type === 'output') return { ...n, type: 'agent_output' };
+      return n;
+    });
+  }
   
   // Генерируем новый ID при импорте
   const newGraph: AgentGraph = {
@@ -243,7 +261,7 @@ export function getGlobalGraphs(): AgentGraph[] {
 /**
  * Создать пустой граф
  */
-export function createEmptyGraph(name: string = 'Новый агент', chatId?: string): AgentGraph {
+export function createEmptyGraph(name: string = 'New Agent', chatId?: string): AgentGraph {
   const graph: AgentGraph = {
     id: `graph_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
     name,
@@ -254,15 +272,15 @@ export function createEmptyGraph(name: string = 'Новый агент', chatId?
     nodes: [
       {
         id: 'input_1',
-        type: 'input',
+        type: 'agent_input',
         position: { x: 100, y: 200 },
-        data: { label: 'Вход', type: 'input', inputs: {}, outputs: {}, settings: {} },
+        data: { label: 'Input', type: 'agent_input', inputs: {}, outputs: {}, settings: {} },
       },
       {
         id: 'output_1',
-        type: 'output',
+        type: 'agent_output',
         position: { x: 600, y: 200 },
-        data: { label: 'Выход', type: 'output', inputs: {}, outputs: {}, settings: {} },
+        data: { label: 'Output', type: 'agent_output', inputs: {}, outputs: {}, settings: {} },
       },
     ],
     edges: [],

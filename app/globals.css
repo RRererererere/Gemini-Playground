@@ -619,24 +619,159 @@ input[type='range']::-moz-range-thumb {
 
 /* ==================== AGENT NODE EDITOR ==================== */
 
-/* Handles — cursor */
-.react-flow__handle {
-  cursor: crosshair !important;
+/* ── Design Tokens ─────────────────────────────────────────── */
+:root {
+  /* Node surfaces */
+  --node-bg: rgba(14, 14, 18, 0.96);
+  --node-bg-hover: rgba(20, 20, 26, 0.98);
+  --node-border: rgba(255, 255, 255, 0.07);
+  --node-border-hover: rgba(255, 255, 255, 0.14);
+  --node-border-selected: rgba(99, 102, 241, 0.6);
+  --node-shadow: 0 2px 16px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255,255,255,0.04);
+  --node-shadow-hover: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255,255,255,0.08);
+  --node-shadow-selected: 0 0 0 2px rgba(99,102,241,0.4), 0 8px 32px rgba(0,0,0,0.5);
+  --node-radius: 14px;
+  --node-header-height: 36px;
+
+  /* Port colors — muted, professional palette */
+  --port-text: #818cf8;
+  --port-number: #34d399;
+  --port-boolean: #f472b6;
+  --port-object: #fb923c;
+  --port-array: #fbbf24;
+  --port-any: #94a3b8;
+
+  /* Category accent colors — subtle gradients */
+  --cat-ai: #6366f1;
+  --cat-logic: #f59e0b;
+  --cat-memory: #10b981;
+  --cat-chat: #8b5cf6;
+  --cat-utility: #64748b;
+  --cat-io: #3b82f6;
 }
 
-/* Hover — scale up handle */
-.react-flow__handle:hover {
-  transform: translateY(-50%) scale(1.5) !important;
-  transition: transform 0.12s ease !important;
-}
-
-/* ReactFlow node — overflow visible для выступающих handles */
+/* ── Node Structure ────────────────────────────────────────── */
 .react-flow__node {
   overflow: visible !important;
 }
 
-/* Edge - выделение при клике */
+/* ── Handles ───────────────────────────────────────────────── */
+.react-flow__handle {
+  cursor: crosshair !important;
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.15s ease,
+              background-color 0.15s ease !important;
+}
+
+.react-flow__handle:hover {
+  transform: translateY(-50%) scale(1.35) !important;
+}
+
+/* ── Edges ─────────────────────────────────────────────────── */
+.react-flow__edge-path {
+  transition: stroke 0.2s ease, stroke-width 0.2s ease !important;
+}
+
 .react-flow__edge.selected .react-flow__edge-path {
-  stroke-opacity: 1 !important;
-  filter: drop-shadow(0 0 4px rgba(99,102,241,0.8));
+  stroke: #818cf8 !important;
+  stroke-width: 2.5 !important;
+  filter: drop-shadow(0 0 6px rgba(99,102,241,0.5));
+}
+
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: rgba(129, 140, 248, 0.7) !important;
+  stroke-width: 2.5 !important;
+}
+
+/* ── Connection line ───────────────────────────────────────── */
+.react-flow__connection-path {
+  stroke: #818cf8 !important;
+  stroke-width: 2 !important;
+  stroke-dasharray: 6 4 !important;
+  animation: connectionDash 0.4s linear infinite !important;
+}
+
+/* ── Controls ──────────────────────────────────────────────── */
+.react-flow__controls {
+  border-radius: 10px !important;
+  overflow: hidden !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4) !important;
+}
+
+.react-flow__controls-button {
+  background: var(--surface-2) !important;
+  border-bottom: 1px solid var(--border) !important;
+  fill: var(--text-muted) !important;
+  width: 32px !important;
+  height: 32px !important;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--surface-3) !important;
+  fill: var(--text-primary) !important;
+}
+
+/* ── MiniMap ───────────────────────────────────────────────── */
+.react-flow__minimap {
+  border-radius: 10px !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4) !important;
+  overflow: hidden !important;
+}
+
+/* ── Execution Animations ──────────────────────────────────── */
+@keyframes flowPulse {
+  0% { stroke-dashoffset: 24; }
+  100% { stroke-dashoffset: 0; }
+}
+
+@keyframes connectionDash {
+  0% { stroke-dashoffset: 10; }
+  100% { stroke-dashoffset: 0; }
+}
+
+@keyframes nodeRunning {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(99,102,241,0.3), 0 8px 32px rgba(0,0,0,0.5); }
+  50% { box-shadow: 0 0 0 3px rgba(99,102,241,0.6), 0 0 20px rgba(99,102,241,0.15), 0 8px 32px rgba(0,0,0,0.5); }
+}
+
+@keyframes nodeSuccess {
+  0% { box-shadow: 0 0 0 2px rgba(16,185,129,0.6), 0 0 20px rgba(16,185,129,0.2); }
+  100% { box-shadow: var(--node-shadow); }
+}
+
+@keyframes statusPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.edge-executing .react-flow__edge-path {
+  stroke: #818cf8 !important;
+  stroke-width: 2.5 !important;
+  stroke-dasharray: 8 6 !important;
+  animation: flowPulse 0.5s linear infinite !important;
+}
+
+/* ── Node status classes ───────────────────────────────────── */
+.agent-node--running {
+  animation: nodeRunning 1.5s ease-in-out infinite;
+}
+
+.agent-node--success {
+  animation: nodeSuccess 0.8s ease-out forwards;
+}
+
+.agent-node--error {
+  box-shadow: 0 0 0 2px rgba(239,68,68,0.5), 0 0 16px rgba(239,68,68,0.15), 0 8px 32px rgba(0,0,0,0.5) !important;
+}
+
+.agent-node--skipped {
+  opacity: 0.45;
+  filter: saturate(0.3);
+}
+
+/* ── Background dots ───────────────────────────────────────── */
+.react-flow__background pattern circle {
+  fill: rgba(255, 255, 255, 0.035) !important;
 }

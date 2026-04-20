@@ -2,68 +2,77 @@ import React, { useState } from 'react';
 import { 
   Cpu, Brain, Wrench, GitBranch, LogIn, LogOut,
   Shuffle, Merge as MergeIcon, Split, Repeat,
-  MessageSquare, Database, Code, Bug, Globe, Search
+  MessageSquare, Database, Code, Bug, Globe, Search,
+  FileText, Braces, Timer, Clock, ChevronDown, Zap,
+  HardDrive, ThumbsUp
 } from 'lucide-react';
-import { NODE_DEFINITIONS, getPortColor } from '@/lib/agent-engine/node-definitions';
+import { NODE_DEFINITIONS } from '@/lib/agent-engine/node-definitions';
 
 const NODE_CATEGORIES = [
   {
-    name: 'Core',
+    name: 'Основные',
     nodes: [
-      { type: 'agent_input', label: 'Input', icon: <LogIn size={16} />, description: 'Entry point for data' },
-      { type: 'agent_output', label: 'Output', icon: <LogOut size={16} />, description: 'Final result' },
+      { type: 'agent_input', label: 'Вход', icon: <LogIn size={14} />, description: 'Точка входа данных' },
+      { type: 'agent_output', label: 'Выход', icon: <LogOut size={14} />, description: 'Финальный результат' },
     ]
   },
   {
-    name: 'AI Models',
+    name: 'ИИ Модели',
     nodes: [
-      { type: 'llm', label: 'LLM Node', icon: <Cpu size={16} />, description: 'Call language model' },
+      { type: 'llm', label: 'Нейросеть (LLM)', icon: <Cpu size={14} />, description: 'Вызвать языковую модель' },
+      { type: 'subagent', label: 'Саб-Агент', icon: <Cpu size={14} />, description: 'Запустить другого агента' },
     ]
   },
   {
-    name: 'Data',
+    name: 'Данные',
     nodes: [
-      { type: 'transform', label: 'Transform', icon: <Shuffle size={16} />, description: 'Transform data' },
-      { type: 'merge', label: 'Merge', icon: <MergeIcon size={16} />, description: 'Combine multiple inputs' },
-      { type: 'split', label: 'Split', icon: <Split size={16} />, description: 'Split data into parts' },
+      { type: 'transform', label: 'Трансформация', icon: <Shuffle size={14} />, description: 'Преобразовать данные' },
+      { type: 'merge', label: 'Объединение', icon: <MergeIcon size={14} />, description: 'Объединить входы' },
+      { type: 'split', label: 'Разделение', icon: <Split size={14} />, description: 'Разделить данные' },
     ]
   },
   {
-    name: 'Skills',
+    name: 'Навыки',
     nodes: [
-      { type: 'skill', label: 'Skill Call', icon: <Wrench size={16} />, description: 'Execute a skill' },
+      { type: 'skill', label: 'Навык', icon: <Wrench size={14} />, description: 'Выполнить навык' },
     ]
   },
   {
-    name: 'Memory',
+    name: 'Память',
     nodes: [
-      { type: 'memory_read', label: 'Memory Read', icon: <Database size={16} />, description: 'Read from memory' },
-      { type: 'memory_write', label: 'Memory Write', icon: <Database size={16} />, description: 'Write to memory' },
-      { type: 'memory', label: 'Memory Ops', icon: <Brain size={16} />, description: 'Memory operations' },
+      { type: 'memory_read', label: 'Чтение памяти', icon: <Database size={14} />, description: 'Читать из памяти' },
+      { type: 'memory_write', label: 'Запись в память', icon: <Database size={14} />, description: 'Записать в память' },
+      { type: 'global_db', label: 'Глобальная БД', icon: <HardDrive size={14} />, description: 'Key-Value хранилище' },
     ]
   },
   {
-    name: 'Logic',
+    name: 'Логика',
     nodes: [
-      { type: 'condition', label: 'Condition', icon: <GitBranch size={16} />, description: 'If/else branching' },
-      { type: 'router', label: 'Router', icon: <GitBranch size={16} />, description: 'Multi-way routing' },
-      { type: 'loop', label: 'Loop', icon: <Repeat size={16} />, description: 'Iterate over items' },
+      { type: 'condition', label: 'Условие', icon: <GitBranch size={14} />, description: 'If/else ветвление' },
+      { type: 'router', label: 'Роутер', icon: <GitBranch size={14} />, description: 'Мульти-маршрутизация' },
+      { type: 'loop', label: 'Цикл', icon: <Repeat size={14} />, description: 'Итерация по массиву' },
+      { type: 'feedback', label: 'Обратная связь', icon: <ThumbsUp size={14} />, description: 'Лайк/дизлайк от пользователя' },
     ]
   },
   {
-    name: 'Chat',
+    name: 'Чат',
     nodes: [
-      { type: 'chat_input', label: 'Chat Input', icon: <MessageSquare size={16} />, description: 'Get chat messages' },
-      { type: 'chat_output', label: 'Chat Output', icon: <MessageSquare size={16} />, description: 'Send to chat' },
+      { type: 'chat_input', label: 'Чат Ввод', icon: <MessageSquare size={14} />, description: 'Получить сообщение' },
+      { type: 'chat_output', label: 'Чат Вывод', icon: <MessageSquare size={14} />, description: 'Отправить в чат' },
+      { type: 'database_hub', label: 'Database Hub', icon: <Database size={14} />, description: 'Хранилище истории чата' },
     ]
   },
   {
-    name: 'Utilities',
+    name: 'Утилиты',
     nodes: [
-      { type: 'text', label: 'Text', icon: <MessageSquare size={16} />, description: 'Static text value' },
-      { type: 'code', label: 'Code', icon: <Code size={16} />, description: 'Custom JavaScript' },
-      { type: 'debug', label: 'Debug', icon: <Bug size={16} />, description: 'Debug point' },
-      { type: 'http_request', label: 'HTTP Request', icon: <Globe size={16} />, description: 'Make HTTP calls' },
+      { type: 'text', label: 'Текст', icon: <FileText size={14} />, description: 'Статический текст' },
+      { type: 'template', label: 'Шаблон', icon: <FileText size={14} />, description: 'Строковый шаблон' },
+      { type: 'variable', label: 'Переменная', icon: <Braces size={14} />, description: 'Хранить значение' },
+      { type: 'json_extract', label: 'JSON Extract', icon: <Search size={14} />, description: 'Извлечь по пути' },
+      { type: 'code', label: 'Код', icon: <Code size={14} />, description: 'Кастомный JavaScript' },
+      { type: 'debug', label: 'Дебаг', icon: <Bug size={14} />, description: 'Отладочный вывод' },
+      { type: 'http_request', label: 'HTTP Запрос', icon: <Globe size={14} />, description: 'HTTP вызов' },
+      { type: 'delay', label: 'Задержка', icon: <Timer size={14} />, description: 'Ждать N мс' },
     ]
   },
 ];
@@ -101,92 +110,64 @@ export const AgentEditorSidebar = () => {
   })).filter(category => category.nodes.length > 0);
 
   return (
-    <div className="w-64 bg-[var(--surface-1)] border-r border-[var(--border)] flex flex-col h-full">
-      <div className="p-4 border-b border-[var(--border)]">
-        <h3 className="text-sm font-semibold text-[var(--text-primary)] mb-3">Node Library</h3>
-        <div className="relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
+    <div className="w-[240px] bg-[var(--surface-1)] border-r border-[var(--border)] flex flex-col h-full z-20 overflow-hidden shadow-xl">
+      {/* Header */}
+      <div className="p-4 border-b border-[var(--border)] bg-[var(--surface-2)]/50">
+        <h3 className="text-xs font-bold text-[var(--text-primary)] mb-3 flex items-center gap-2 uppercase tracking-widest">
+          <Zap size={14} className="text-indigo-400 fill-indigo-400/20" />
+          Nodes Library
+        </h3>
+        <div className="relative group">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)] group-focus-within:text-indigo-400 transition-colors" />
           <input
             type="text"
             placeholder="Search nodes..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs bg-[var(--surface-3)] border border-[var(--border)] rounded-md text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+            className="w-full pl-9 pr-3 py-2 text-xs bg-[var(--surface-3)] border border-[var(--border)] rounded-xl text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500/50 transition-all placeholder:text-[var(--text-dim)]/50 font-medium"
           />
         </div>
       </div>
       
-      <div className="flex-1 overflow-y-auto p-3 space-y-2">
+      {/* Categories */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
         {filteredCategories.map((category) => (
-          <div key={category.name} className="space-y-1">
+          <div key={category.name} className="mb-2">
             <button
               onClick={() => toggleCategory(category.name)}
-              className="w-full flex items-center justify-between px-2 py-1.5 text-xs font-semibold text-[var(--text-dim)] hover:text-[var(--text-primary)] uppercase tracking-wider transition-colors"
+              className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-[var(--surface-3)]/50 transition-colors group"
             >
-              <span>{category.name}</span>
-              <span className="text-[10px]">{expandedCategories.has(category.name) ? '▼' : '▶'}</span>
+              <span className="text-[10px] font-bold text-[var(--text-dim)] uppercase tracking-wider group-hover:text-[var(--text-primary)] transition-colors">
+                {category.name}
+              </span>
+              <ChevronDown
+                size={14}
+                className={`text-[var(--text-dim)] transition-transform duration-200 ${expandedCategories.has(category.name) ? '' : '-rotate-90'}`}
+              />
             </button>
             
             {expandedCategories.has(category.name) && (
-              <div className="space-y-1.5 pl-1">
-                {category.nodes.map((node) => {
-                  const nodeDef = NODE_DEFINITIONS[node.type];
-                  
-                  return (
-                    <div
-                      key={node.type}
-                      className="group flex flex-col gap-2 p-2.5 rounded-lg border border-[var(--border)] bg-[var(--surface-2)] hover:bg-[var(--surface-3)] hover:border-indigo-500/30 cursor-grab active:cursor-grabbing transition-all"
-                      onDragStart={(e) => onDragStart(e, node.type, node.label)}
-                      draggable
-                    >
-                      <div className="flex items-start gap-2">
-                        <div className="text-[var(--accent)] mt-0.5 group-hover:text-indigo-400 transition-colors">{node.icon}</div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs font-medium text-[var(--text-primary)] truncate">{node.label}</div>
-                          <div className="text-[10px] text-[var(--text-dim)] line-clamp-2 mt-0.5">{node.description}</div>
-                        </div>
-                      </div>
-                      
-                      {/* Port Preview */}
-                      {nodeDef && (nodeDef.inputs.length > 0 || nodeDef.outputs.length > 0) && (
-                        <div className="flex items-center justify-between text-[9px] text-[var(--text-dim)] pt-2 border-t border-[var(--border)]">
-                          {/* Inputs */}
-                          <div className="flex items-center gap-1">
-                            {nodeDef.inputs.slice(0, 3).map(port => (
-                              <div 
-                                key={port.id}
-                                className="w-1.5 h-1.5 rounded-full"
-                                style={{ backgroundColor: getPortColor(port.type) }}
-                                title={`${port.label} (${port.type})`}
-                              />
-                            ))}
-                            {nodeDef.inputs.length > 3 && (
-                              <span className="text-[8px]">+{nodeDef.inputs.length - 3}</span>
-                            )}
-                          </div>
-                          
-                          {/* Arrow */}
-                          <div className="text-[8px] text-slate-600">→</div>
-                          
-                          {/* Outputs */}
-                          <div className="flex items-center gap-1">
-                            {nodeDef.outputs.slice(0, 3).map(port => (
-                              <div 
-                                key={port.id}
-                                className="w-1.5 h-1.5 rounded-full"
-                                style={{ backgroundColor: getPortColor(port.type) }}
-                                title={`${port.label} (${port.type})`}
-                              />
-                            ))}
-                            {nodeDef.outputs.length > 3 && (
-                              <span className="text-[8px]">+{nodeDef.outputs.length - 3}</span>
-                            )}
-                          </div>
-                        </div>
-                      )}
+              <div className="mt-1 flex flex-col gap-1 px-1">
+                {category.nodes.map((node) => (
+                  <div
+                    key={node.type}
+                    onDragStart={(e) => onDragStart(e, node.type, node.label)}
+                    draggable
+                    className="flex items-center gap-3 p-2.5 rounded-xl border border-transparent bg-[var(--surface-2)]/40 cursor-grab active:cursor-grabbing hover:bg-[var(--surface-3)] hover:border-indigo-500/20 hover:shadow-lg hover:shadow-indigo-500/5 transition-all group overflow-hidden"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-[var(--surface-3)] border border-[var(--border)] flex items-center justify-center flex-shrink-0 group-hover:bg-indigo-500/10 group-hover:border-indigo-500/30 transition-colors">
+                      <span className="text-[var(--text-dim)] group-hover:text-indigo-400 transition-colors">{node.icon}</span>
                     </div>
-                  );
-                })}
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[11px] font-bold text-[var(--text-primary)] truncate">
+                        {node.label}
+                      </div>
+                      <div className="text-[9px] text-[var(--text-dim)] truncate opacity-70">
+                        {node.description}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

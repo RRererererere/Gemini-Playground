@@ -13,8 +13,11 @@ export interface LLMCallOptions {
   onChunk?: (text: string) => void;
   onThinking?: (thinking: string) => void;
   onToolCall?: (toolCall: any) => void;
+  history?: Array<{role: string, parts: Array<{text: string}>}>;
   // Мультимодальность: части сообщения (текст + изображения)
-  parts?: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }>;
+  parts?: Array<{ text: string } | { inlineData: { mimeType: string; data: string } } | { functionResponse: any }>;
+  // Инструменты для вызовов функций (Function Calling)
+  tools?: any[];
 }
 
 export interface LLMResponse {
@@ -39,6 +42,8 @@ export async function callLLM(options: LLMCallOptions): Promise<LLMResponse> {
     onChunk,
     onThinking,
     onToolCall,
+    history,
+    tools, // Достаем tools из options
   } = options;
 
   const response: LLMResponse = {
@@ -48,27 +53,31 @@ export async function callLLM(options: LLMCallOptions): Promise<LLMResponse> {
   };
 
   try {
-    // Формируем parts: если переданы явно — используем их, иначе строим из prompt
     const messageParts = options.parts && options.parts.length > 0
       ? options.parts
       : [{ text: prompt }];
+
+    // BUG-01: если есть history — подставляем перед текущим сообщением
+    const messages = [
+      ...(history && history.length > 0 ? history : []),
+      {
+        role: 'user',
+        parts: messageParts,
+      },
+    ];
 
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        messages: [
-          {
-            role: 'user',
-            parts: messageParts,
-          },
-        ],
+        messages,
         model,
         systemInstruction: systemPrompt,
         temperature,
         maxOutputTokens: maxTokens,
         apiKey,
-        includeThoughts: false, // Для агентов не нужны мысли по умолчанию
+        includeThoughts: false,
+        tools, // Передаем tools на сервер
       }),
     });
 

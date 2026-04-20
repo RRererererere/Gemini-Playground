@@ -1,11 +1,49 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Node, Edge } from '@xyflow/react';
-import { X, Settings2, Info } from 'lucide-react';
+import { X, Settings2, Info, ChevronDown, Plug, SlidersHorizontal, Tag } from 'lucide-react';
 import { UniversalModel, ActiveModel, ApiKeyEntry } from '@/types';
 import { NODE_DEFINITIONS } from '@/lib/agent-engine/node-definitions';
 import { loadApiKeys } from '@/lib/apiKeyManager';
 import { HybridField } from './HybridField';
 import { usePortConnection } from './usePortConnection';
+
+// ── Debounced Inputs ────────────────────────────────────────
+
+const DebouncedInput = ({ value: initialValue, onChange, ...props }: any) => {
+  const [value, setValue] = useState(initialValue);
+
+  // Update local state and trigger parent change
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setValue(e.target.value);
+    onChange(e.target.value);
+  };
+
+  // Sync if parent updates externally
+  useEffect(() => {
+    if (initialValue !== value) {
+      setValue(initialValue);
+    }
+  }, [initialValue]);
+
+  return <input value={value} onChange={handleChange} {...props} />;
+};
+
+const DebouncedTextarea = ({ value: initialValue, onChange, ...props }: any) => {
+  const [value, setValue] = useState(initialValue);
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setValue(e.target.value);
+    onChange(e.target.value);
+  };
+
+  useEffect(() => {
+    if (initialValue !== value) {
+      setValue(initialValue);
+    }
+  }, [initialValue]);
+
+  return <textarea value={value} onChange={handleChange} {...props} />;
+};
 
 interface AgentEditorPropertiesProps {
   node: Node | null;
@@ -16,6 +54,75 @@ interface AgentEditorPropertiesProps {
   activeModel?: ActiveModel | null;
   apiKeys?: Record<string, ApiKeyEntry[]>;
 }
+
+// ── Accordion Section ────────────────────────────────────────
+
+const AccordionSection = ({
+  title,
+  icon,
+  defaultOpen = true,
+  badge,
+  children,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  defaultOpen?: boolean;
+  badge?: string | number;
+  children: React.ReactNode;
+}) => {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border)' }}>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '10px 0',
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          color: 'var(--text-primary)',
+        }}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', color: '#64748b' }}>{icon}</span>
+        <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.03em', textTransform: 'uppercase', flex: 1, textAlign: 'left' }}>
+          {title}
+        </span>
+        {badge !== undefined && (
+          <span style={{
+            fontSize: 9,
+            fontWeight: 600,
+            background: 'rgba(99,102,241,0.1)',
+            color: '#818cf8',
+            padding: '1px 6px',
+            borderRadius: 4,
+          }}>
+            {badge}
+          </span>
+        )}
+        <ChevronDown
+          size={14}
+          style={{
+            color: '#64748b',
+            transition: 'transform 0.2s ease',
+            transform: isOpen ? 'rotate(0deg)' : 'rotate(-90deg)',
+          }}
+        />
+      </button>
+      {isOpen && (
+        <div style={{ paddingBottom: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Main Component ───────────────────────────────────────────
 
 export const AgentEditorProperties: React.FC<AgentEditorPropertiesProps> = ({ 
   node, 
@@ -56,7 +163,7 @@ export const AgentEditorProperties: React.FC<AgentEditorPropertiesProps> = ({
         ...(node.data.settings as Record<string, any> || {}),
         [settingId]: value
       },
-      // Для обратной совместимости сохраняем и в корне data
+      // Backward compatibility — also save to data root
       [settingId]: value
     });
   };
@@ -66,32 +173,37 @@ export const AgentEditorProperties: React.FC<AgentEditorPropertiesProps> = ({
                         (node.data as Record<string, any>)?.[setting.id] ?? 
                         setting.defaultValue;
 
+    const inputClass = "w-full bg-[var(--surface-3)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-indigo-500/40 transition-all";
+
+    // Wrapper functions for inputs
+    const handleDebouncedChange = (val: string) => {
+      onChange(setting.id, val);
+    };
+
     switch (setting.type) {
-      case 'select':
-        // Динамические options для model и apiKeyIndex
+      case 'select': {
         let options = setting.options || [];
         
-        if (setting.id === 'model' && allModels && allModels.length > 0) {
-          // Использовать реальные модели из allModels
-          options = allModels.map((model: any) => ({
-            value: model.name || model.id,
-            label: model.displayName || model.name || model.id
-          }));
-          console.log('[AgentEditorProperties] Model options:', options);
+        if (setting.id === 'model') {
+          if (allModels && allModels.length > 0) {
+            options = allModels.map((model: any) => ({
+              value: model.name || model.id,
+              label: model.displayName || model.name || model.id
+            }));
+          }
         } else if (setting.id === 'apiKeyIndex') {
-          // Читаем API ключи из правильного источника — apiKeyManager (gemini_api_keys)
           try {
             const googleKeys = loadApiKeys('google');
             if (googleKeys.length > 0) {
               options = googleKeys.map((entry: ApiKeyEntry, index: number) => ({
                 value: String(index),
-                label: `${entry.label || 'Key ' + (index + 1)} (${(entry.key || '').substring(0, 8)}...)`
+                label: `${entry.label || 'Key ' + (index + 1)} (${(entry.key || '').substring(0, 8)}…)`
               }));
             } else {
-              options = [{ value: '0', label: '⚠️ No API keys — add in Settings' }];
+              options = [{ value: '0', label: 'No API keys — add in Settings' }];
             }
-          } catch (e) {
-            options = [{ value: '0', label: '⚠️ No API keys — add in Settings' }];
+          } catch {
+            options = [{ value: '0', label: 'No API keys — add in Settings' }];
           }
         }
         
@@ -99,27 +211,31 @@ export const AgentEditorProperties: React.FC<AgentEditorPropertiesProps> = ({
           <select
             value={currentValue}
             onChange={(e) => onChange(setting.id, e.target.value)}
-            className="w-full bg-[var(--surface-3)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+            className={inputClass}
           >
             {options.map((opt: any) => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
         );
+      }
 
       case 'number':
         if (setting.id === 'temperature') {
-          // Слайдер для temperature
           return (
-            <input
-              type="range"
-              min="0"
-              max="2"
-              step="0.1"
-              value={currentValue}
-              onChange={(e) => onChange(setting.id, Number(e.target.value))}
-              className="w-full accent-indigo-500"
-            />
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min="0"
+                max="2"
+                step="0.1"
+                value={currentValue}
+                onChange={(e) => onChange(setting.id, Number(e.target.value))}
+                className="flex-1 accent-indigo-500"
+                style={{ height: 4 }}
+              />
+              <span className="text-[10px] font-mono text-[var(--text-dim)] w-6 text-right">{currentValue}</span>
+            </div>
           );
         }
         return (
@@ -128,20 +244,22 @@ export const AgentEditorProperties: React.FC<AgentEditorPropertiesProps> = ({
             value={currentValue}
             onChange={(e) => onChange(setting.id, Number(e.target.value))}
             placeholder={setting.placeholder}
-            className="w-full bg-[var(--surface-3)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+            className={inputClass}
           />
         );
 
       case 'checkbox':
         return (
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={currentValue}
-              onChange={(e) => onChange(setting.id, e.target.checked)}
-              className="w-4 h-4 rounded border-[var(--border)] bg-[var(--surface-3)] text-indigo-500 focus:ring-2 focus:ring-indigo-500/50"
-            />
-            <span className="text-sm text-[var(--text-dim)]">
+          <label className="flex items-center gap-2 cursor-pointer group">
+            <div className="relative">
+              <input
+                type="checkbox"
+                checked={currentValue}
+                onChange={(e) => onChange(setting.id, e.target.checked)}
+                className="w-4 h-4 rounded border-[var(--border)] bg-[var(--surface-3)] text-indigo-500 focus:ring-1 focus:ring-indigo-500/40"
+              />
+            </div>
+            <span className="text-xs text-[var(--text-dim)] group-hover:text-[var(--text-primary)] transition-colors">
               {setting.description || setting.label}
             </span>
           </label>
@@ -149,103 +267,146 @@ export const AgentEditorProperties: React.FC<AgentEditorPropertiesProps> = ({
 
       case 'textarea':
         return (
-          <textarea
-            value={currentValue}
-            onChange={(e) => onChange(setting.id, e.target.value)}
+          <DebouncedTextarea
+            value={currentValue || ''}
+            onChange={handleDebouncedChange}
             placeholder={setting.placeholder}
-            className="w-full h-24 bg-[var(--surface-3)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none font-mono"
+            className={`${inputClass} h-20 resize-none font-mono`}
           />
         );
 
       case 'json':
         return (
-          <textarea
-            value={typeof currentValue === 'string' ? currentValue : JSON.stringify(currentValue, null, 2)}
-            onChange={(e) => {
+          <DebouncedTextarea
+            value={typeof currentValue === 'string' ? currentValue : JSON.stringify(currentValue, null, 2) || ''}
+            onChange={(val: string) => {
               try {
-                const parsed = JSON.parse(e.target.value);
+                const parsed = JSON.parse(val);
                 onChange(setting.id, parsed);
               } catch {
-                onChange(setting.id, e.target.value);
+                onChange(setting.id, val);
               }
             }}
             placeholder={setting.placeholder || '{}'}
-            className="w-full h-32 bg-[var(--surface-3)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none font-mono"
+            className={`${inputClass} h-28 resize-none font-mono`}
           />
         );
 
       case 'text':
       default:
         return (
-          <input
-            type="text"
-            value={currentValue}
-            onChange={(e) => onChange(setting.id, e.target.value)}
+          <DebouncedInput
+            value={currentValue || ''}
+            onChange={handleDebouncedChange}
             placeholder={setting.placeholder}
-            className="w-full bg-[var(--surface-3)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+            className={inputClass}
           />
         );
     }
   };
 
-  const renderLegacyFields = (node: Node, onChange: any, allModels: any[], activeModel: any, apiKeys: any) => {
-    // Fallback для старых нод без NODE_DEFINITIONS
-    return (
-      <div className="space-y-3 border-t border-[var(--border)] pt-4">
-        <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded p-2">
-          ⚠️ Legacy node - update to use NODE_DEFINITIONS
-        </div>
-      </div>
-    );
-  };
-
   return (
-    <div className="w-80 bg-[var(--surface-1)] border-l border-[var(--border)] flex flex-col h-full shadow-[-4px_0_15px_rgba(0,0,0,0.1)] z-20 absolute right-0 top-0 bottom-0">
-      <div className="flex items-center justify-between p-4 border-b border-[var(--border)] bg-[var(--surface-2)]">
-        <h3 className="text-sm font-semibold text-[var(--text-primary)] flex items-center gap-2">
-          <Settings2 size={16} className="text-indigo-400" />
+    <div
+      className="bg-[var(--surface-1)] border-l border-[var(--border)] flex flex-col h-full z-20 absolute right-0 top-0 bottom-0"
+      style={{ width: 320, boxShadow: '-4px 0 20px rgba(0,0,0,0.15)' }}
+    >
+      {/* Header */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '12px 16px',
+        borderBottom: '1px solid var(--border)',
+        background: 'var(--surface-2)',
+      }}>
+        <h3 style={{
+          fontSize: 12,
+          fontWeight: 600,
+          color: 'var(--text-primary)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          margin: 0,
+        }}>
+          <Settings2 size={14} style={{ color: '#818cf8' }} />
           Properties
         </h3>
-        <button onClick={onClose} className="p-1 rounded-md text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] transition-colors">
-          <X size={16} />
+        <button
+          onClick={onClose}
+          style={{
+            padding: 4,
+            borderRadius: 6,
+            border: 'none',
+            background: 'none',
+            color: 'var(--text-dim)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+          }}
+        >
+          <X size={14} />
         </button>
       </div>
       
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* Node description info block */}
+      {/* Body */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '0 16px 16px' }}>
+
+        {/* Description badge */}
         {nodeDef?.description && (
-          <div className="p-3 bg-indigo-500/5 border border-indigo-500/20 rounded-lg flex gap-2">
-            <Info size={13} className="text-indigo-400 flex-shrink-0 mt-0.5" />
-            <div className="text-[11px] text-[var(--text-dim)] leading-relaxed">
+          <div style={{
+            marginTop: 12,
+            padding: '8px 10px',
+            background: 'rgba(99,102,241,0.04)',
+            border: '1px solid rgba(99,102,241,0.1)',
+            borderRadius: 10,
+            display: 'flex',
+            gap: 6,
+          }}>
+            <Info size={12} style={{ color: '#818cf8', flexShrink: 0, marginTop: 1 }} />
+            <span style={{ fontSize: 10, color: '#94a3b8', lineHeight: 1.5 }}>
               {nodeDef.description}
-            </div>
+            </span>
           </div>
         )}
 
-        {/* Common Info */}
-        <div className="space-y-1 bg-[var(--surface-2)] p-3 rounded-lg border border-[var(--border)]">
-          <div className="text-xs text-[var(--text-dim)] font-mono">ID: {node.id}</div>
-          <div className="text-xs text-[var(--text-dim)] uppercase font-semibold">Type: {node.type}</div>
-        </div>
+        {/* ── Identity Section ──────────────────────────── */}
+        <AccordionSection title="Identity" icon={<Tag size={13} />} defaultOpen={true}>
+          <div style={{
+            padding: '8px 10px',
+            background: 'var(--surface-2)',
+            borderRadius: 8,
+            border: '1px solid var(--border)',
+          }}>
+            <div style={{ fontSize: 10, color: '#64748b', fontFamily: 'var(--font-mono)' }}>
+              {node.id}
+            </div>
+            <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', fontWeight: 600, marginTop: 2 }}>
+              {node.type}
+            </div>
+          </div>
+          
+          <div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-primary)', display: 'block', marginBottom: 4 }}>
+              Node Label
+            </label>
+            <input 
+              type="text" 
+              name="label" 
+              value={node.data?.label as string || ''} 
+              onChange={handleChange}
+              className="w-full bg-[var(--surface-3)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-indigo-500/40 transition-all font-medium"
+            />
+          </div>
+        </AccordionSection>
 
-        {/* Node Label */}
-        <div className="space-y-2">
-          <label className="text-xs font-semibold text-[var(--text-primary)]">Node Label</label>
-          <input 
-            type="text" 
-            name="label" 
-            value={node.data?.label as string || ''} 
-            onChange={handleChange}
-            className="w-full bg-[var(--surface-3)] border border-[var(--border)] rounded-md px-3 py-2 text-sm text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all font-medium"
-          />
-        </div>
-
-        {/* Hybrid Input Fields - из NODE_DEFINITIONS */}
+        {/* ── Input Ports Section ──────────────────────── */}
         {nodeDef && nodeDef.inputs.length > 0 && (
-          <div className="space-y-3 border-t border-[var(--border)] pt-4">
-            <h4 className="text-xs font-bold text-[var(--text-primary)] uppercase tracking-wider">
-              Input Ports
-            </h4>
+          <AccordionSection
+            title="Input Ports"
+            icon={<Plug size={13} />}
+            defaultOpen={true}
+            badge={nodeDef.inputs.length}
+          >
             {nodeDef.inputs.map(port => (
               <HybridField
                 key={port.id}
@@ -256,21 +417,31 @@ export const AgentEditorProperties: React.FC<AgentEditorPropertiesProps> = ({
                 nodeType={node.type}
               />
             ))}
-          </div>
+          </AccordionSection>
         )}
 
-        {/* Settings - из NODE_DEFINITIONS */}
+        {/* ── Settings Section ────────────────────────── */}
         {nodeDef && nodeDef.settings.length > 0 && (
-          <div className="space-y-3 border-t border-[var(--border)] pt-4">
-            <h4 className="text-xs font-bold text-[var(--text-primary)] uppercase tracking-wider">
-              Settings
-            </h4>
+          <AccordionSection
+            title="Settings"
+            icon={<SlidersHorizontal size={13} />}
+            defaultOpen={true}
+            badge={nodeDef.settings.length}
+          >
             {nodeDef.settings.map(setting => (
-              <div key={setting.id} className="space-y-2">
-                <label className="text-xs font-semibold text-[var(--text-primary)] flex items-center justify-between">
+              <div key={setting.id}>
+                <label style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: 'var(--text-primary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: 4,
+                }}>
                   <span>{setting.label}</span>
                   {setting.type === 'number' && (
-                    <span className="text-[var(--text-dim)] font-mono text-[10px]">
+                    <span style={{ color: '#64748b', fontFamily: 'var(--font-mono)', fontSize: 10 }}>
                       {(node.data.settings as Record<string, any>)?.[setting.id] ?? 
                        (node.data as Record<string, any>)?.[setting.id] ?? 
                        setting.defaultValue}
@@ -278,18 +449,30 @@ export const AgentEditorProperties: React.FC<AgentEditorPropertiesProps> = ({
                   )}
                 </label>
                 {renderSettingField(setting, node, handleSettingChange)}
-                {setting.description && (
-                  <p className="text-[10px] text-[var(--text-dim)] leading-relaxed">
+                {setting.description && setting.type !== 'checkbox' && (
+                  <p style={{
+                    fontSize: 10,
+                    color: '#64748b',
+                    lineHeight: 1.4,
+                    marginTop: 3,
+                    marginBottom: 0,
+                  }}>
                     {setting.description}
                   </p>
                 )}
               </div>
             ))}
-          </div>
+          </AccordionSection>
         )}
 
-        {/* Legacy Support - для старых нод без NODE_DEFINITIONS */}
-        {!nodeDef && renderLegacyFields(node, handleChange, allModels, activeModel, apiKeys)}
+        {/* Legacy Support */}
+        {!nodeDef && (
+          <div style={{ marginTop: 16, padding: '8px 10px', background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)', borderRadius: 8 }}>
+            <span style={{ fontSize: 10, color: '#fbbf24' }}>
+              Legacy node — update to use NODE_DEFINITIONS
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

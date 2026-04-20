@@ -1,475 +1,264 @@
-// Agent Templates - предустановленные шаблоны агентов
-
 import { AgentGraph } from './types';
 
-export interface AgentTemplate {
-  id: string;
-  name: string;
-  description: string;
-  category: 'basic' | 'advanced' | 'specialized';
-  icon: string;
-  graph: Omit<AgentGraph, 'id' | 'createdAt' | 'updatedAt'>;
-}
-
-export const AGENT_TEMPLATES: AgentTemplate[] = [
+export const AGENT_TEMPLATES: AgentGraph[] = [
   {
-    id: 'empty',
-    name: 'Пустой агент',
-    description: 'Начать с чистого листа',
-    category: 'basic',
-    icon: '📄',
-    graph: {
-      name: 'Новый агент',
-      description: '',
-      nodes: [
-        {
-          id: 'input_1',
-          type: 'input',
-          position: { x: 100, y: 200 },
-          data: { label: 'Вход', type: 'input', inputs: {}, outputs: {}, settings: {} },
-        },
-        {
-          id: 'output_1',
-          type: 'output',
-          position: { x: 600, y: 200 },
-          data: { label: 'Выход', type: 'output', inputs: {}, outputs: {}, settings: {} },
-        },
-      ],
-      edges: [],
-      viewport: { x: 0, y: 0, zoom: 1 },
-      metadata: {
-        version: '1.0.0',
-        tags: [],
-        runCount: 0,
+    id: 'template_reflection_coder',
+    name: '1. Агент-Программист (Reflection Pattern)',
+    description: 'Паттерн самокоррекции: одна нейросеть пишет код, вторая (Критик) ищет в нем ошибки, а третья финально исправляет его. Это значительно повышает качество кода.',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    metadata: { version: '1.1.0', tags: ['Agentic', 'Coding', 'Reflection'], runCount: 0 },
+    viewport: { x: 0, y: 0, zoom: 0.8 },
+    nodes: [
+      {
+        id: 'in_1',
+        type: 'agent_input',
+        position: { x: 100, y: 250 },
+        data: { label: 'Task Definition', type: 'agent_input', inputs: {}, outputs: {}, settings: { inputType: 'static', initialValue: 'Напиши функцию на Python для парсинга RSS ленты.' } },
       },
-    },
+      {
+        id: 'writer',
+        type: 'llm',
+        position: { x: 400, y: 250 },
+        data: { label: 'Writer (Python Expert)', type: 'llm', inputs: {}, outputs: {}, settings: { systemPrompt: 'You are an expert Python developer. Write clean, efficient code.', temperature: 0.3 } },
+      },
+      {
+        id: 'critic',
+        type: 'llm',
+        position: { x: 750, y: 100 },
+        data: { label: 'Critic (Security & Logic)', type: 'llm', inputs: {}, outputs: {}, settings: { systemPrompt: 'Review the provided Python code for bugs, security issues, and edge cases. List only specific issues.', temperature: 0 } },
+      },
+      {
+        id: 'refiner',
+        type: 'llm',
+        position: { x: 1100, y: 250 },
+        data: { label: 'Refined Writer', type: 'llm', inputs: {}, outputs: {}, settings: { systemPrompt: 'Take the original code and the critique, then produce the final, perfected version of the code.', temperature: 0.2 } },
+      },
+      {
+        id: 'out_1',
+        type: 'agent_output',
+        position: { x: 1450, y: 250 },
+        data: { label: 'Final Code Output', type: 'agent_output', inputs: {}, outputs: {}, settings: {} },
+      },
+    ],
+    edges: [
+      { id: 'e1', source: 'in_1', sourceHandle: 'output', target: 'writer', targetHandle: 'input' },
+      { id: 'e2', source: 'writer', sourceHandle: 'output', target: 'critic', targetHandle: 'input' },
+      { id: 'e3', source: 'writer', sourceHandle: 'output', target: 'refiner', targetHandle: 'input' },
+      { id: 'e4', source: 'critic', sourceHandle: 'output', target: 'refiner', targetHandle: 'context' },
+      { id: 'e5', source: 'refiner', sourceHandle: 'output', target: 'out_1', targetHandle: 'input' },
+    ],
   },
   {
-    id: 'simple_chat',
-    name: 'Простой чат-ассистент',
-    description: 'Базовый чат-агент с LLM',
-    category: 'basic',
-    icon: '💬',
-    graph: {
-      name: 'Чат-ассистент',
-      description: 'Простой разговорный агент',
-      nodes: [
-        {
-          id: 'input_1',
-          type: 'input',
-          position: { x: 100, y: 200 },
-          data: { 
-            label: 'Ввод пользователя', 
-            type: 'input', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {} 
-          },
-        },
-        {
-          id: 'llm_1',
-          type: 'llm',
-          position: { x: 350, y: 200 },
-          data: { 
-            label: 'LLM', 
-            type: 'llm', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {
-              model: 'gemini-2.0-flash-exp',
-              systemPrompt: 'Ты полезный ассистент. Будь кратким и дружелюбным.',
-              temperature: 1.0,
-            } 
-          },
-        },
-        {
-          id: 'output_1',
-          type: 'output',
-          position: { x: 600, y: 200 },
-          data: { 
-            label: 'Ответ', 
-            type: 'output', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {} 
-          },
-        },
-      ],
-      edges: [
-        { id: 'e1', source: 'input_1', target: 'llm_1', sourceHandle: null, targetHandle: null },
-        { id: 'e2', source: 'llm_1', target: 'output_1', sourceHandle: null, targetHandle: null },
-      ],
-      viewport: { x: 0, y: 0, zoom: 1 },
-      metadata: {
-        version: '1.0.0',
-        tags: ['chat', 'basic'],
-        runCount: 0,
+    id: 'template_autonomous_researcher',
+    name: '2. Автономный Исследователь (Plan-and-Execute)',
+    description: 'Агент разбивает сложный вопрос на части, параллельно собирает информацию через инструменты (Skills) и синтезирует финальный ответ.',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    metadata: { version: '1.1.0', tags: ['Advanced', 'Planning', 'Skills'], runCount: 0 },
+    viewport: { x: 0, y: 0, zoom: 0.7 },
+    nodes: [
+      {
+        id: 'in_1',
+        type: 'agent_input',
+        position: { x: 50, y: 300 },
+        data: { label: 'Research Topic', type: 'agent_input', inputs: {}, outputs: {}, settings: { initialValue: 'Сравни эффективность Gemini 1.5 Pro и GPT-4o в кодинге.' } },
       },
-    },
+      {
+        id: 'planner',
+        type: 'llm',
+        position: { x: 350, y: 300 },
+        data: { label: 'Planner (JSON)', type: 'llm', inputs: {}, outputs: {}, settings: { systemPrompt: 'Break the research topic into two specific search queries. Return ONLY JSON: {"q1": "...", "q2": "..."}' } },
+      },
+      {
+        id: 'ext_1',
+        type: 'json_extract',
+        position: { x: 650, y: 150 },
+        data: { label: 'Extract Q1', type: 'json_extract', inputs: {}, outputs: {}, settings: { path: 'q1' } },
+      },
+      {
+        id: 'ext_2',
+        type: 'json_extract',
+        position: { x: 650, y: 450 },
+        data: { label: 'Extract Q2', type: 'json_extract', inputs: {}, outputs: {}, settings: { path: 'q2' } },
+      },
+      {
+        id: 'search_1',
+        type: 'skill',
+        position: { x: 950, y: 150 },
+        data: { label: 'Search Task 1', type: 'skill', inputs: {}, outputs: {}, settings: { skillId: 'url-reader' } },
+      },
+      {
+        id: 'search_2',
+        type: 'skill',
+        position: { x: 950, y: 450 },
+        data: { label: 'Search Task 2', type: 'skill', inputs: {}, outputs: {}, settings: { skillId: 'url-reader' } },
+      },
+      {
+        id: 'merge_1',
+        type: 'merge',
+        position: { x: 1250, y: 300 },
+        data: { label: 'Combine Knowledge', type: 'merge', inputs: {}, outputs: {}, settings: { mergeMode: 'concat_text' } },
+      },
+      {
+        id: 'synthesizer',
+        type: 'llm',
+        position: { x: 1550, y: 300 },
+        data: { label: 'Synthesizer', type: 'llm', inputs: {}, outputs: {}, settings: { systemPrompt: 'Based on the gathered information, write a comprehensive comparison report.' } },
+      },
+      {
+        id: 'out_1',
+        type: 'agent_output',
+        position: { x: 1850, y: 300 },
+        data: { label: 'Final Report', type: 'agent_output', inputs: {}, outputs: {}, settings: {} },
+      },
+    ],
+    edges: [
+      { id: 'e1', source: 'in_1', sourceHandle: 'output', target: 'planner', targetHandle: 'input' },
+      { id: 'e2_1', source: 'planner', sourceHandle: 'output', target: 'ext_1', targetHandle: 'input' },
+      { id: 'e2_2', source: 'planner', sourceHandle: 'output', target: 'ext_2', targetHandle: 'input' },
+      { id: 'e3_1', source: 'ext_1', sourceHandle: 'output', target: 'search_1', targetHandle: 'input' },
+      { id: 'e3_2', source: 'ext_2', sourceHandle: 'output', target: 'search_2', targetHandle: 'input' },
+      { id: 'e4_1', source: 'search_1', sourceHandle: 'output', target: 'merge_1', targetHandle: 'input_a' },
+      { id: 'e4_2', source: 'search_2', sourceHandle: 'output', target: 'merge_1', targetHandle: 'input_b' },
+      { id: 'e5', source: 'merge_1', sourceHandle: 'output', target: 'synthesizer', targetHandle: 'input' },
+      { id: 'e6', source: 'synthesizer', sourceHandle: 'output', target: 'out_1', targetHandle: 'input' },
+    ],
   },
   {
-    id: 'chat_with_memory',
-    name: 'Чат с историей',
-    description: 'LLM с сохранением и подачей истории диалога',
-    category: 'basic',
-    icon: '💬',
-    graph: {
-      name: 'Чат с памятью',
-      description: 'Агент с сохранением истории диалога',
-      nodes: [
-        {
-          id: 'input_1',
-          type: 'input',
-          position: { x: 100, y: 200 },
-          data: { label: 'Вопрос', type: 'input', inputs: {}, outputs: {}, settings: {} },
-        },
-        {
-          id: 'history_1',
-          type: 'chat_history',
-          position: { x: 300, y: 200 },
-          data: { 
-            label: 'История (read+append)', 
-            type: 'chat_history', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {
-              storeId: 'dialog',
-              operation: 'read_and_append',
-              writeRole: 'user',
-            } 
-          },
-        },
-        {
-          id: 'llm_1',
-          type: 'llm',
-          position: { x: 550, y: 200 },
-          data: { 
-            label: 'LLM', 
-            type: 'llm', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {
-              model: 'gemini-2.0-flash-exp',
-              systemPrompt: 'Ты дружелюбный ассистент. Используй контекст истории.',
-              temperature: 0.8,
-            } 
-          },
-        },
-        {
-          id: 'history_2',
-          type: 'chat_history',
-          position: { x: 800, y: 200 },
-          data: { 
-            label: 'Сохранить ответ', 
-            type: 'chat_history', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {
-              storeId: 'dialog',
-              operation: 'append',
-              writeRole: 'assistant',
-            } 
-          },
-        },
-        {
-          id: 'output_1',
-          type: 'output',
-          position: { x: 1050, y: 200 },
-          data: { label: 'Ответ', type: 'output', inputs: {}, outputs: {}, settings: {} },
-        },
-      ],
-      edges: [
-        { id: 'e1', source: 'input_1', target: 'history_1', sourceHandle: 'output', targetHandle: 'message' },
-        { id: 'e2', source: 'history_1', target: 'llm_1', sourceHandle: 'text', targetHandle: 'input' },
-        { id: 'e3', source: 'llm_1', target: 'history_2', sourceHandle: 'output', targetHandle: 'message' },
-        { id: 'e4', source: 'llm_1', target: 'output_1', sourceHandle: 'output', targetHandle: 'input' },
-      ],
-      viewport: { x: 0, y: 0, zoom: 0.8 },
-      metadata: {
-        version: '1.0.0',
-        tags: ['chat', 'history', 'memory'],
-        runCount: 0,
+    id: 'template_human_in_loop',
+    name: '3. Ассистент с Обратной Связью (Human-in-the-Loop)',
+    description: 'Агент готовит черновик и приостанавливает выполнение, чтобы спросить пользователя, все ли верно. Если нет — исправляет.',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    metadata: { version: '1.1.0', tags: ['Interactive', 'Feedback', 'Logic'], runCount: 0 },
+    viewport: { x: 0, y: 0, zoom: 0.9 },
+    nodes: [
+      {
+        id: 'in_1',
+        type: 'agent_input',
+        position: { x: 50, y: 200 },
+        data: { label: 'Request', type: 'agent_input', inputs: {}, outputs: {}, settings: { initialValue: 'Напиши план статьи про ИИ-агентов.' } },
       },
-    },
+      {
+        id: 'drafter',
+        type: 'llm',
+        position: { x: 350, y: 200 },
+        data: { label: 'Drafter', type: 'llm', inputs: {}, outputs: {}, settings: { systemPrompt: 'Write a detailed draft plan.' } },
+      },
+      {
+        id: 'fb_1',
+        type: 'feedback',
+        position: { x: 650, y: 200 },
+        data: { label: 'User Review', type: 'feedback', inputs: {}, outputs: {}, settings: { promptText: 'Оцените черновик плана. Нужны ли правки?' } },
+      },
+      {
+        id: 'cond_1',
+        type: 'condition',
+        position: { x: 950, y: 200 },
+        data: { label: 'Need Fix?', type: 'condition', inputs: {}, outputs: {}, settings: { conditionCode: 'input.reaction === "dislike"' } },
+      },
+      {
+        id: 'fixer',
+        type: 'llm',
+        position: { x: 1250, y: 350 },
+        data: { label: 'Fixer', type: 'llm', inputs: {}, outputs: {}, settings: { systemPrompt: 'The user requested changes. Update the draft based on their feedback: {{context.feedback_result.message}}' } },
+      },
+      {
+        id: 'merge_1',
+        type: 'merge',
+        position: { x: 1550, y: 200 },
+        data: { label: 'Finalize', type: 'merge', inputs: {}, outputs: {}, settings: { mergeMode: 'first_non_null' } },
+      },
+      {
+        id: 'out_1',
+        type: 'agent_output',
+        position: { x: 1850, y: 200 },
+        data: { label: 'Final Plan', type: 'agent_output', inputs: {}, outputs: {}, settings: {} },
+      },
+    ],
+    edges: [
+      { id: 'e1', source: 'in_1', sourceHandle: 'output', target: 'drafter', targetHandle: 'input' },
+      { id: 'e2', source: 'drafter', sourceHandle: 'output', target: 'fb_1', targetHandle: 'input' },
+      { id: 'e3', source: 'fb_1', sourceHandle: 'feedback_result', target: 'cond_1', targetHandle: 'input' },
+      { id: 'e4_yes', source: 'cond_1', sourceHandle: 'condition_true', target: 'fixer', targetHandle: 'input' },
+      { id: 'e4_no', source: 'cond_1', sourceHandle: 'condition_false', target: 'merge_1', targetHandle: 'input_a' },
+      { id: 'e5', source: 'fixer', sourceHandle: 'output', target: 'merge_1', targetHandle: 'input_b' },
+      { id: 'e6', source: 'merge_1', sourceHandle: 'output', target: 'out_1', targetHandle: 'input' },
+    ],
   },
   {
-    id: 'rag_pipeline',
-    name: 'RAG Pipeline',
-    description: 'Retrieval-Augmented Generation with memory',
-    category: 'advanced',
-    icon: '🔍',
-    graph: {
-      name: 'RAG Agent',
-      description: 'Search memory and generate response',
-      nodes: [
-        {
-          id: 'input_1',
-          type: 'agent_input',
-          position: { x: 100, y: 200 },
-          data: { label: 'Query', type: 'agent_input', inputs: {}, outputs: {}, settings: {} },
-        },
-        {
-          id: 'memory_1',
-          type: 'memory_read',
-          position: { x: 300, y: 150 },
-          data: { 
-            label: 'Search Memory', 
-            type: 'memory_read', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {
-              operation: 'search',
-              limit: 5,
-            } 
-          },
-        },
-        {
-          id: 'merge_1',
-          type: 'merge',
-          position: { x: 500, y: 200 },
-          data: { 
-            label: 'Merge Context', 
-            type: 'merge', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {
-              mergeMode: 'concat_text',
-              separator: '\n\n',
-            } 
-          },
-        },
-        {
-          id: 'llm_1',
-          type: 'llm',
-          position: { x: 700, y: 200 },
-          data: { 
-            label: 'Generate Answer', 
-            type: 'llm', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {
-              model: 'gemini-2.0-flash-exp',
-              systemPrompt: 'Answer based on the provided context. If context is not relevant, say so.',
-              temperature: 0.7,
-            } 
-          },
-        },
-        {
-          id: 'output_1',
-          type: 'agent_output',
-          position: { x: 950, y: 200 },
-          data: { label: 'Answer', type: 'agent_output', inputs: {}, outputs: {}, settings: {} },
-        },
-      ],
-      edges: [
-        { id: 'e1', source: 'input_1', target: 'memory_1', sourceHandle: null, targetHandle: null },
-        { id: 'e2', source: 'input_1', target: 'merge_1', sourceHandle: null, targetHandle: null },
-        { id: 'e3', source: 'memory_1', target: 'merge_1', sourceHandle: null, targetHandle: null },
-        { id: 'e4', source: 'merge_1', target: 'llm_1', sourceHandle: null, targetHandle: null },
-        { id: 'e5', source: 'llm_1', target: 'output_1', sourceHandle: null, targetHandle: null },
-      ],
-      viewport: { x: 0, y: 0, zoom: 0.8 },
-      metadata: {
-        version: '1.0.0',
-        tags: ['rag', 'memory', 'advanced'],
-        runCount: 0,
+    id: 'template_semantic_router',
+    name: '4. Семантический Оркестратор (Orchestrator)',
+    description: 'Умный диспетчер, который анализирует входные данные и направляет задачу специализированному Саб-агенту (или ветке LLM).',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    metadata: { version: '1.1.0', tags: ['Intermediate', 'Routing', 'Architecture'], runCount: 0 },
+    viewport: { x: 0, y: 0, zoom: 0.8 },
+    nodes: [
+      {
+        id: 'in_1',
+        type: 'agent_input',
+        position: { x: 100, y: 300 },
+        data: { label: 'User Query', type: 'agent_input', inputs: {}, outputs: {}, settings: {} },
       },
-    },
-  },
-  {
-    id: 'research_agent',
-    name: 'Research Agent',
-    description: 'Multi-step research with memory storage',
-    category: 'specialized',
-    icon: '🔬',
-    graph: {
-      name: 'Research Agent',
-      description: 'Research topic and save findings',
-      nodes: [
-        {
-          id: 'input_1',
-          type: 'agent_input',
-          position: { x: 100, y: 250 },
-          data: { label: 'Research Topic', type: 'agent_input', inputs: {}, outputs: {}, settings: {} },
+      {
+        id: 'router_llm',
+        type: 'router',
+        position: { x: 450, y: 300 },
+        data: { 
+          label: 'Intent Classifier', 
+          type: 'router', 
+          inputs: {}, 
+          outputs: {}, 
+          settings: { 
+            routerMode: 'llm_classify',
+            routeACondition: 'Programming request (coding, bugs, scripts)',
+            routeBCondition: 'Creative writing (poems, stories, marketing)',
+            routeCCondition: 'Analytical or Logic task (math, data analysis)'
+          } 
         },
-        {
-          id: 'llm_1',
-          type: 'llm',
-          position: { x: 300, y: 150 },
-          data: { 
-            label: 'Generate Questions', 
-            type: 'llm', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {
-              model: 'gemini-2.0-flash-exp',
-              systemPrompt: 'Generate 3 research questions about the topic.',
-              temperature: 0.8,
-            } 
-          },
-        },
-        {
-          id: 'llm_2',
-          type: 'llm',
-          position: { x: 300, y: 350 },
-          data: { 
-            label: 'Research Answers', 
-            type: 'llm', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {
-              model: 'gemini-2.0-flash-exp',
-              systemPrompt: 'Provide detailed answers to the research questions.',
-              temperature: 0.7,
-            } 
-          },
-        },
-        {
-          id: 'memory_1',
-          type: 'memory_write',
-          position: { x: 550, y: 250 },
-          data: { 
-            label: 'Save Findings', 
-            type: 'memory_write', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {
-              operation: 'save',
-              category: 'technical',
-            } 
-          },
-        },
-        {
-          id: 'output_1',
-          type: 'agent_output',
-          position: { x: 750, y: 250 },
-          data: { label: 'Research Report', type: 'agent_output', inputs: {}, outputs: {}, settings: {} },
-        },
-      ],
-      edges: [
-        { id: 'e1', source: 'input_1', target: 'llm_1', sourceHandle: null, targetHandle: null },
-        { id: 'e2', source: 'llm_1', target: 'llm_2', sourceHandle: null, targetHandle: null },
-        { id: 'e3', source: 'llm_2', target: 'memory_1', sourceHandle: null, targetHandle: null },
-        { id: 'e4', source: 'memory_1', target: 'output_1', sourceHandle: null, targetHandle: null },
-      ],
-      viewport: { x: 0, y: 0, zoom: 0.9 },
-      metadata: {
-        version: '1.0.0',
-        tags: ['research', 'memory', 'multi-step'],
-        runCount: 0,
       },
-    },
-  },
-  {
-    id: 'code_review',
-    name: 'Code Review Bot',
-    description: 'Analyze code and provide feedback',
-    category: 'specialized',
-    icon: '👨‍💻',
-    graph: {
-      name: 'Code Reviewer',
-      description: 'Review code and suggest improvements',
-      nodes: [
-        {
-          id: 'input_1',
-          type: 'agent_input',
-          position: { x: 100, y: 200 },
-          data: { label: 'Code Input', type: 'agent_input', inputs: {}, outputs: {}, settings: {} },
-        },
-        {
-          id: 'llm_1',
-          type: 'llm',
-          position: { x: 350, y: 100 },
-          data: { 
-            label: 'Analyze Code', 
-            type: 'llm', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {
-              model: 'gemini-2.0-flash-exp',
-              systemPrompt: 'You are an expert code reviewer. Analyze the code for bugs, performance issues, and best practices.',
-              temperature: 0.3,
-            } 
-          },
-        },
-        {
-          id: 'llm_2',
-          type: 'llm',
-          position: { x: 350, y: 300 },
-          data: { 
-            label: 'Suggest Improvements', 
-            type: 'llm', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {
-              model: 'gemini-2.0-flash-exp',
-              systemPrompt: 'Suggest specific improvements and refactoring opportunities.',
-              temperature: 0.5,
-            } 
-          },
-        },
-        {
-          id: 'merge_1',
-          type: 'merge',
-          position: { x: 600, y: 200 },
-          data: { 
-            label: 'Combine Feedback', 
-            type: 'merge', 
-            inputs: {}, 
-            outputs: {}, 
-            settings: {
-              mergeMode: 'concat_text',
-            } 
-          },
-        },
-        {
-          id: 'output_1',
-          type: 'agent_output',
-          position: { x: 800, y: 200 },
-          data: { label: 'Review Report', type: 'agent_output', inputs: {}, outputs: {}, settings: {} },
-        },
-      ],
-      edges: [
-        { id: 'e1', source: 'input_1', target: 'llm_1', sourceHandle: null, targetHandle: null },
-        { id: 'e2', source: 'input_1', target: 'llm_2', sourceHandle: null, targetHandle: null },
-        { id: 'e3', source: 'llm_1', target: 'merge_1', sourceHandle: null, targetHandle: null },
-        { id: 'e4', source: 'llm_2', target: 'merge_1', sourceHandle: null, targetHandle: null },
-        { id: 'e5', source: 'merge_1', target: 'output_1', sourceHandle: null, targetHandle: null },
-      ],
-      viewport: { x: 0, y: 0, zoom: 0.85 },
-      metadata: {
-        version: '1.0.0',
-        tags: ['code', 'review', 'specialized'],
-        runCount: 0,
+      {
+        id: 'llm_coder',
+        type: 'llm',
+        position: { x: 850, y: 100 },
+        data: { label: 'Specialized Coder', type: 'llm', inputs: {}, outputs: {}, settings: { systemPrompt: 'You are a Senior Developer. Solve the coding task.' } },
       },
-    },
-  },
-];
-
-/**
- * Создать граф из шаблона
- */
-export function createGraphFromTemplate(templateId: string, customName?: string): AgentGraph {
-  const template = AGENT_TEMPLATES.find(t => t.id === templateId);
-  
-  if (!template) {
-    throw new Error(`Template not found: ${templateId}`);
+      {
+        id: 'llm_creative',
+        type: 'llm',
+        position: { x: 850, y: 300 },
+        data: { label: 'Creative Genius', type: 'llm', inputs: {}, outputs: {}, settings: { systemPrompt: 'You are a world-class writer. Be creative and eloquent.' } },
+      },
+      {
+        id: 'llm_analyst',
+        type: 'llm',
+        position: { x: 850, y: 500 },
+        data: { label: 'Data Analyst', type: 'llm', inputs: {}, outputs: {}, settings: { systemPrompt: 'You are a logical analyst. Be precise and data-driven.' } },
+      },
+      {
+        id: 'merge_1',
+        type: 'merge',
+        position: { x: 1250, y: 300 },
+        data: { label: 'Synthesize', type: 'merge', inputs: {}, outputs: {}, settings: { mergeMode: 'first_non_null' } },
+      },
+      {
+        id: 'out_1',
+        type: 'agent_output',
+        position: { x: 1550, y: 300 },
+        data: { label: 'Response', type: 'agent_output', inputs: {}, outputs: {}, settings: {} },
+      },
+    ],
+    edges: [
+      { id: 'e1', source: 'in_1', sourceHandle: 'output', target: 'router_llm', targetHandle: 'input' },
+      { id: 'e_a', source: 'router_llm', sourceHandle: 'route_a', target: 'llm_coder', targetHandle: 'input' },
+      { id: 'e_b', source: 'router_llm', sourceHandle: 'route_b', target: 'llm_creative', targetHandle: 'input' },
+      { id: 'e_c', source: 'router_llm', sourceHandle: 'route_c', target: 'llm_analyst', targetHandle: 'input' },
+      { id: 'e_ma', source: 'llm_coder', sourceHandle: 'output', target: 'merge_1', targetHandle: 'input_a' },
+      { id: 'e_mb', source: 'llm_creative', sourceHandle: 'output', target: 'merge_1', targetHandle: 'input_b' },
+      { id: 'e_mc', source: 'llm_analyst', sourceHandle: 'output', target: 'merge_1', targetHandle: 'input_c' },
+      { id: 'e_out', source: 'merge_1', sourceHandle: 'output', target: 'out_1', targetHandle: 'input' },
+    ],
   }
-
-  const now = Date.now();
-  
-  return {
-    ...template.graph,
-    id: `graph_${now}_${Math.random().toString(36).substr(2, 9)}`,
-    name: customName || template.graph.name,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-/**
- * Получить шаблоны по категории
- */
-export function getTemplatesByCategory(category: AgentTemplate['category']): AgentTemplate[] {
-  return AGENT_TEMPLATES.filter(t => t.category === category);
-}
+];

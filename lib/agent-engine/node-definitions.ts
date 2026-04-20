@@ -1,18 +1,18 @@
 /**
- * Центральная декларация всех типов нод и их портов
- * Единый источник правды для Agent Editor
+ * Central declaration of all node types and their ports
+ * Single source of truth for Agent Editor
  */
 
 export type PortType = 'text' | 'number' | 'boolean' | 'object' | 'array' | 'any';
 
 export interface PortDef {
-  id: string;           // уникальный id порта на этой ноде
-  label: string;        // отображаемое имя ("Prompt", "Result", "True branch")
+  id: string;           // unique port id on this node
+  label: string;        // display name ("Prompt", "Result", "True branch")
   type: PortType;
-  required: boolean;    // обязательно ли подключение/заполнение
-  multi?: boolean;      // может ли принимать несколько подключений (для inputs)
-  defaultValue?: any;   // значение по умолчанию если не подключено
-  description?: string; // тултип
+  required: boolean;    // is connection/value required
+  multi?: boolean;      // can accept multiple connections (for inputs)
+  defaultValue?: any;   // default value if not connected
+  description?: string; // tooltip
 }
 
 export interface SettingDef {
@@ -32,7 +32,7 @@ export interface NodeDef {
   description: string;
   inputs: PortDef[];
   outputs: PortDef[];
-  settings: SettingDef[]; // поля настроек, которые НЕ являются wire-портами
+  settings: SettingDef[]; // settings fields that are NOT wire-ports
 }
 
 // ============================================================================
@@ -41,88 +41,170 @@ export interface NodeDef {
 
 const LLM_NODE: NodeDef = {
   type: 'llm',
-  label: 'LLM',
+  label: 'Нейросеть (LLM)',
   category: 'ai',
-  description: '🧠 Отправляет промпт в Google Gemini и возвращает ответ. Подключение: Input (текст) → LLM → Response (текст). Настройте модель, температуру и системный промпт в панели свойств.',
+  description: 'Отправляет промпт в Google Gemini. Поддерживает историю, инструменты и "размышления" (Thinking).',
   inputs: [
     {
       id: 'input',
       label: 'Input',
       type: 'any',
       required: true,
-      description: 'Основной ввод для модели'
+      description: 'Основной вход для модели'
     },
     {
       id: 'prompt',
-      label: 'System Prompt',
+      label: 'Перезапись Сист. Промпта',
       type: 'text',
       required: false,
       defaultValue: '',
-      description: 'Системный промпт (можно заполнить вручную или подключить)'
+      description: 'Системный промпт (перезапишет тот, что указан ниже в настройках)'
     },
     {
       id: 'context',
-      label: 'Context',
-      type: 'object',
+      label: 'Контекст / Данные',
+      type: 'any',
       required: false,
-      description: 'Дополнительный контекст для модели'
+      description: 'Дополнительные данные или документы для нейросети'
+    },
+    {
+      id: 'tools',
+      label: 'Инструменты (Tools)',
+      type: 'array',
+      required: false,
+      description: 'Массив инструментов (функций) доступных нейросети'
     }
   ],
   outputs: [
     {
       id: 'output',
-      label: 'Response',
+      label: 'Ответ',
       type: 'text',
       required: true,
-      description: 'Ответ модели'
+      description: 'Текст ответа'
+    },
+    {
+      id: 'thinking',
+      label: 'Размышления (Thinking)',
+      type: 'text',
+      required: false,
+      description: 'Внутренние рассуждения модели (если включено)'
+    },
+    {
+      id: 'tool_calls',
+      label: 'Вызовы функций',
+      type: 'array',
+      required: false,
+      description: 'Массив вызванных функций'
     },
     {
       id: 'error',
-      label: 'Error',
+      label: 'Ошибка',
       type: 'text',
-      required: false,
-      description: 'Ошибка если произошла'
+      required: false
     }
   ],
   settings: [
     {
       id: 'model',
-      label: 'Модель',
+      label: 'Model',
       type: 'select',
-      options: [], // Будет заполнено динамически из allModels
-      defaultValue: 'gemini-2.0-flash-exp',
-      description: 'Языковая модель для использования'
+      options: [
+        { value: 'gemini-2.0-flash-exp', label: 'Gemini 2.0 Flash (Exp)' },
+        { value: 'gemini-2.0-flash-thinking-exp', label: 'Gemini 2.0 Thinking' },
+        { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+        { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' }
+      ],
+      defaultValue: 'gemini-2.0-flash-exp'
     },
     {
       id: 'apiKeyIndex',
-      label: 'API Ключ',
+      label: 'API Key',
       type: 'select',
-      options: [], // Будет заполнено динамически из apiKeys
-      defaultValue: '0',
-      description: 'Какой API ключ использовать'
+      description: 'Выберите API ключ из сохраненных в настройках'
+    },
+    {
+      id: 'systemPrompt',
+      label: 'Системный Промпт',
+      type: 'textarea',
+      defaultValue: 'Ты профессиональный ИИ-агент.',
+      placeholder: 'Инструкции для нейросети...'
+    },
+    {
+      id: 'includeThoughts',
+      label: 'Включить размышления',
+      type: 'checkbox',
+      defaultValue: true,
+      description: 'Запрашивать поток мыслей модели (для Gemini 2.x)'
     },
     {
       id: 'temperature',
       label: 'Температура',
       type: 'number',
-      defaultValue: 0.7,
-      description: 'Креативность модели (0-2)'
+      defaultValue: 0.7
     },
     {
-      id: 'maxTokens',
-      label: 'Макс. токены',
-      type: 'number',
-      defaultValue: 2048,
-      description: 'Максимальное количество токенов в ответе'
+      id: 'useHistoryStore',
+      label: 'Использовать Базу Данных',
+      type: 'checkbox',
+      defaultValue: false
+    },
+    {
+      id: 'historyStoreId',
+      label: 'ID Базы',
+      type: 'text',
+      defaultValue: 'main'
     }
   ]
 };
 
+const PLANNER_NODE: NodeDef = {
+  type: 'planner',
+  label: 'Планировщик (Planner)',
+  category: 'ai',
+  description: 'Разбивает задачу на подзадачи. На выходе дает структурированный план.',
+  inputs: [
+    { id: 'input', label: 'Task', type: 'text', required: true }
+  ],
+  outputs: [
+    { id: 'plan', label: 'Full Plan (JSON)', type: 'object', required: true },
+    { id: 'step1', label: 'Step 1', type: 'text', required: false },
+    { id: 'step2', label: 'Step 2', type: 'text', required: false },
+    { id: 'step3', label: 'Step 3', type: 'text', required: false }
+  ],
+  settings: [
+    {
+      id: 'model',
+      label: 'Model',
+      type: 'select',
+      options: [
+        { value: 'gemini-2.0-flash-exp', label: 'Gemini 2.0 Flash (Exp)' },
+        { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+        { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' }
+      ],
+      defaultValue: 'gemini-2.0-flash-exp'
+    },
+    {
+      id: 'apiKeyIndex',
+      label: 'API Key',
+      type: 'select',
+      description: 'Выберите API ключ'
+    },
+    {
+      id: 'plannerPrompt',
+      label: 'Инструкция по планированию',
+      type: 'textarea',
+      defaultValue: 'Разбей задачу на 3 логических этапа. Верни JSON с полями step1, step2, step3.'
+    }
+  ]
+};
+
+
 const SKILL_NODE: NodeDef = {
   type: 'skill',
-  label: 'Skill',
+  label: 'Навык (Skill)',
   category: 'ai',
-  description: 'Вызов навыка (встроенного или HF Space)',
+  description: 'Выполнение навыка.',
   inputs: [
     {
       id: 'input',
@@ -152,7 +234,7 @@ const SKILL_NODE: NodeDef = {
       id: 'skillId',
       label: 'Skill',
       type: 'select',
-      options: [], // заполняется динамически из registry
+      options: [], // populated dynamically from registry
       defaultValue: ''
     },
     {
@@ -160,7 +242,7 @@ const SKILL_NODE: NodeDef = {
       label: 'Parameters',
       type: 'json',
       defaultValue: {},
-      description: 'Дополнительные параметры навыка'
+      description: 'Доп. параметры навыка'
     }
   ]
 };
@@ -171,9 +253,9 @@ const SKILL_NODE: NodeDef = {
 
 const MEMORY_READ_NODE: NodeDef = {
   type: 'memory_read',
-  label: 'Memory Read',
+  label: 'Чтение из Памяти',
   category: 'memory',
-  description: 'Чтение из памяти',
+  description: 'Позволяет найти записи в постоянной памяти агента',
   inputs: [
     {
       id: 'query',
@@ -181,63 +263,84 @@ const MEMORY_READ_NODE: NodeDef = {
       type: 'text',
       required: true,
       defaultValue: '',
-      description: 'Поисковый запрос или ключ'
+      description: 'Запрос для поиска или ключ'
     }
   ],
   outputs: [
     {
+      id: 'results',
+      label: 'Results',
+      type: 'array',
+      required: false,
+      description: 'Массив найденных записей'
+    },
+    {
+      id: 'context_text',
+      label: 'Context Text',
+      type: 'text',
+      required: false,
+      description: 'Найденные данные как текст'
+    },
+    {
       id: 'output',
-      label: 'Result',
+      label: 'Result (legacy)',
       type: 'any',
-      required: true,
-      description: 'Найденные данные'
+      required: false,
+      description: 'Найденные данные (устаревший)'
+    },
+    {
+      id: 'count',
+      label: 'Count',
+      type: 'number',
+      required: false,
+      description: 'Кол-во найденных результатов'
     },
     {
       id: 'found',
       label: 'Found',
       type: 'boolean',
-      required: true,
+      required: false,
       description: 'Были ли найдены данные'
     }
   ],
   settings: [
     {
       id: 'readMode',
-      label: 'Режим чтения',
+      label: 'Read mode',
       type: 'select',
       options: [
-        { value: 'semantic_search', label: 'Семантический поиск' },
-        { value: 'exact_key', label: 'Точный ключ' },
-        { value: 'list_all', label: 'Все записи' },
-        { value: 'recent_n', label: 'Последние N' }
+        { value: 'semantic_search', label: 'Semantic search' },
+        { value: 'exact_key', label: 'Exact key' },
+        { value: 'list_all', label: 'List all' },
+        { value: 'recent_n', label: 'Recent N' }
       ],
       defaultValue: 'semantic_search'
     },
     {
       id: 'scope',
-      label: 'Область',
+      label: 'Scope',
       type: 'select',
       options: [
-        { value: 'local', label: 'Локально (текущий чат)' },
-        { value: 'global', label: 'Глобально' }
+        { value: 'local', label: 'Local (current chat)' },
+        { value: 'global', label: 'Global' }
       ],
       defaultValue: 'local'
     },
     {
       id: 'limit',
-      label: 'Лимит',
+      label: 'Limit',
       type: 'number',
       defaultValue: 5,
-      description: 'Максимальное количество результатов'
+      description: 'Максимальное кол-во результатов'
     }
   ]
 };
 
 const MEMORY_WRITE_NODE: NodeDef = {
   type: 'memory_write',
-  label: 'Memory Write',
+  label: 'Запись в Память',
   category: 'memory',
-  description: 'Запись в память',
+  description: 'Сохранить данные или результаты в постоянную память',
   inputs: [
     {
       id: 'key',
@@ -268,37 +371,37 @@ const MEMORY_WRITE_NODE: NodeDef = {
       label: 'Saved Data',
       type: 'any',
       required: true,
-      description: 'Сохранённые данные'
+      description: 'Сохраненные данные'
     }
   ],
   settings: [
     {
       id: 'writeMode',
-      label: 'Режим записи',
+      label: 'Write mode',
       type: 'select',
       options: [
-        { value: 'direct_save', label: 'Прямое сохранение' },
-        { value: 'upsert', label: 'Добавить/заменить' },
-        { value: 'append', label: 'Дописать' }
+        { value: 'direct_save', label: 'Direct save' },
+        { value: 'upsert', label: 'Upsert' },
+        { value: 'append', label: 'Append' }
       ],
       defaultValue: 'direct_save'
     },
     {
       id: 'scope',
-      label: 'Область',
+      label: 'Scope',
       type: 'select',
       options: [
-        { value: 'local', label: 'Локально (текущий чат)' },
-        { value: 'global', label: 'Глобально' }
+        { value: 'local', label: 'Local (current chat)' },
+        { value: 'global', label: 'Global' }
       ],
       defaultValue: 'local'
     },
     {
       id: 'ttl',
-      label: 'TTL (секунды)',
+      label: 'TTL (seconds)',
       type: 'number',
       defaultValue: 0,
-      description: 'Время жизни (0 = бессрочно)'
+      description: 'Время жизни сек (0 = навсегда)'
     }
   ]
 };
@@ -311,14 +414,14 @@ const CONDITION_NODE: NodeDef = {
   type: 'condition',
   label: 'Condition',
   category: 'logic',
-  description: '❓ Маршрутизация данных по условию. Напишите JavaScript выражение, которое возвращает true/false. Input попадет либо в True, либо в False выход.',
+  description: 'Route data based on a condition. Write a JavaScript expression that returns true/false. Input goes to either the True or False output.',
   inputs: [
     {
       id: 'input',
       label: 'Data',
       type: 'any',
       required: true,
-      description: 'Данные для проверки и передачи в ветку'
+      description: 'Данные для оценки условия'
     },
     {
       id: 'condition',
@@ -326,7 +429,7 @@ const CONDITION_NODE: NodeDef = {
       type: 'text',
       required: false,
       defaultValue: '',
-      description: 'Переопределение JS-условия из настроек. Ожидается: boolean.'
+      description: 'Переопределить JS условие (ожидается boolean)'
     }
   ],
   outputs: [
@@ -335,14 +438,14 @@ const CONDITION_NODE: NodeDef = {
       label: 'True',
       type: 'any',
       required: false,
-      description: 'Выход если условие истинно'
+      description: 'Выход при True'
     },
     {
       id: 'condition_false',
       label: 'False',
       type: 'any',
       required: false,
-      description: 'Выход если условие ложно'
+      description: 'Выход при False'
     }
   ],
   settings: [
@@ -352,16 +455,16 @@ const CONDITION_NODE: NodeDef = {
       type: 'textarea',
       defaultValue: 'input !== null && input !== undefined',
       placeholder: 'typeof input === "string" && input.length > 0',
-      description: 'JavaScript выражение, возвращающее true/false. Доступны: context (все входы), input (данные).'
+      description: 'JavaScript expression returning true/false. Available: context (all inputs), input (data).'
     }
   ]
 };
 
 const ROUTER_NODE: NodeDef = {
   type: 'router',
-  label: 'Router',
+  label: 'Маршрутизатор (Router)',
   category: 'logic',
-  description: 'Маршрутизация по условиям',
+  description: 'Разделяет входящий запрос на несколько путей в зависимости от условия',
   inputs: [
     {
       id: 'input',
@@ -400,31 +503,31 @@ const ROUTER_NODE: NodeDef = {
   settings: [
     {
       id: 'routerMode',
-      label: 'Режим маршрутизации',
+      label: 'Routing Mode',
       type: 'select',
       options: [
-        { value: 'if_else', label: 'Цепочка If-Else' },
-        { value: 'regex_match', label: 'Совпадение Regex' },
-        { value: 'llm_classify', label: 'Классификация LLM' },
-        { value: 'js_expression', label: 'JS-выражение' }
+        { value: 'if_else', label: 'If-Else chain' },
+        { value: 'regex_match', label: 'Regex match' },
+        { value: 'llm_classify', label: 'LLM classify' },
+        { value: 'js_expression', label: 'JS expression' }
       ],
       defaultValue: 'if_else'
     },
     {
       id: 'routeACondition',
-      label: 'Условие маршрута A',
+      label: 'Route A Condition',
       type: 'text',
       defaultValue: ''
     },
     {
       id: 'routeBCondition',
-      label: 'Условие маршрута B',
+      label: 'Route B Condition',
       type: 'text',
       defaultValue: ''
     },
     {
       id: 'routeCCondition',
-      label: 'Условие маршрута C',
+      label: 'Route C Condition',
       type: 'text',
       defaultValue: ''
     }
@@ -435,7 +538,7 @@ const LOOP_NODE: NodeDef = {
   type: 'loop',
   label: 'Loop',
   category: 'logic',
-  description: 'Итерация по элементам',
+  description: 'Iterate over elements',
   inputs: [
     {
       id: 'items',
@@ -449,7 +552,7 @@ const LOOP_NODE: NodeDef = {
       label: 'Body Result',
       type: 'any',
       required: false,
-      description: 'Результат обработки текущего элемента'
+      description: 'Результат обработки элемента'
     }
   ],
   outputs: [
@@ -458,34 +561,40 @@ const LOOP_NODE: NodeDef = {
       label: 'Current Item',
       type: 'any',
       required: false,
-      description: 'Текущий элемент итерации'
+      description: 'Текущий элемент'
     },
     {
       id: 'loop_done',
       label: 'Done',
       type: 'array',
       required: false,
-      description: 'Все результаты после завершения'
+      description: 'Все результаты после цикла'
     }
   ],
   settings: [
     {
       id: 'maxIterations',
-      label: 'Макс. итераций',
+      label: 'Max Iterations',
       type: 'number',
       defaultValue: 100,
-      description: 'Максимальное количество итераций'
+      description: 'Макс. кол-во итераций'
     },
     {
       id: 'iterateOver',
-      label: 'Итерировать по',
+      label: 'Iterate over',
       type: 'select',
       options: [
-        { value: 'array_items', label: 'Элементы массива' },
-        { value: 'range', label: 'Диапазон чисел' },
-        { value: 'json_array_field', label: 'Поле JSON-массива' }
+        { value: 'array_items', label: 'Array items' },
+        { value: 'range', label: 'Number range' },
+        { value: 'json_array_field', label: 'JSON array field' }
       ],
       defaultValue: 'array_items'
+    },
+    {
+      id: 'agentId',
+      label: 'Sub-Agent (Loop Body)',
+      type: 'select',
+      description: 'Агент, который будет запущен для каждого элемента'
     }
   ]
 };
@@ -494,28 +603,28 @@ const MERGE_NODE: NodeDef = {
   type: 'merge',
   label: 'Merge',
   category: 'logic',
-  description: 'Объединение нескольких потоков',
+  description: 'Combine multiple streams',
   inputs: [
     {
       id: 'input_a',
       label: 'Input A',
       type: 'any',
       required: false,
-      description: 'Первый поток'
+      description: 'Поток 1'
     },
     {
       id: 'input_b',
       label: 'Input B',
       type: 'any',
       required: false,
-      description: 'Второй поток'
+      description: 'Поток 2'
     },
     {
       id: 'input_c',
       label: 'Input C',
       type: 'any',
       required: false,
-      description: 'Третий поток'
+      description: 'Поток 3'
     }
   ],
   outputs: [
@@ -524,28 +633,28 @@ const MERGE_NODE: NodeDef = {
       label: 'Merged',
       type: 'any',
       required: true,
-      description: 'Объединённый результат'
+      description: 'Объединенный результат'
     }
   ],
   settings: [
     {
       id: 'mergeMode',
-      label: 'Режим объединения',
+      label: 'Merge mode',
       type: 'select',
       options: [
-        { value: 'concat_text', label: 'Склеить текст' },
-        { value: 'merge_objects', label: 'Слить объекты' },
-        { value: 'array_collect', label: 'Собрать в массив' },
-        { value: 'first_non_null', label: 'Первое непустое' }
+        { value: 'concat_text', label: 'Concatenate text' },
+        { value: 'merge_objects', label: 'Merge objects' },
+        { value: 'array_collect', label: 'Collect into array' },
+        { value: 'first_non_null', label: 'First non-null' }
       ],
       defaultValue: 'merge_objects'
     },
     {
       id: 'separator',
-      label: 'Разделитель',
+      label: 'Separator',
       type: 'text',
       defaultValue: '\n',
-      description: 'Разделитель для concat_text'
+      description: 'Separator for concat_text'
     }
   ]
 };
@@ -554,7 +663,7 @@ const SPLIT_NODE: NodeDef = {
   type: 'split',
   label: 'Split',
   category: 'logic',
-  description: 'Разделение данных на части',
+  description: 'Split data into parts',
   inputs: [
     {
       id: 'input',
@@ -570,29 +679,29 @@ const SPLIT_NODE: NodeDef = {
       label: 'Items',
       type: 'array',
       required: true,
-      description: 'Массив разделённых элементов'
+      description: 'Массив разбитых элементов'
     }
   ],
   settings: [
     {
       id: 'splitMode',
-      label: 'Режим разделения',
+      label: 'Split mode',
       type: 'select',
       options: [
-        { value: 'by_newline', label: 'По переносу строки' },
-        { value: 'by_comma', label: 'По запятой' },
-        { value: 'by_regex', label: 'По Regex' },
-        { value: 'json_array', label: 'JSON массив' },
-        { value: 'fixed_chunks', label: 'Фиксированные куски' }
+        { value: 'by_newline', label: 'By newline' },
+        { value: 'by_comma', label: 'By comma' },
+        { value: 'by_regex', label: 'By regex' },
+        { value: 'json_array', label: 'JSON array' },
+        { value: 'fixed_chunks', label: 'Fixed chunks' }
       ],
       defaultValue: 'by_newline'
     },
     {
       id: 'delimiter',
-      label: 'Разделитель',
+      label: 'Separator',
       type: 'text',
       defaultValue: '\n',
-      description: 'Разделитель (для regex или custom)'
+      description: 'Разделитель'
     }
   ]
 };
@@ -605,7 +714,7 @@ const CHAT_INPUT_NODE: NodeDef = {
   type: 'chat_input',
   label: 'Chat Input',
   category: 'chat',
-  description: 'Получение ввода из чата',
+  description: 'Получить ввод из чата',
   inputs: [],
   outputs: [
     {
@@ -626,13 +735,13 @@ const CHAT_INPUT_NODE: NodeDef = {
   settings: [
     {
       id: 'source',
-      label: 'Источник',
+      label: 'Source',
       type: 'select',
       options: [
-        { value: 'active_chat', label: 'Активный чат' },
-        { value: 'chat_id', label: 'Конкретный Chat ID' },
-        { value: 'last_message', label: 'Последнее сообщение' },
-        { value: 'full_history', label: 'Полная история' }
+        { value: 'active_chat', label: 'Active chat' },
+        { value: 'chat_id', label: 'Specific Chat ID' },
+        { value: 'last_message', label: 'Last message' },
+        { value: 'full_history', label: 'Full history' }
       ],
       defaultValue: 'active_chat'
     }
@@ -643,7 +752,7 @@ const CHAT_OUTPUT_NODE: NodeDef = {
   type: 'chat_output',
   label: 'Chat Output',
   category: 'chat',
-  description: 'Отправка сообщения в чат',
+  description: 'Отправить сообщение',
   inputs: [
     {
       id: 'input',
@@ -659,7 +768,7 @@ const CHAT_OUTPUT_NODE: NodeDef = {
       label: 'Success',
       type: 'boolean',
       required: true,
-      description: 'Успешно ли отправлено'
+      description: 'Успешно ли отправлено сообщение'
     }
   ],
   settings: [
@@ -668,139 +777,38 @@ const CHAT_OUTPUT_NODE: NodeDef = {
       label: 'Target',
       type: 'select',
       options: [
-        { value: 'active_chat', label: 'Активный чат' },
-        { value: 'chat_id', label: 'Конкретный Chat ID' },
-        { value: 'new_message', label: 'Новое сообщение' },
-        { value: 'append', label: 'Дописать к последнему' }
+        { value: 'active_chat', label: 'Active chat' },
+        { value: 'chat_id', label: 'Specific Chat ID' },
+        { value: 'new_message', label: 'New message' },
+        { value: 'append', label: 'Append to last' }
       ],
       defaultValue: 'active_chat'
     },
     {
       id: 'streamOutput',
-      label: 'Потоковая отправка',
+      label: 'Stream Output',
       type: 'checkbox',
       defaultValue: false,
-      description: 'Потоковая отправка'
+      description: 'Отправлять по частям (stream)'
     }
   ]
 };
 
-const CHAT_HISTORY_NODE: NodeDef = {
-  type: 'chat_history',
-  label: 'История чата',
+const DATABASE_HUB_NODE: NodeDef = {
+  type: 'database_hub',
+  label: 'База Данных (Chat History)',
   category: 'chat',
-  description: '📜 Хранилище сообщений, привязанное к текущему чату. Каждый стор имеет свой ID. Нода может читать, записывать, фильтровать сообщения и конвертировать историю в текст для LLM.',
-  inputs: [
-    {
-      id: 'message',
-      label: 'Сообщение',
-      type: 'text',
-      required: false,
-      description: 'Текст сообщения для записи (только при операции write/append)'
-    },
-    {
-      id: 'seed_messages',
-      label: 'Начальные сообщения',
-      type: 'array',
-      required: false,
-      description: 'Массив сообщений для инициализации стора (только при операции seed)'
-    }
-  ],
-  outputs: [
-    {
-      id: 'messages',
-      label: 'Сообщения',
-      type: 'array',
-      required: false,
-      description: 'Массив объектов ChatHistoryMessage'
-    },
-    {
-      id: 'text',
-      label: 'Текст',
-      type: 'text',
-      required: false,
-      description: 'История в виде plain text — готово для LLM'
-    },
-    {
-      id: 'gemini_format',
-      label: 'Gemini Format',
-      type: 'array',
-      required: false,
-      description: 'Массив {role, parts} для прямой подачи в Gemini API'
-    },
-    {
-      id: 'count',
-      label: 'Кол-во',
-      type: 'number',
-      required: false,
-      description: 'Количество сообщений в сторе'
-    }
-  ],
+  description: 'Визуальный хаб для хранения и управления сообщениями. Не требует проводов, работает глобально.',
+  inputs: [],
+  outputs: [],
   settings: [
     {
       id: 'storeId',
-      label: 'ID хранилища',
+      label: 'Store ID',
       type: 'text',
       defaultValue: 'main',
-      placeholder: 'например: game_history, context, memory',
-      description: 'Уникальное имя стора в рамках текущего чата'
-    },
-    {
-      id: 'operation',
-      label: 'Операция',
-      type: 'select',
-      options: [
-        { value: 'read', label: '📖 Читать' },
-        { value: 'append', label: '✏️ Добавить сообщение' },
-        { value: 'seed', label: '🌱 Инициализировать (seed)' },
-        { value: 'clear', label: '🗑️ Очистить' },
-        { value: 'read_and_append', label: '📖✏️ Читать + добавить' },
-      ],
-      defaultValue: 'read'
-    },
-    {
-      id: 'writeRole',
-      label: 'Роль для записи',
-      type: 'select',
-      options: [
-        { value: 'user', label: 'user' },
-        { value: 'assistant', label: 'assistant' },
-        { value: 'system', label: 'system' }
-      ],
-      defaultValue: 'user',
-      description: 'Роль добавляемого сообщения (при операции append/read_and_append)'
-    },
-    {
-      id: 'filterRole',
-      label: 'Фильтр по роли',
-      type: 'select',
-      options: [
-        { value: 'all', label: 'Все' },
-        { value: 'user', label: 'Только user' },
-        { value: 'assistant', label: 'Только assistant' },
-        { value: 'system', label: 'Только system' }
-      ],
-      defaultValue: 'all',
-      description: 'Фильтр для операции read'
-    },
-    {
-      id: 'limit',
-      label: 'Лимит сообщений',
-      type: 'number',
-      defaultValue: 0,
-      description: 'Последние N сообщений (0 = все)'
-    },
-    {
-      id: 'textFormat',
-      label: 'Формат текста',
-      type: 'select',
-      options: [
-        { value: 'with_roles', label: 'С ролями: "User: ...\nAssistant: ..."' },
-        { value: 'plain', label: 'Только текст' },
-        { value: 'xml', label: '<user>...</user><assistant>...</assistant>' }
-      ],
-      defaultValue: 'with_roles',
-      description: 'Как форматировать выход text'
+      placeholder: 'Идентификатор базы',
+      description: 'Глобальное имя базы, к которому могут обращаться нейросети.'
     }
   ]
 };
@@ -813,14 +821,14 @@ const TRANSFORM_NODE: NodeDef = {
   type: 'transform',
   label: 'Transform',
   category: 'utilities',
-  description: 'Преобразование данных',
+  description: 'Трансформация данных',
   inputs: [
     {
       id: 'input',
       label: 'Input',
       type: 'any',
       required: true,
-      description: 'Данные для преобразования'
+      description: 'Данные для трансформации'
     }
   ],
   outputs: [
@@ -829,7 +837,7 @@ const TRANSFORM_NODE: NodeDef = {
       label: 'Result',
       type: 'any',
       required: true,
-      description: 'Преобразованные данные'
+      description: 'Трансформированные данные'
     },
     {
       id: 'error',
@@ -841,12 +849,12 @@ const TRANSFORM_NODE: NodeDef = {
   settings: [
     {
       id: 'transformType',
-      label: 'Тип преобразования',
+      label: 'Transform type',
       type: 'select',
       options: [
-        { value: 'js_expression', label: 'JS-выражение' },
-        { value: 'extract_field', label: 'Извлечь поле' },
-        { value: 'format_string', label: 'Форматировать строку' },
+        { value: 'js_expression', label: 'JS expression' },
+        { value: 'extract_field', label: 'Extract field' },
+        { value: 'format_string', label: 'Format string' },
         { value: 'json_parse', label: 'JSON Parse' },
         { value: 'json_stringify', label: 'JSON Stringify' }
       ],
@@ -854,10 +862,10 @@ const TRANSFORM_NODE: NodeDef = {
     },
     {
       id: 'expression',
-      label: 'Выражение',
+      label: 'Expression',
       type: 'textarea',
       defaultValue: 'return input;',
-      description: 'JavaScript код для преобразования',
+      description: 'JS код для трансформации',
       placeholder: 'return input.toUpperCase();'
     }
   ]
@@ -867,7 +875,7 @@ const CODE_NODE: NodeDef = {
   type: 'code',
   label: 'Code',
   category: 'utilities',
-  description: 'Выполнение произвольного JavaScript',
+  description: 'Выполнить любой JS код',
   inputs: [
     {
       id: 'input',
@@ -883,7 +891,7 @@ const CODE_NODE: NodeDef = {
       label: 'Result',
       type: 'any',
       required: true,
-      description: 'Результат выполнения'
+      description: 'Результат вычисления'
     },
     {
       id: 'error',
@@ -897,8 +905,8 @@ const CODE_NODE: NodeDef = {
       id: 'code',
       label: 'Code',
       type: 'textarea',
-      defaultValue: '// Ваш код здесь\nreturn input;',
-      description: 'JavaScript код',
+      defaultValue: '// Your code here\nreturn input;',
+      description: 'JS код',
       placeholder: 'const result = input * 2;\nreturn result;'
     }
   ]
@@ -908,7 +916,7 @@ const HTTP_REQUEST_NODE: NodeDef = {
   type: 'http_request',
   label: 'HTTP Request',
   category: 'utilities',
-  description: 'HTTP запрос к внешнему API',
+  description: 'Запрос к внешнему API',
   inputs: [
     {
       id: 'url',
@@ -916,21 +924,21 @@ const HTTP_REQUEST_NODE: NodeDef = {
       type: 'text',
       required: true,
       defaultValue: '',
-      description: 'URL для запроса'
+      description: 'URL'
     },
     {
       id: 'body',
       label: 'Body',
       type: 'object',
       required: false,
-      description: 'Тело запроса (для POST/PUT)'
+      description: 'Тело запроса'
     },
     {
       id: 'headers',
       label: 'Headers',
       type: 'object',
       required: false,
-      description: 'HTTP заголовки'
+      description: 'HTTP Заголовки (Headers)'
     }
   ],
   outputs: [
@@ -946,7 +954,7 @@ const HTTP_REQUEST_NODE: NodeDef = {
       label: 'Status',
       type: 'number',
       required: true,
-      description: 'HTTP статус код'
+      description: 'Код ответа'
     },
     {
       id: 'error',
@@ -958,7 +966,7 @@ const HTTP_REQUEST_NODE: NodeDef = {
   settings: [
     {
       id: 'method',
-      label: 'Метод',
+      label: 'Method',
       type: 'select',
       options: [
         { value: 'GET', label: 'GET' },
@@ -971,10 +979,10 @@ const HTTP_REQUEST_NODE: NodeDef = {
     },
     {
       id: 'authType',
-      label: 'Тип авторизации',
+      label: 'Auth type',
       type: 'select',
       options: [
-        { value: 'none', label: 'Нет' },
+        { value: 'none', label: 'None' },
         { value: 'bearer', label: 'Bearer Token' },
         { value: 'api_key', label: 'API Key' },
         { value: 'basic', label: 'Basic Auth' }
@@ -988,14 +996,14 @@ const DEBUG_NODE: NodeDef = {
   type: 'debug',
   label: 'Debug',
   category: 'utilities',
-  description: 'Отладочный вывод',
+  description: 'Вывод для дебага',
   inputs: [
     {
       id: 'input',
       label: 'Input',
       type: 'any',
       required: true,
-      description: 'Данные для отладки'
+      description: 'Данные для логов'
     }
   ],
   outputs: [
@@ -1004,20 +1012,20 @@ const DEBUG_NODE: NodeDef = {
       label: 'Pass-through',
       type: 'any',
       required: true,
-      description: 'Те же данные (pass-through)'
+      description: 'Оригинальные данные (сквозной)'
     }
   ],
   settings: [
     {
       id: 'debugLabel',
-      label: 'Метка',
+      label: 'Label',
       type: 'text',
       defaultValue: 'Debug',
-      description: 'Метка для вывода'
+      description: 'Заголовок в логе'
     },
     {
       id: 'logLevel',
-      label: 'Уровень логирования',
+      label: 'Log level',
       type: 'select',
       options: [
         { value: 'log', label: 'Log' },
@@ -1028,7 +1036,7 @@ const DEBUG_NODE: NodeDef = {
     },
     {
       id: 'showInRunPanel',
-      label: 'Показать в панели запуска',
+      label: 'Show in run panel',
       type: 'checkbox',
       defaultValue: true
     }
@@ -1036,10 +1044,10 @@ const DEBUG_NODE: NodeDef = {
 };
 
 const INPUT_NODE: NodeDef = {
-  type: 'input',
+  type: 'agent_input',
   label: 'Input',
   category: 'utilities',
-  description: '📥 Точка входа пайплайна. При запуске запрашивает у пользователя текст (или использует статическое значение). Каждый агент должен содержать хотя бы одну Input ноду.',
+  description: 'Вход агента',
   inputs: [],
   outputs: [
     {
@@ -1047,81 +1055,81 @@ const INPUT_NODE: NodeDef = {
       label: 'Data',
       type: 'any',
       required: true,
-      description: 'Данные для передачи в следующую ноду'
+      description: 'Данные для следующего узла'
     }
   ],
   settings: [
     {
       id: 'inputType',
-      label: 'Источник входных данных',
+      label: 'Input Source',
       type: 'select',
       options: [
-        { value: 'user_input', label: '💬 Спросить у пользователя' },
-        { value: 'static', label: '📌 Статичное значение' },
-        { value: 'chat_message', label: '💭 Последнее сообщение чата' },
+        { value: 'user_input', label: 'Ask user' },
+        { value: 'static', label: 'Static value' },
+        { value: 'chat_message', label: 'Last chat message' },
       ],
       defaultValue: 'static',
-      description: 'Откуда берутся входные данные'
+      description: 'Источник входных данных'
     },
     {
       id: 'fieldLabel',
-      label: 'Метка поля',
+      label: 'Field Label',
       type: 'text',
-      defaultValue: 'Ваше сообщение',
-      placeholder: 'например: "Введите ваш вопрос"',
-      description: 'Подпись поля ввода в диалоге (только для user_input)'
+      defaultValue: 'Your message',
+      placeholder: 'e.g.: "Enter your question"',
+      description: 'Ярлык поля ввода'
     },
     {
       id: 'placeholder',
-      label: 'Текст-заполнитель',
+      label: 'Placeholder text',
       type: 'text',
-      placeholder: 'например: "Введите текст здесь..."',
-      description: 'Текст-заполнитель в поле ввода'
+      placeholder: 'e.g.: "Enter text here..."',
+      description: 'Текст плейсхолдера'
     },
     {
       id: 'initialValue',
-      label: 'Статичное значение',
+      label: 'Static value',
       type: 'textarea',
       defaultValue: '',
-      description: 'Используется когда Источник = Статичное значение',
-      placeholder: '{"message": "Привет"}'
+      description: 'Статическое значение',
+      placeholder: '{"message": "Hello"}'
     }
   ]
 };
 
 const OUTPUT_NODE: NodeDef = {
-  type: 'output',
+  type: 'agent_output',
   label: 'Output',
   category: 'utilities',
-  description: '📤 Финальный шаг пайплайна. Показывает результат пользователю. Подключите выход любой ноды сюда чтобы отобразить его после выполнения.',
+  description: 'Выход агента',
   inputs: [
     {
       id: 'input',
       label: 'Final Result',
       type: 'any',
       required: true,
-      description: 'Финальный результат для отображения'
+      description: 'Финальный результат для вывода'
     }
   ],
   outputs: [],
   settings: [
     {
       id: 'outputType',
-      label: 'Тип вывода',
+      label: 'Output type',
       type: 'select',
       options: [
-        { value: 'display', label: '👁 Показать в RunPanel' },
-        { value: 'json', label: '{ } JSON формат' },
-        { value: 'text', label: '📝 Обычный текст' },
+        { value: 'display', label: 'Display in RunPanel' },
+        { value: 'json', label: 'JSON format' },
+        { value: 'text', label: 'Plain text' },
       ],
       defaultValue: 'display'
     },
     {
       id: 'outputLabel',
-      label: 'Метка вывода',
+      label: 'Output Label',
       type: 'text',
-      defaultValue: 'Результат',
-      placeholder: 'например: "Ответ AI"'
+      defaultValue: 'Result',
+      placeholder: 'e.g.: "AI Response"'
     }
   ]
 };
@@ -1130,7 +1138,7 @@ const TEXT_NODE: NodeDef = {
   type: 'text',
   label: 'Text',
   category: 'utilities',
-  description: 'Статический текст для промптов и данных',
+  description: 'Простой статичный текст',
   inputs: [],
   outputs: [
     {
@@ -1138,29 +1146,204 @@ const TEXT_NODE: NodeDef = {
       label: 'Text',
       type: 'text',
       required: true,
-      description: 'Текстовое значение'
+      description: 'Текст'
     }
   ],
   settings: [
     {
       id: 'content',
-      label: 'Содержимое',
+      label: 'Content',
       type: 'textarea',
       defaultValue: '',
-      description: 'Текстовое содержимое',
-      placeholder: 'Введите текст здесь...'
+      description: 'Текст',
+      placeholder: 'Enter text here...'
     }
   ]
 };
 
 // ============================================================================
+// NEW UTILITY NODES
+// ============================================================================
+
+const TEMPLATE_NODE: NodeDef = {
+  type: 'template',
+  label: 'Template',
+  category: 'utilities',
+  description: 'Текстовый шаблон с переменными {{var...}}',
+  inputs: [
+    { id: 'var1', label: 'Variable 1', type: 'any', required: false, description: 'Переменная 1' },
+    { id: 'var2', label: 'Variable 2', type: 'any', required: false, description: 'Переменная 2' },
+    { id: 'var3', label: 'Variable 3', type: 'any', required: false, description: 'Переменная 3' },
+  ],
+  outputs: [
+    { id: 'output', label: 'Result', type: 'text', required: true, description: 'Собранный текст' }
+  ],
+  settings: [
+    {
+      id: 'template',
+      label: 'Template',
+      type: 'textarea',
+      defaultValue: 'Hello, {{var1}}! You said: {{var2}}',
+      placeholder: 'Use {{var1}}, {{var2}}, {{var3}} for substitution',
+      description: 'Шаблон'
+    }
+  ]
+};
+
+const VARIABLE_NODE: NodeDef = {
+  type: 'variable',
+  label: 'Variable',
+  category: 'utilities',
+  description: 'Временная переменная на один запуск',
+  inputs: [
+    { id: 'set_value', label: 'Set Value', type: 'any', required: false, description: 'Установить значение' }
+  ],
+  outputs: [
+    { id: 'value', label: 'Value', type: 'any', required: true, description: 'Текущее значение' }
+  ],
+  settings: [
+    { id: 'varName', label: 'Variable name', type: 'text', defaultValue: 'myVar', description: 'Уникальное имя' },
+    { id: 'initialValue', label: 'Initial value', type: 'textarea', defaultValue: '', description: 'Дефолтное значение' }
+  ]
+};
+
+const JSON_EXTRACT_NODE: NodeDef = {
+  type: 'json_extract',
+  label: 'JSON Extract',
+  category: 'utilities',
+  description: 'Извлечь поле из JSON',
+  inputs: [
+    { id: 'input', label: 'JSON Input', type: 'any', required: true, description: 'JSON' }
+  ],
+  outputs: [
+    { id: 'output', label: 'Value', type: 'any', required: true, description: 'Значение' },
+    { id: 'error', label: 'Error', type: 'text', required: false, description: 'Ошибка, если нет' }
+  ],
+  settings: [
+    {
+      id: 'path',
+      label: 'JSON Path',
+      type: 'text',
+      defaultValue: 'data.result',
+      placeholder: 'data.items[0].name',
+      description: 'Путь (dot notation)'
+    },
+    {
+      id: 'parseFirst',
+      label: 'Parse JSON string',
+      type: 'checkbox',
+      defaultValue: true,
+      description: 'Парсить перед поиском'
+    }
+  ]
+};
+
+const DELAY_NODE: NodeDef = {
+  type: 'delay',
+  label: 'Delay',
+  category: 'utilities',
+  description: 'Задержка',
+  inputs: [
+    { id: 'input', label: 'Pass-through', type: 'any', required: true, description: 'Data to pass through' }
+  ],
+  outputs: [
+    { id: 'output', label: 'Pass-through', type: 'any', required: true, description: 'Same data after delay' }
+  ],
+  settings: [
+    { id: 'milliseconds', label: 'Delay (ms)', type: 'number', defaultValue: 1000, description: 'Миллисекунды (мсек)' }
+  ]
+};
+
+const SUBAGENT_NODE: NodeDef = {
+  type: 'subagent',
+  label: 'Sub-Agent',
+  category: 'ai',
+  description: 'Запустить агента в агенте',
+  inputs: [
+    { id: 'input', label: 'Input', type: 'any', required: true, description: 'Вход для саб-агента' }
+  ],
+  outputs: [
+    { id: 'output', label: 'Result', type: 'any', required: true, description: 'Результат' },
+    { id: 'error', label: 'Error', type: 'text', required: false, description: 'Ошибка саб-агента' }
+  ],
+  settings: [
+    {
+      id: 'agentId',
+      label: 'Agent',
+      type: 'select',
+      options: [], // populated dynamically from getGraphs()
+      defaultValue: '',
+      description: 'ID графа (агента)'
+    }
+  ]
+};
+
+// ============================================================================
+
+const GLOBAL_DB_NODE: NodeDef = {
+  type: 'global_db',
+  label: 'Глобальная БД',
+  category: 'memory',
+  description: 'Пользовательская база данных (Key-Value) для хранения любой информации.',
+  inputs: [],
+  outputs: [],
+  settings: [
+    {
+      id: 'storeId',
+      label: 'ID Базы',
+      type: 'text',
+      defaultValue: 'my_db',
+      placeholder: 'Идентификатор глобальной БД',
+      description: 'Имя хранилища. Доступно для Memory Read и Memory Write.'
+    }
+  ]
+};
+
+const FEEDBACK_NODE: NodeDef = {
+  type: 'feedback',
+  label: 'Обратная связь',
+  category: 'logic',
+  description: 'Приостанавливает выполнение агента до получения обратной связи.',
+  inputs: [
+    {
+      id: 'input',
+      label: 'Входные данные',
+      type: 'any',
+      required: false,
+      description: 'Данные для оценки'
+    }
+  ],
+  outputs: [
+    {
+      id: 'feedback_result',
+      label: 'Результат',
+      type: 'object',
+      required: true,
+      description: 'JSON объект: { reaction: "like"|"dislike", message: "...", context: "..." }'
+    }
+  ],
+  settings: [
+    {
+      id: 'promptText',
+      label: 'Текст сообщения',
+      type: 'text',
+      defaultValue: 'Оцените ответ ИИ',
+      description: 'Текст запроса для пользователя'
+    }
+  ]
+};
+
 // REGISTRY
 // ============================================================================
 
 export const NODE_DEFINITIONS: Record<string, NodeDef> = {
+  global_db: GLOBAL_DB_NODE,
+  feedback: FEEDBACK_NODE,
   // AI
   llm: LLM_NODE,
+  planner: PLANNER_NODE,
   skill: SKILL_NODE,
+  subagent: SUBAGENT_NODE,
   
   // Memory
   memory_read: MEMORY_READ_NODE,
@@ -1176,7 +1359,7 @@ export const NODE_DEFINITIONS: Record<string, NodeDef> = {
   // Chat
   chat_input: CHAT_INPUT_NODE,
   chat_output: CHAT_OUTPUT_NODE,
-  chat_history: CHAT_HISTORY_NODE,
+  database_hub: DATABASE_HUB_NODE,
   
   // Utilities
   transform: TRANSFORM_NODE,
@@ -1186,25 +1369,29 @@ export const NODE_DEFINITIONS: Record<string, NodeDef> = {
   input: INPUT_NODE,
   output: OUTPUT_NODE,
   text: TEXT_NODE,
+  template: TEMPLATE_NODE,
+  variable: VARIABLE_NODE,
+  json_extract: JSON_EXTRACT_NODE,
+  delay: DELAY_NODE,
   
-  // Aliases для обратной совместимости
+  // Aliases for backward compatibility
   agent_input: INPUT_NODE,
   agent_output: OUTPUT_NODE,
   memory: MEMORY_READ_NODE, // Legacy memory node
 };
 
-// Утилиты для работы с портами
+// Utility functions for ports
 export function getNodeDef(nodeType: string): NodeDef | undefined {
   return NODE_DEFINITIONS[nodeType];
 }
 
 export function getPortColor(portType: PortType): string {
   const colors: Record<PortType, string> = {
-    text: '#818cf8',     // indigo
-    number: '#34d399',   // emerald
-    boolean: '#f472b6',  // pink
-    object: '#fb923c',   // orange
-    array: '#facc15',    // yellow
+    text: '#818cf8',     // indigo — muted
+    number: '#34d399',   // emerald — muted
+    boolean: '#f472b6',  // pink — muted
+    object: '#fb923c',   // orange — muted
+    array: '#fbbf24',    // yellow — muted
     any: '#94a3b8'       // slate
   };
   return colors[portType];

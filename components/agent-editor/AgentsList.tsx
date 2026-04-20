@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Plus, Search, Play, Copy, Download, Archive, Trash2, 
   MoreVertical, Calendar, Zap, AlertCircle, CheckCircle2,
-  Filter, SortAsc
+  Filter, SortAsc, Pencil
 } from 'lucide-react';
 import { AgentGraph } from '@/lib/agent-engine/types';
 import { 
@@ -11,8 +11,10 @@ import {
   duplicateGraph, 
   deleteGraph, 
   exportGraph,
+  saveGraph,
   GRAPHS_UPDATED_EVENT 
 } from '@/lib/agent-engine/graph-storage';
+import { AGENT_TEMPLATES } from '@/lib/agent-engine/templates';
 
 interface AgentsListProps {
   onOpenGraph: (graph: AgentGraph) => void;
@@ -43,6 +45,19 @@ export const AgentsList: React.FC<AgentsListProps> = ({ onOpenGraph, onCreateNew
     onOpenGraph(newGraph);
   };
 
+  const handleCloneTemplate = (template: AgentGraph) => {
+    const clone: AgentGraph = {
+      ...template,
+      id: `graph_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+      name: `${template.name.split('.')[1]?.trim() || template.name} (Copy)`,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      metadata: { ...template.metadata, runCount: 0 }
+    };
+    saveGraph(clone);
+    onOpenGraph(clone);
+  };
+
   const handleDuplicate = (graph: AgentGraph) => {
     const duplicate = duplicateGraph(graph.id);
     if (duplicate) {
@@ -68,6 +83,16 @@ export const AgentsList: React.FC<AgentsListProps> = ({ onOpenGraph, onCreateNew
       deleteGraph(graph.id);
       setMenuOpen(null);
     }
+  };
+
+  const handleRename = (id: string) => {
+    const graph = graphs.find(g => g.id === id);
+    if (!graph) return;
+    const newName = prompt('Enter new name for agent:', graph.name);
+    if (newName && newName.trim() && newName !== graph.name) {
+      saveGraph({ ...graph, name: newName.trim(), updatedAt: Date.now() });
+    }
+    setMenuOpen(null);
   };
 
   const filteredAndSortedGraphs = graphs
@@ -163,8 +188,49 @@ export const AgentsList: React.FC<AgentsListProps> = ({ onOpenGraph, onCreateNew
         </div>
       </div>
 
+      {/* Templates Row */}
+      {searchQuery === '' && filterStatus === 'all' && (
+        <div className="pt-6 px-6">
+          <div className="flex items-center gap-2 mb-4">
+            <h2 className="text-sm font-bold text-[var(--text-primary)] uppercase tracking-wider">Templates & Examples</h2>
+            <div className="h-px flex-1 bg-[var(--border)] ml-2"></div>
+          </div>
+          <div className="flex gap-4 overflow-x-auto pb-4 hide-scrollbar" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+            {AGENT_TEMPLATES.map(template => (
+              <div 
+                key={template.id}
+                onClick={() => handleCloneTemplate(template)}
+                className="flex-none w-[280px] bg-indigo-900/10 border border-indigo-500/20 hover:border-indigo-500/50 hover:bg-indigo-900/20 rounded-xl p-4 transition-all cursor-pointer group"
+              >
+                <div className="flex items-start justify-between mb-2">
+                  <h3 className="font-semibold text-indigo-300 group-hover:text-indigo-200 transition-colors text-sm pr-2">
+                    {template.name}
+                  </h3>
+                  <div className="bg-indigo-500/20 text-indigo-300 text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap">
+                    Clone
+                  </div>
+                </div>
+                <p className="text-xs text-[var(--text-dim)] line-clamp-3 mb-3 leading-relaxed">
+                  {template.description}
+                </p>
+                <div className="flex flex-wrap gap-1.5 mt-auto">
+                  {template.metadata.tags.map(tag => (
+                    <span key={tag} className="text-[9px] font-medium px-1.5 py-0.5 bg-[var(--surface-2)] text-[var(--text-dim)] rounded">
+                      {tag}
+                    </span>
+                  ))}
+                  <span className="text-[9px] font-medium px-1.5 py-0.5 bg-[var(--surface-2)] text-[var(--text-dim)] rounded ml-auto">
+                    {template.nodes.length} nodes
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Agents Grid */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-6 pt-2">
         {filteredAndSortedGraphs.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <div className="w-16 h-16 rounded-full bg-[var(--surface-2)] flex items-center justify-center mb-4">
@@ -244,6 +310,16 @@ export const AgentsList: React.FC<AgentsListProps> = ({ onOpenGraph, onCreateNew
 
                     {menuOpen === graph.id && (
                       <div className="absolute right-0 bottom-full mb-2 w-48 bg-[var(--surface-2)] border border-[var(--border)] rounded-lg shadow-xl z-50 py-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRename(graph.id);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--surface-3)] transition-colors"
+                        >
+                          <Pencil size={14} className="text-indigo-400" />
+                          Rename
+                        </button>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();

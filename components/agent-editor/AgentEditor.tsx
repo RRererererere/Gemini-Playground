@@ -1,7 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   ReactFlow,
-  MiniMap,
   Controls,
   Background,
   useNodesState,
@@ -18,11 +17,13 @@ import {
   reconnectEdge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { Play, Square, Download, Upload, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import { Play, Square, Download, Upload, CheckCircle2, Loader2, AlertCircle, Undo2, Redo2, Wand2 } from 'lucide-react';
 import { UniversalModel, ActiveModel, ApiKeyEntry } from '@/types';
 import { AgentGraph, AgentRun, NodeData, EdgeData } from '@/lib/agent-engine/types';
 import { GraphExecutor } from '@/lib/agent-engine/executor';
 import { saveGraph, saveRun, exportGraph, importGraph } from '@/lib/agent-engine/graph-storage';
+import { getLayoutedElements } from '@/lib/agent-engine/layout';
+import useUndoRedo from '@/lib/agent-engine/useUndoRedo';
 import { AgentEditorSidebar } from './AgentEditorSidebar';
 import { AgentEditorProperties } from './AgentEditorProperties';
 import { RunPanel } from './RunPanel';
@@ -31,13 +32,17 @@ import { RunInputModal, InputField } from './RunInputModal';
 import {
   AgentInputNode, LLMNode, SkillNode, MemoryNode, ConditionNode, AgentOutputNode,
   TransformNode, MergeNode, SplitNode, RouterNode, LoopNode,
-  ChatInputNode, ChatOutputNode, ChatHistoryNode, MemoryReadNode, MemoryWriteNode,
-  CodeNode, DebugNode, HTTPRequestNode, TextNode
+  ChatInputNode, ChatOutputNode, DatabaseHubNode, MemoryReadNode, MemoryWriteNode,
+  CodeNode, DebugNode, HTTPRequestNode, TextNode,
+  TemplateNode, VariableNode, JsonExtractNode, DelayNode, SubAgentNode, GlobalDbNode, FeedbackNode,
+  PlannerNode
 } from './nodes/CustomNodes';
+import { FeedbackModal } from './FeedbackModal';
 
 
 const nodeTypes: NodeTypes = {
   agent_input: AgentInputNode,
+  planner: PlannerNode,
   llm: LLMNode,
   skill: SkillNode,
   memory: MemoryNode,
@@ -50,7 +55,7 @@ const nodeTypes: NodeTypes = {
   loop: LoopNode,
   chat_input: ChatInputNode,
   chat_output: ChatOutputNode,
-  chat_history: ChatHistoryNode,
+  database_hub: DatabaseHubNode,
   memory_read: MemoryReadNode,
   memory_write: MemoryWriteNode,
   code: CodeNode,
@@ -59,6 +64,14 @@ const nodeTypes: NodeTypes = {
   text: TextNode,
   input: AgentInputNode,
   output: AgentOutputNode,
+  // New nodes
+  template: TemplateNode,
+  variable: VariableNode,
+  json_extract: JsonExtractNode,
+  delay: DelayNode,
+  subagent: SubAgentNode,
+  global_db: GlobalDbNode,
+  feedback: FeedbackNode,
 };
 
 const initialNodes: Node[] = [
@@ -79,6 +92,13 @@ export interface AgentEditorProps {
 
 type SaveStatus = 'saved' | 'saving' | 'unsaved';
 
+type FeedbackRequestState = {
+  promptText: string;
+  context: any;
+  resolve: (val: any) => void;
+  reject: (err: any) => void;
+};
+
 const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphChange }: AgentEditorProps) => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState(graph?.nodes || initialNodes);
@@ -86,6 +106,48 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
   const { screenToFlowPosition, setViewport, getViewport } = useReactFlow();
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
+
+  // Undo/Redo State
+  const { takeSnapshot, undo, redo, canUndo, canRedo, isIterating, setIsIterating } = useUndoRedo({
+    nodes,
+    edges,
+    setNodes,
+    setEdges,
+  });
+
+  // Handle graph structural changes to snapshot reliably
+  const handleNodesChange = useCallback((changes: any) => {
+    // Only snapshot if it's a structural change or the end of a drag, to avoid saving every pixel frame
+    const hasSignificantChange = changes.some((c: any) => 
+      c.type === 'remove' || c.type === 'add' || 
+      (c.type === 'position' && !c.dragging) // End of drag
+    );
+    if (hasSignificantChange && !isIterating) takeSnapshot();
+    if (isIterating && !changes.some((c: any) => c.dragging)) setIsIterating(false);
+    onNodesChange(changes);
+  }, [onNodesChange, takeSnapshot, isIterating, setIsIterating]);
+
+  const handleEdgesChange = useCallback((changes: any) => {
+    const hasSignificantChange = changes.some((c: any) => c.type === 'remove' || c.type === 'add');
+    if (hasSignificantChange && !isIterating) takeSnapshot();
+    onEdgesChange(changes);
+  }, [onEdgesChange, takeSnapshot, isIterating]);
+
+  const onLayout = useCallback(() => {
+    takeSnapshot();
+    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
+      nodes,
+      edges,
+      'LR'
+    );
+    setNodes([...layoutedNodes] as Node[]);
+    setEdges([...layoutedEdges] as Edge[]);
+    setTimeout(() => {
+      // Use standard react flow fitView after layout
+      const evt = new CustomEvent('agent-graph-fit-view');
+      window.dispatchEvent(evt);
+    }, 50);
+  }, [nodes, edges, setNodes, setEdges, takeSnapshot]);
 
   // Toast notifications
   const [toasts, setToasts] = useState<Array<{ id: string; message: string; type?: 'error' | 'warning' | 'info' }>>([]);
@@ -118,6 +180,7 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
   // Run Input Modal
   const [showInputModal, setShowInputModal] = useState(false);
   const [pendingInputFields, setPendingInputFields] = useState<InputField[]>([]);
+  const [feedbackRequest, setFeedbackRequest] = useState<FeedbackRequestState | null>(null);
 
   // Close menus on global click
   useEffect(() => {
@@ -216,20 +279,23 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
   }, []);
 
   const deleteNode = useCallback((nodeId: string) => {
+    takeSnapshot();
     setNodes((nds) => nds.filter((n) => n.id !== nodeId));
     setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
     if (selectedNode?.id === nodeId) setSelectedNode(null);
     setNodeMenu(null);
-  }, [selectedNode, setNodes, setEdges]);
+  }, [selectedNode, setNodes, setEdges, takeSnapshot]);
 
   const deleteEdge = useCallback((edgeId: string) => {
+    takeSnapshot();
     setEdges(eds => eds.filter(e => e.id !== edgeId));
     setEdgeMenu(null);
-  }, [setEdges]);
+  }, [setEdges, takeSnapshot]);
 
   const duplicateNode = useCallback((nodeId: string) => {
     const nodeToDuplicate = nodes.find(n => n.id === nodeId);
     if (!nodeToDuplicate) return;
+    takeSnapshot();
 
     const newNode = {
       ...nodeToDuplicate,
@@ -240,15 +306,16 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
 
     setNodes((nds) => nds.concat(newNode));
     setNodeMenu(null);
-  }, [nodes, setNodes]);
+  }, [nodes, setNodes, takeSnapshot]);
 
   const onNodesDelete = useCallback((deleted: Node[]) => {
+    takeSnapshot();
     setNodes((nds) => nds.filter((n) => !deleted.find((d) => d.id === n.id)));
     setEdges((eds) => eds.filter(e => !deleted.find(d => d.id === e.source || d.id === e.target)));
     if (selectedNode && deleted.find(d => d.id === selectedNode.id)) {
       setSelectedNode(null);
     }
-  }, [setNodes, setEdges, selectedNode]);
+  }, [setNodes, setEdges, selectedNode, takeSnapshot]);
 
   // Обработчик удаления edges через Delete/Backspace
   useEffect(() => {
@@ -261,6 +328,7 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
         }
         
         e.preventDefault();
+        takeSnapshot();
         setEdges(eds => eds.filter(ed => ed.id !== selectedEdge.id));
         setSelectedEdge(null);
         showToast('🔌 Connection deleted', 'info');
@@ -272,6 +340,7 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
   }, [selectedEdge, setEdges, showToast]);
 
   const updateNodeData = useCallback((id: string, data: any) => {
+    takeSnapshot();
     setNodes((nds) =>
       nds.map((node) => {
         if (node.id === id) {
@@ -280,9 +349,10 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
         return node;
       })
     );
-  }, [setNodes]);
+  }, [setNodes, takeSnapshot]);
 
   const onConnect = useCallback((params: Connection | Edge) => {
+    takeSnapshot();
     setEdges((eds) => {
       const { NODE_DEFINITIONS, getPortColor } = require('@/lib/agent-engine/node-definitions');
 
@@ -323,9 +393,10 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
   }, []);
 
   const onReconnect = useCallback((oldEdge: Edge, newConnection: Connection) => {
+    takeSnapshot();
     reconnectSuccessful.current = true;
     setEdges((els) => reconnectEdge(oldEdge, newConnection, els));
-  }, [setEdges]);
+  }, [setEdges, takeSnapshot]);
 
   const onReconnectEnd = useCallback((_: any, edge: Edge) => {
     if (!reconnectSuccessful.current) {
@@ -501,21 +572,55 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
       onNodeStream: (nodeId, _chunk, accumulated) => {
         setStreamingContent(prev => ({ ...prev, [nodeId]: accumulated }));
       },
+      // BUG-09: callback для пропущенных нод
+      onNodeSkip: (nodeId) => {
+        setNodes((nds) => nds.map(n =>
+          n.id === nodeId
+            ? { ...n, data: { ...n.data, status: 'skipped' as const } }
+            : n
+        ));
+      },
       onRunComplete: (run) => {
         setCurrentRun(run);
         setIsRunning(false);
         setCurrentNodeId(undefined);
         saveRun(run);
 
-        // Сбрасываем только status, НЕ error — пользователь должен видеть что пошло не так
+        // Внедряем продолжительность выполнения (duration) в каждую ноду
+        setNodes((nds) => nds.map(n => {
+          const runResult = run.results[n.id];
+          if (runResult) {
+            return {
+              ...n,
+              data: { ...n.data, duration: runResult.duration }
+            };
+          }
+          return n;
+        }));
+
+        // Сбрасываем только status, НЕ error и НЕ duration
         setTimeout(() => {
           setNodes((nds) => nds.map(n => ({
             ...n,
             data: { ...n.data, status: 'idle' as const }
-            // error намеренно не сбрасывается
+            // error и duration намеренно не сбрасываются
           })));
         }, 3000);
       },
+      onChatInputRequest: (type, options) => {
+        return new Promise((resolve, reject) => {
+          if (type === 'feedback') {
+            setFeedbackRequest({
+              promptText: options?.promptText || 'Оцените ответ ИИ',
+              context: options?.context,
+              resolve,
+              reject
+            });
+          } else {
+             reject(new Error(`Unsupported input type: ${type}`));
+          }
+        });
+      }
     });
 
     executorRef.current = executor;
@@ -688,67 +793,162 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
           </div>
         )}
 
-
-        {/* Toolbar */}
-        <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
-          {/* Save status indicator */}
+        {/* Toolbar — compact top bar */}
+        <div className="absolute top-3 flex items-center gap-2 transition-all duration-300" style={{ 
+          right: selectedNode ? 332 : 12, 
+          zIndex: 40,
+          background: 'rgba(14,14,18,0.85)',
+          backdropFilter: 'blur(12px)',
+          border: '1px solid var(--border)',
+          borderRadius: 10,
+          padding: '4px 6px',
+        }}>          {/* Save status */}
           {graph && (
-            <span className="text-xs text-[var(--text-dim)] flex items-center gap-1 mr-1">
-              {saveStatus === 'saved' && <><CheckCircle2 size={11} className="text-emerald-400" /> Saved</>}
-              {saveStatus === 'saving' && <><Loader2 size={11} className="animate-spin" /> Saving...</>}
-              {saveStatus === 'unsaved' && <><AlertCircle size={11} className="text-amber-400" /> Unsaved</>}
+            <span style={{ fontSize: 10, color: '#64748b', display: 'flex', alignItems: 'center', gap: 3, padding: '0 4px' }}>
+              {saveStatus === 'saved' && <><CheckCircle2 size={10} style={{ color: '#34d399' }} /> Saved</>}
+              {saveStatus === 'saving' && <><Loader2 size={10} className="animate-spin" /> Saving</>}
+              {saveStatus === 'unsaved' && <><AlertCircle size={10} style={{ color: '#fbbf24' }} /> Unsaved</>}
             </span>
           )}
 
           <button
+            onClick={undo}
+            disabled={!canUndo}
+            title="Undo (Ctrl+Z)"
+            style={{ padding: '5px', fontSize: 11, background: 'none', border: 'none', color: canUndo ? '#94a3b8' : '#334155', cursor: canUndo ? 'pointer' : 'default', borderRadius: 6, display: 'flex', alignItems: 'center' }}
+            onMouseEnter={e => { if(canUndo) e.currentTarget.style.color = '#e2e8f0'; }}
+            onMouseLeave={e => { if(canUndo) e.currentTarget.style.color = '#94a3b8'; }}
+          >
+            <Undo2 size={14} />
+          </button>
+
+          <button
+            onClick={redo}
+            disabled={!canRedo}
+            title="Redo (Ctrl+Y / Cmd+Shift+Z)"
+            style={{ padding: '5px', fontSize: 11, background: 'none', border: 'none', color: canRedo ? '#94a3b8' : '#334155', cursor: canRedo ? 'pointer' : 'default', borderRadius: 6, display: 'flex', alignItems: 'center' }}
+            onMouseEnter={e => { if(canRedo) e.currentTarget.style.color = '#e2e8f0'; }}
+            onMouseLeave={e => { if(canRedo) e.currentTarget.style.color = '#94a3b8'; }}
+          >
+            <Redo2 size={14} />
+          </button>
+
+          <button
+            onClick={onLayout}
+            title="Auto Layout"
+            style={{ padding: '5px 8px', fontSize: 11, background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 4 }}
+            onMouseEnter={e => e.currentTarget.style.color = '#a5b4fc'}
+            onMouseLeave={e => e.currentTarget.style.color = '#94a3b8'}
+          >
+            <Wand2 size={14} />
+            <span className="hidden lg:inline">Layout</span>
+          </button>
+
+          <div style={{ width: 1, height: 20, background: 'var(--border)', marginLeft: 2, marginRight: 2 }} />
+
+          <button
             onClick={handleExportGraph}
             title="Export agent to .json"
-            className="px-3 py-2 text-xs bg-[var(--surface-2)] hover:bg-[var(--surface-3)] text-[var(--text-dim)] hover:text-[var(--text-primary)] rounded-lg transition-colors border border-[var(--border)] flex items-center gap-1.5"
+            style={{ padding: '5px 8px', fontSize: 11, background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 4 }}
+            onMouseEnter={e => e.currentTarget.style.color = '#e2e8f0'}
+            onMouseLeave={e => e.currentTarget.style.color = '#94a3b8'}
           >
-            <Download size={13} />
+            <Download size={12} />
             Export
           </button>
 
           <button
             onClick={handleImportGraph}
             title="Import agent from .json"
-            className="px-3 py-2 text-xs bg-[var(--surface-2)] hover:bg-[var(--surface-3)] text-[var(--text-dim)] hover:text-[var(--text-primary)] rounded-lg transition-colors border border-[var(--border)] flex items-center gap-1.5"
+            style={{ padding: '5px 8px', fontSize: 11, background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 4 }}
+            onMouseEnter={e => e.currentTarget.style.color = '#e2e8f0'}
+            onMouseLeave={e => e.currentTarget.style.color = '#94a3b8'}
           >
-            <Upload size={13} />
+            <Upload size={12} />
             Import
           </button>
+
+          <div style={{ width: 1, height: 20, background: 'var(--border)' }} />
 
           {isRunning ? (
             <button
               onClick={handleStopExecution}
-              className="px-4 py-2 text-sm font-medium bg-[var(--surface-2)] hover:bg-[var(--surface-3)] text-red-400 rounded-lg transition-colors shadow-lg backdrop-blur-sm border border-red-500/30 flex items-center gap-2"
+              style={{
+                padding: '5px 12px',
+                fontSize: 11,
+                fontWeight: 600,
+                background: 'rgba(239,68,68,0.1)',
+                border: '1px solid rgba(239,68,68,0.25)',
+                color: '#f87171',
+                cursor: 'pointer',
+                borderRadius: 8,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+              }}
             >
-              <Square size={14} />
+              <Square size={11} />
               Stop
             </button>
           ) : (
             <button
               onClick={handleRunGraph}
-              className="px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors shadow-lg flex items-center gap-2"
+              style={{
+                padding: '5px 12px',
+                fontSize: 11,
+                fontWeight: 600,
+                background: 'rgba(16,185,129,0.15)',
+                border: '1px solid rgba(16,185,129,0.25)',
+                color: '#34d399',
+                cursor: 'pointer',
+                borderRadius: 8,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+              }}
             >
-              <Play size={14} />
-              Run Agent
+              <Play size={11} />
+              Run
             </button>
           )}
+
           <button
             id="save-graph-btn"
             onClick={handleSaveGraph}
-            className="px-4 py-2 text-sm font-medium bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors shadow-lg"
+            style={{
+              padding: '5px 12px',
+              fontSize: 11,
+              fontWeight: 600,
+              background: 'rgba(99,102,241,0.15)',
+              border: '1px solid rgba(99,102,241,0.25)',
+              color: '#818cf8',
+              cursor: 'pointer',
+              borderRadius: 8,
+            }}
           >
-            Save Agent
+            Save
           </button>
         </div>
 
         <ReactFlow
           nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
+          edges={edges.map(e => {
+            const sourceNode = nodes.find(n => n.id === e.source);
+            const targetNode = nodes.find(n => n.id === e.target);
+            const sStatus = sourceNode?.data?.status;
+            const tStatus = targetNode?.data?.status;
+
+            if (tStatus === 'running') {
+              return { ...e, animated: true, className: 'edge-executing', style: { stroke: '#818cf8', strokeWidth: 2 } };
+            } else if (sStatus === 'success' && tStatus === 'success') {
+              return { ...e, animated: false, style: { stroke: '#34d399', strokeWidth: 2 } };
+            } else if (tStatus === 'error' || sStatus === 'error') {
+              return { ...e, animated: false, style: { stroke: '#f87171', strokeWidth: 2 } };
+            }
+            return { ...e, animated: false, style: { stroke: 'rgba(99, 102, 241, 0.35)', strokeWidth: 2 } };
+          })}
+          onNodesChange={handleNodesChange}
+          onEdgesChange={handleEdgesChange}
           onConnect={onConnect}
           onReconnect={onReconnect}
           onReconnectStart={onReconnectStart}
@@ -775,20 +975,13 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
           reconnectRadius={40}
           defaultEdgeOptions={{
             type: 'smoothstep',
-            animated: true,
-            style: { stroke: 'rgba(99, 102, 241, 0.6)', strokeWidth: 3 },
-            markerEnd: { type: MarkerType.ArrowClosed, width: 10, height: 10 },
+            animated: false,
+            style: { stroke: 'rgba(99, 102, 241, 0.35)', strokeWidth: 2 },
+            markerEnd: { type: MarkerType.ArrowClosed, width: 8, height: 8, color: 'rgba(99, 102, 241, 0.5)' },
           }}
         >
           <Controls className="bg-[var(--surface-3)] border-[var(--border)] fill-[var(--text-primary)] text-[var(--text-primary)] shadow-lg" />
-          <MiniMap
-            nodeStrokeColor="#4f46e5"
-            nodeColor="var(--surface-2)"
-            maskColor="rgba(0,0,0,0.5)"
-            style={{ backgroundColor: 'var(--surface-1)' }}
-            position="bottom-left"
-          />
-          <Background gap={24} size={1} color="rgba(255,255,255,0.06)" />
+          <Background gap={20} size={0.8} color="rgba(255,255,255,0.04)" />
         </ReactFlow>
 
 
@@ -867,20 +1060,31 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
           onStop={handleStopExecution}
           currentNodeId={currentNodeId}
           streamingContent={streamingContent}
+          hasSidebar={!!selectedNode}
         />
 
         {/* Toast Notifications */}
         <ToastContainer toasts={toasts} onRemove={removeToast} />
-
-        {/* Run Input Modal */}
-        {showInputModal && (
-          <RunInputModal
-            fields={pendingInputFields}
-            onConfirm={handleInputModalConfirm}
-            onCancel={() => setShowInputModal(false)}
-          />
-        )}
       </div>
+
+      {showInputModal && pendingInputFields.length > 0 && (
+        <RunInputModal
+          fields={pendingInputFields}
+          onConfirm={handleInputModalConfirm}
+          onCancel={() => setShowInputModal(false)}
+        />
+      )}
+
+      {feedbackRequest && (
+        <FeedbackModal
+          promptText={feedbackRequest.promptText}
+          context={feedbackRequest.context}
+          onSubmit={(feedback) => {
+            feedbackRequest.resolve(feedback);
+            setFeedbackRequest(null);
+          }}
+        />
+      )}
     </div>
   );
 };
@@ -891,7 +1095,7 @@ export const AgentEditor = (props: AgentEditorProps) => {
       <div className="w-full h-full bg-[var(--surface-0)] absolute inset-0 z-10 flex flex-col rounded-lg overflow-hidden border border-[var(--border)] m-2 shadow-2xl">
         <div className="flex items-center px-4 py-3 border-b border-[var(--border)] bg-[var(--surface-1)]">
           <h2 className="text-sm font-semibold flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.8)] animate-pulse"></span>
+            <span className="w-2 h-2 rounded-full bg-indigo-500/60"></span>
             Agent Editor
             <span className="text-xs text-[var(--text-dim)] font-normal ml-2">
               {props.graph?.name || 'Visualize & Connect'}

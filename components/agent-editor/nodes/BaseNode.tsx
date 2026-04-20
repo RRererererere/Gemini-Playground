@@ -1,5 +1,5 @@
 import React from 'react';
-import { Handle, Position } from '@xyflow/react';
+import { Handle, Position, useNodeId, useNodeConnections, useNodesData } from '@xyflow/react';
 import { Loader2, CheckCircle2, XCircle, AlertCircle, Info } from 'lucide-react';
 import { PortDef, getPortColor } from '@/lib/agent-engine/node-definitions';
 
@@ -13,71 +13,107 @@ export interface PortState {
 interface BaseNodeProps {
   icon: React.ReactNode;
   title: string;
-  colorKey: 'blue' | 'indigo' | 'amber' | 'emerald' | 'rose' | 'slate';
+  colorKey: 'blue' | 'indigo' | 'amber' | 'emerald' | 'rose' | 'slate' | 'violet';
   selected?: boolean;
   children?: React.ReactNode;
   inputs?: PortDef[];
   outputs?: PortDef[];
   portStates?: PortState[];
-  status?: 'idle' | 'running' | 'success' | 'warning' | 'error' | 'disabled' | 'waiting';
+  status?: 'idle' | 'running' | 'success' | 'warning' | 'error' | 'disabled' | 'waiting' | 'skipped';
   error?: string;
   description?: string;
+  duration?: number;
+  nodeData?: any;
 }
 
-const categoryColors = {
-  blue:    { border: '#3b82f6', glow: 'rgba(59,130,246,0.25)',   header: 'rgba(59,130,246,0.15)',  text: '#93c5fd' },
-  indigo:  { border: '#6366f1', glow: 'rgba(99,102,241,0.25)',   header: 'rgba(99,102,241,0.15)', text: '#a5b4fc' },
-  amber:   { border: '#f59e0b', glow: 'rgba(245,158,11,0.25)',   header: 'rgba(245,158,11,0.12)', text: '#fcd34d' },
-  emerald: { border: '#10b981', glow: 'rgba(16,185,129,0.25)',   header: 'rgba(16,185,129,0.12)', text: '#6ee7b7' },
-  rose:    { border: '#f43f5e', glow: 'rgba(244,63,94,0.25)',    header: 'rgba(244,63,94,0.12)',  text: '#fda4af' },
-  slate:   { border: '#64748b', glow: 'rgba(100,116,139,0.2)',   header: 'rgba(100,116,139,0.1)', text: '#94a3b8' },
+// ── Refined color palette — muted, professional ─────────────
+const categoryColors: Record<string, {
+  accent: string;
+  headerBg: string;
+  headerBorder: string;
+  accentMuted: string;
+  text: string;
+}> = {
+  blue:    { accent: '#3b82f6', headerBg: 'rgba(59,130,246,0.08)',  headerBorder: 'rgba(59,130,246,0.15)',  accentMuted: 'rgba(59,130,246,0.12)',  text: '#93c5fd' },
+  indigo:  { accent: '#6366f1', headerBg: 'rgba(99,102,241,0.08)',  headerBorder: 'rgba(99,102,241,0.15)', accentMuted: 'rgba(99,102,241,0.12)', text: '#a5b4fc' },
+  amber:   { accent: '#f59e0b', headerBg: 'rgba(245,158,11,0.06)',  headerBorder: 'rgba(245,158,11,0.12)', accentMuted: 'rgba(245,158,11,0.10)', text: '#fcd34d' },
+  emerald: { accent: '#10b981', headerBg: 'rgba(16,185,129,0.06)',  headerBorder: 'rgba(16,185,129,0.12)', accentMuted: 'rgba(16,185,129,0.10)', text: '#6ee7b7' },
+  rose:    { accent: '#f43f5e', headerBg: 'rgba(244,63,94,0.06)',   headerBorder: 'rgba(244,63,94,0.12)',  accentMuted: 'rgba(244,63,94,0.10)',  text: '#fda4af' },
+  violet:  { accent: '#8b5cf6', headerBg: 'rgba(139,92,246,0.06)',  headerBorder: 'rgba(139,92,246,0.12)', accentMuted: 'rgba(139,92,246,0.10)', text: '#c4b5fd' },
+  slate:   { accent: '#64748b', headerBg: 'rgba(100,116,139,0.06)', headerBorder: 'rgba(100,116,139,0.10)', accentMuted: 'rgba(100,116,139,0.08)', text: '#94a3b8' },
 };
 
-const getStatusGlow = (status: string) => {
+const getStatusClassName = (status: string): string => {
   switch (status) {
-    case 'running': return { outline: '2px solid #6366f1', boxShadow: '0 0 0 2px #6366f1, 0 0 24px rgba(99,102,241,0.6)' };
-    case 'success': return { outline: '2px solid #10b981', boxShadow: '0 0 0 2px #10b981, 0 0 20px rgba(16,185,129,0.4)' };
-    case 'error':   return { outline: '2px solid #ef4444', boxShadow: '0 0 0 2px #ef4444, 0 0 24px rgba(239,68,68,0.6)' };
-    case 'waiting': return { outline: '2px solid #f59e0b', boxShadow: '0 0 0 2px #f59e0b, 0 0 16px rgba(245,158,11,0.4)' };
-    default: return {};
+    case 'running': return 'agent-node--running';
+    case 'success': return 'agent-node--success';
+    case 'error':   return 'agent-node--error';
+    case 'skipped': return 'agent-node--skipped';
+    default: return '';
   }
 };
 
 const getStatusIcon = (status: string) => {
   switch (status) {
-    case 'running': return <Loader2 size={12} className="text-indigo-400 animate-spin flex-shrink-0" />;
-    case 'success': return <CheckCircle2 size={12} className="text-emerald-400 flex-shrink-0" />;
-    case 'error':   return <XCircle size={12} className="text-red-400 flex-shrink-0" />;
-    case 'waiting': return <AlertCircle size={12} className="text-amber-400 flex-shrink-0" />;
+    case 'running': return <Loader2 size={11} className="text-indigo-400 animate-spin flex-shrink-0" />;
+    case 'success': return <CheckCircle2 size={11} className="text-emerald-400 flex-shrink-0" />;
+    case 'error':   return <XCircle size={11} className="text-red-400 flex-shrink-0" />;
+    case 'waiting': return <AlertCircle size={11} className="text-amber-400 flex-shrink-0" />;
+    case 'skipped': return <AlertCircle size={11} className="text-slate-500 flex-shrink-0" />;
     default:        return null;
   }
 };
 
-/** Получить цвет handle по состоянию */
-const resolveHandleColor = (port: PortDef, portState: PortState | undefined): string => {
-  if (portState?.hasError) return '#f87171';
-  if (portState?.isActive)  return '#818cf8';
-  if (portState?.isConnected) return getPortColor(port.type);
-  if (port.required && !port.defaultValue) return '#fb7185'; // обязательный незаполненный
-  return getPortColor(port.type);
+/** Muted port color — less saturated than original */
+const getPortColorMuted = (portType: string): string => {
+  const colors: Record<string, string> = {
+    text:    '#818cf8',
+    number:  '#34d399',
+    boolean: '#f472b6',
+    object:  '#fb923c',
+    array:   '#fbbf24',
+    any:     '#94a3b8',
+  };
+  return colors[portType] || '#94a3b8';
 };
 
-// ─── PORT ROW — строка с handle + лейблом, выровненная в один ряд ───────────
+/** Resolve handle color based on state */
+const resolveHandleColor = (port: PortDef, portState: PortState | undefined): string => {
+  if (portState?.hasError) return '#f87171';
+  if (portState?.isActive) return '#818cf8';
+  return getPortColorMuted(port.type);
+};
 
-const InputPortRow = ({
-  port,
-  portState,
-}: {
-  port: PortDef;
-  portState: PortState | undefined;
-}) => {
-  const color = resolveHandleColor(port, portState);
-  const isConnected = portState?.isConnected;
-  const isActive = portState?.isActive;
+// ─── PORT ROW — minimal, clean design ────────────────────────
+
+const InputPortRow = ({ port, portState, nodeData }: { port: PortDef; portState: PortState | undefined; nodeData: any }) => {
+  const connections = useNodeConnections({ handleType: 'target', handleId: port.id });
+  const isConnected = connections.length > 0;
+  const color = resolveHandleColor(port, { ...portState, isConnected, portId: port.id });
+  
+  const sourceNodeData = useNodesData(connections[0]?.source);
+  
+  const manualValue = nodeData?.inputs?.[port.id] ?? nodeData?.settings?.[port.id];
+  let preview = null;
+  
+  if (isConnected && sourceNodeData) {
+    const sType = String(sourceNodeData.type || '').replace('agent_', '');
+    const sLabel = String(sourceNodeData.data?.label || sType || 'Node');
+    preview = (
+      <span style={{ fontSize: 9, color: '#818cf8', background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.2)', padding: '1px 6px', borderRadius: 4, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', maxWidth: 120 }}>
+        {sLabel}
+      </span>
+    );
+  } else if (manualValue !== undefined && manualValue !== null && manualValue !== '') {
+    preview = (
+      <span style={{ fontSize: 9, color: '#94a3b8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', padding: '1px 6px', borderRadius: 4, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden', maxWidth: 120, fontFamily: 'var(--font-mono)' }}>
+        {typeof manualValue === 'string' ? manualValue : JSON.stringify(manualValue)}
+      </span>
+    );
+  }
 
   return (
-    <div className="flex items-center gap-0" style={{ position: 'relative', height: 28 }}>
-      {/* Handle — крупный, выступает за левый край ноды */}
+    <div className="flex items-center gap-0 w-full" style={{ position: 'relative', height: 26 }}>
       <Handle
         type="target"
         position={Position.Left}
@@ -85,65 +121,46 @@ const InputPortRow = ({
         title={`${port.label}${port.required ? ' (required)' : ''}${port.description ? ' — ' + port.description : ''}`}
         style={{
           position: 'absolute',
-          left: -22,
+          left: -18,
           top: '50%',
           transform: 'translateY(-50%)',
-          width: 16,
-          height: 16,
+          width: 10,
+          height: 10,
           borderRadius: '50%',
-          backgroundColor: color,
-          border: `2.5px solid rgba(0,0,0,0.6)`,
-          boxShadow: isActive
-            ? `0 0 0 3px ${color}66, 0 0 12px ${color}`
-            : isConnected
-            ? `0 0 0 2px ${color}44, 0 0 8px ${color}88`
-            : `0 0 6px ${color}66`,
+          backgroundColor: isConnected ? color : 'transparent',
+          border: `2px solid ${color}`,
+          boxShadow: isConnected ? `0 0 6px ${color}55` : 'none',
           cursor: 'crosshair',
           zIndex: 10,
           transition: 'all 0.15s ease',
         }}
       />
-
-      {/* Лейбл — постоянно виден, слева от handle, с цветной точкой */}
-      <div className="flex items-center gap-1.5 pl-2">
-        <div
-          className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-          style={{ backgroundColor: color, boxShadow: `0 0 4px ${color}` }}
-        />
-        <span className="text-[10px] font-medium leading-none" style={{ color: '#94a3b8' }}>
+      <div className="flex items-center justify-between pl-1 w-full gap-2">
+        <span style={{ fontSize: 10, fontWeight: 500, color: '#94a3b8', lineHeight: 1, whiteSpace: 'nowrap' }}>
           {port.label}
-          {port.required && <span style={{ color: '#f87171', marginLeft: 2 }}>*</span>}
+          {port.required && <span style={{ color: '#f87171', marginLeft: 2, fontSize: 9 }}>*</span>}
         </span>
+        {preview && (
+          <div className="flex-1 flex justify-end min-w-0 pr-2">
+            {preview}
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
-const OutputPortRow = ({
-  port,
-  portState,
-}: {
-  port: PortDef;
-  portState: PortState | undefined;
-}) => {
+const OutputPortRow = ({ port, portState }: { port: PortDef; portState: PortState | undefined }) => {
   const color = resolveHandleColor(port, portState);
   const isConnected = portState?.isConnected;
-  const isActive = portState?.isActive;
 
   return (
-    <div className="flex items-center justify-end gap-0" style={{ position: 'relative', height: 28 }}>
-      {/* Лейбл — постоянно виден, справа */}
-      <div className="flex items-center gap-1.5 pr-2">
-        <span className="text-[10px] font-medium leading-none" style={{ color: '#94a3b8' }}>
+    <div className="flex items-center justify-end gap-0" style={{ position: 'relative', height: 24 }}>
+      <div className="flex items-center gap-1.5 pr-1">
+        <span style={{ fontSize: 10, fontWeight: 500, color: '#94a3b8', lineHeight: 1 }}>
           {port.label}
         </span>
-        <div
-          className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-          style={{ backgroundColor: color, boxShadow: `0 0 4px ${color}` }}
-        />
       </div>
-
-      {/* Handle — крупный, выступает за правый край */}
       <Handle
         type="source"
         position={Position.Right}
@@ -151,19 +168,15 @@ const OutputPortRow = ({
         title={`${port.label} (${port.type})${port.description ? ' — ' + port.description : ''}`}
         style={{
           position: 'absolute',
-          right: -22,
+          right: -18,
           top: '50%',
           transform: 'translateY(-50%)',
-          width: 16,
-          height: 16,
+          width: 10,
+          height: 10,
           borderRadius: '50%',
-          backgroundColor: color,
-          border: `2.5px solid rgba(0,0,0,0.6)`,
-          boxShadow: isActive
-            ? `0 0 0 3px ${color}66, 0 0 12px ${color}`
-            : isConnected
-            ? `0 0 0 2px ${color}44, 0 0 8px ${color}88`
-            : `0 0 6px ${color}66`,
+          backgroundColor: isConnected ? color : 'transparent',
+          border: `2px solid ${color}`,
+          boxShadow: isConnected ? `0 0 6px ${color}55` : 'none',
           cursor: 'crosshair',
           zIndex: 10,
           transition: 'all 0.15s ease',
@@ -173,7 +186,7 @@ const OutputPortRow = ({
   );
 };
 
-// ─── MAIN BaseNode ────────────────────────────────────────────────────────────
+// ─── MAIN BaseNode ────────────────────────────────────────────
 
 export const BaseNode = ({
   icon,
@@ -187,60 +200,87 @@ export const BaseNode = ({
   status = 'idle',
   error,
   description,
+  duration,
+  nodeData,
 }: BaseNodeProps) => {
-  const colors = categoryColors[colorKey];
+  const colors = categoryColors[colorKey] || categoryColors.slate;
   const getPortState = (portId: string) => portStates.find(ps => ps.portId === portId);
+  const statusClass = getStatusClassName(status);
 
   const nodeStyle: React.CSSProperties = {
-    minWidth: 260,
-    maxWidth: 380,
-    borderRadius: 14,
-    border: `1.5px solid ${selected ? colors.border : colors.border + '80'}`,
-    background: 'rgba(10, 10, 16, 0.92)',
-    backdropFilter: 'blur(12px)',
-    boxShadow: selected
-      ? `0 0 0 2px ${colors.border}40, 0 8px 32px rgba(0,0,0,0.5), 0 0 20px ${colors.glow}`
-      : `0 4px 20px rgba(0,0,0,0.4), 0 0 12px ${colors.glow}`,
-    transition: 'all 0.2s ease',
-    transform: selected ? 'scale(1.01)' : 'scale(1)',
-    ...getStatusGlow(status),
+    minWidth: 240,
+    maxWidth: 360,
+    borderRadius: 'var(--node-radius)',
+    border: `1px solid ${selected ? colors.accent + '60' : 'var(--node-border)'}`,
+    background: 'var(--node-bg)',
+    backdropFilter: 'blur(16px)',
+    boxShadow: selected ? 'var(--node-shadow-selected)' : 'var(--node-shadow)',
+    transition: 'box-shadow 0.25s ease, border-color 0.25s ease, transform 0.2s ease',
+    fontFamily: 'var(--font-sans)',
   };
 
   return (
-    <div style={nodeStyle}>
+    <div style={nodeStyle} className={statusClass}>
 
-      {/* ── Заголовок ─────────────────────────────────── */}
+      {/* ── Header ──────────────────────────────────── */}
       <div
         style={{
-          padding: '9px 12px',
-          background: colors.header,
-          borderBottom: `1px solid ${colors.border}30`,
-          borderRadius: '14px 14px 0 0',
+          padding: '8px 12px',
+          background: colors.headerBg,
+          borderBottom: `1px solid ${colors.headerBorder}`,
+          borderRadius: 'var(--node-radius) var(--node-radius) 0 0',
           display: 'flex',
           alignItems: 'center',
-          gap: 8,
+          gap: 7,
         }}
       >
-        <span style={{ color: colors.text, display: 'flex', alignItems: 'center' }}>{icon}</span>
-        <span style={{ color: colors.text, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ color: colors.text, display: 'flex', alignItems: 'center', opacity: 0.85 }}>{icon}</span>
+        <span style={{
+          color: '#e2e8f0',
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: '-0.01em',
+          flex: 1,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
           {title}
         </span>
+
+        {/* Duration badge */}
+        {((duration !== undefined && duration > 0) || (nodeData?.duration && nodeData.duration > 0)) && status !== 'running' && (
+          <span style={{
+            fontSize: 9,
+            fontWeight: 500,
+            color: (duration || nodeData.duration) < 1000 ? '#34d399' : (duration || nodeData.duration) < 3000 ? '#fbbf24' : '#f87171',
+            background: 'rgba(255,255,255,0.04)',
+            padding: '1px 5px',
+            borderRadius: 4,
+            fontFamily: 'var(--font-mono)',
+          }}>
+            {(duration || nodeData.duration) < 1000 ? `${(duration || nodeData.duration)}ms` : `${((duration || nodeData.duration) / 1000).toFixed(1)}s`}
+          </span>
+        )}
+
         {getStatusIcon(status)}
+
         {description && (
           <div className="group relative flex-shrink-0">
-            <Info size={11} style={{ color: '#475569', cursor: 'help' }} />
+            <Info size={11} style={{ color: '#475569', cursor: 'help', opacity: 0.6 }} />
             <div
               className="absolute right-0 top-6 z-50 hidden group-hover:block pointer-events-none"
               style={{
                 width: 220,
-                background: 'rgba(6,6,12,0.97)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: 8,
+                background: 'rgba(8,8,14,0.97)',
+                border: '1px solid rgba(255,255,255,0.08)',
+                borderRadius: 10,
                 padding: '8px 10px',
                 fontSize: 10,
                 color: '#94a3b8',
                 lineHeight: 1.6,
                 boxShadow: '0 8px 32px rgba(0,0,0,0.7)',
+                backdropFilter: 'blur(12px)',
               }}
             >
               {description}
@@ -249,69 +289,82 @@ export const BaseNode = ({
         )}
       </div>
 
-      {/* ── Порты + тело ──────────────────────────────── */}
-      <div style={{ display: 'flex', padding: '8px 0' }}>
+      {/* ── Ports + Body ──────────────────────────────── */}
+      <div style={{ display: 'flex', padding: '6px 0' }}>
 
-        {/* Левая колонка — входные порты */}
+        {/* Left column — inputs */}
         {inputs.length > 0 && (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 2,
-              paddingLeft: 22,   // 22px = handle выступает на 22px, так что текст начинается от края ноды
-              paddingRight: 4,
-              paddingTop: 4,
-              paddingBottom: 4,
-              minWidth: 110,
-              borderRight: outputs.length > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none',
-            }}
-          >
-            <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4, paddingLeft: 2 }}>
+          <div style={{
+            display: 'flex',
+            flex: 1,
+            flexDirection: 'column',
+            gap: 1,
+            paddingLeft: 18,
+            paddingRight: 4,
+            paddingTop: 2,
+            paddingBottom: 2,
+            minWidth: 100,
+            borderRight: outputs.length > 0 ? '1px solid rgba(255,255,255,0.03)' : 'none',
+          }}>
+            <div style={{
+              fontSize: 8,
+              color: '#334155',
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              fontWeight: 600,
+              marginBottom: 2,
+              paddingLeft: 1,
+            }}>
               Inputs
             </div>
             {inputs.map(port => (
-              <InputPortRow key={port.id} port={port} portState={getPortState(port.id)} />
+              <InputPortRow key={port.id} port={port} portState={getPortState(port.id)} nodeData={nodeData} />
             ))}
           </div>
         )}
 
-        {/* Центр — основной контент */}
-        <div style={{ flex: 1, minWidth: 0, padding: '4px 8px' }}>
-          {children}
-          {error && (
+        {/* Node Center / Floating Error — Render only if there's an error */}
+        {error && (
+          <div style={{ flex: 1, minWidth: 0, padding: '2px 8px' }}>
             <div style={{
               marginTop: 6,
               padding: '4px 8px',
-              background: 'rgba(239,68,68,0.1)',
-              border: '1px solid rgba(239,68,68,0.3)',
+              background: 'rgba(239,68,68,0.08)',
+              border: '1px solid rgba(239,68,68,0.2)',
               borderRadius: 6,
               fontSize: 10,
               color: '#f87171',
               wordBreak: 'break-word',
             }}>
-              ❌ {error}
+              {error}
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        {/* Правая колонка — выходные порты */}
+        {/* Right column — outputs */}
         {outputs.length > 0 && (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 2,
-              paddingRight: 22,
-              paddingLeft: 4,
-              paddingTop: 4,
-              paddingBottom: 4,
-              minWidth: 110,
-              alignItems: 'flex-end',
-              borderLeft: inputs.length > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none',
-            }}
-          >
-            <div style={{ fontSize: 9, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4, paddingRight: 2 }}>
+          <div style={{
+            display: 'flex',
+            flex: 1,
+            flexDirection: 'column',
+            gap: 1,
+            paddingRight: 18,
+            paddingLeft: 4,
+            paddingTop: 2,
+            paddingBottom: 2,
+            minWidth: 100,
+            alignItems: 'flex-end',
+            borderLeft: inputs.length > 0 ? '1px solid rgba(255,255,255,0.03)' : 'none',
+          }}>
+            <div style={{
+              fontSize: 8,
+              color: '#334155',
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              fontWeight: 600,
+              marginBottom: 2,
+              paddingRight: 1,
+            }}>
               Outputs
             </div>
             {outputs.map(port => (
@@ -320,6 +373,13 @@ export const BaseNode = ({
           </div>
         )}
       </div>
+
+      {/* ── Children (custom node body) ──────────────── */}
+      {children && (
+        <div style={{ padding: '4px 12px 10px' }}>
+          {children}
+        </div>
+      )}
     </div>
   );
 };
