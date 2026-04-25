@@ -11,12 +11,16 @@ import ImageMemoryPill from '@/components/ImageMemoryPill';
 import ImageMemoryRecallPill from '@/components/ImageMemoryRecallPill';
 import { CommandPalette } from '@/components/CommandPalette';
 import { SelectionToolbar } from '@/components/SelectionToolbar';
+import StorageWarningBanner from '@/components/StorageWarningBanner';
+import { AgentChatPage } from '@/components/agent-chat/AgentChatPage';
+import { AgentChatList } from '@/components/agent-chat/AgentChatList';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,
   Save, X, ArrowDown, RefreshCw, MonitorPlay, Zap, FilePen, BarChart2,
-  Brain, Loader2, CheckCircle2
+  Brain, Loader2, CheckCircle2, Bot, Pencil
 } from 'lucide-react';
+
 // @ts-ignore
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
 import LivePreviewPanel from '@/components/LivePreviewPanel';
@@ -48,6 +52,7 @@ import {
   revokePreviewUrls,
   loadGhostNudgeEnabled, saveGhostNudgeEnabled,
   loadGhostNudgeMaxRetries, saveGhostNudgeMaxRetries,
+  checkAndRepairStorage,
 } from '@/lib/storage';
 import {
   DEFAULT_DEEPTHINK_SYSTEM_PROMPT,
@@ -248,12 +253,60 @@ export default function Home() {
   const [agentInputRequest, setAgentInputRequest] = useState<{ source: string; context: any; resolve: (val: any) => void } | null>(null);
   const [currentExecutor, setCurrentExecutor] = useState<GraphExecutor | null>(null);
 
+  // Agent Chat 2.0 State
+  const [agentChatAgentId, setAgentChatAgentId] = useState<string | null>(null);
+  const [agentChatThreadId, setAgentChatThreadId] = useState<string | null>(null);
+  const [agentChatRenderKey, setAgentChatRenderKey] = useState(0); // Для принудительного ре-рендера
+  const [isAgentRunning, setIsAgentRunning] = useState(false);
+
+  // ============ STORAGE REPAIR ============
+  useEffect(() => {
+    const result = checkAndRepairStorage();
+    if (!result.ok) {
+      console.warn('[storage] Repair result:', result.warning);
+    }
+  }, []); // только один раз при маунте
+
+  useEffect(() => {
+    const handleStatus = (e: Event) => {
+      const { running, title } = (e as CustomEvent).detail;
+      setIsAgentRunning(running);
+      if (title) {
+        const el = document.getElementById('agent-thread-title');
+        if (el) el.innerText = title;
+      }
+    };
+    const onLoadThread = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (typeof detail === 'object' && detail.threadId && detail.agentConfigId) {
+        setAgentChatAgentId(detail.agentConfigId);
+        setAgentChatThreadId(detail.threadId);
+        setAgentChatRenderKey(prev => prev + 1); // Принудительный ре-рендер
+      } else {
+        setAgentChatThreadId(detail);
+        setAgentChatRenderKey(prev => prev + 1); // Принудительный ре-рендер
+      }
+    };
+    const onNewThread = () => {
+      setAgentChatThreadId(null); // Сбрасываем тред для создания нового
+      setAgentChatRenderKey(prev => prev + 1); // Принудительный ре-рендер
+    };
+    window.addEventListener('agent-chat-status', handleStatus);
+    window.addEventListener('agent-chat-load-thread', onLoadThread);
+    window.addEventListener('agent-chat-new-thread', onNewThread);
+    return () => {
+      window.removeEventListener('agent-chat-status', handleStatus);
+      window.removeEventListener('agent-chat-load-thread', onLoadThread);
+      window.removeEventListener('agent-chat-new-thread', onNewThread);
+    };
+  }, []);
+
   // Arena: add onOpenAgent to chatSidebarArenaProps
   const chatSidebarArenaPropsWithAgent = {
     ...chatSidebarArenaProps,
     onOpenAgent: null as any, // будет установлен ниже
-    activeAgentId,
-    onSelectAgent: (id: string | null) => setActiveAgentId(id),
+    activeAgentId: agentChatAgentId,
+    onSelectAgent: (id: string | null) => setAgentChatAgentId(id),
   };
 
   const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze, abort: abortDeepThink } = deepThink;
@@ -2596,6 +2649,8 @@ export default function Home() {
 
   return (
     <div className="fixed inset-0 flex overflow-hidden bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06),transparent_24%),var(--surface-0)]">
+      {/* Storage Warning Banner */}
+      <StorageWarningBanner />
 
       {isMobile && chatSidebarOpen && (
         <div className="sidebar-mobile-overlay" onClick={(e) => { if (e.target === e.currentTarget) setChatSidebarOpen(false); }}>
@@ -2729,6 +2784,10 @@ export default function Home() {
                 <span className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px] md:max-w-xs">
                   {arena.activeSession?.title || 'Новая арена'}
                 </span>
+              ) : appMode === 'agents' && agentChatAgentId ? (
+                <span id="agent-thread-title" className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px]">
+                  Агентный чат
+                </span>
               ) : chatTitle ? (
                 <span className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px] md:max-w-xs">
                   {chatTitle}
@@ -2756,20 +2815,50 @@ export default function Home() {
           </div>
 
           <div className="flex items-center gap-1">
-            <button
-              onClick={toggleSettingsSidebar}
-              className={`flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-all ${
-                settingsSidebarOpen
-                  ? appMode === 'arena'
-                    ? 'border-amber-400/30 bg-amber-400/10 text-amber-400'
-                    : 'border-[var(--border-strong)] bg-[var(--surface-3)] text-[var(--text-primary)]'
-                  : 'border-transparent text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
-              }`}
-              title={appMode === 'arena' ? 'Агенты' : 'Настройки'}
-            >
-              {appMode === 'arena' ? <Zap size={13} /> : <SlidersHorizontal size={13} />}
-              <span className="hidden md:block">{appMode === 'arena' ? 'Агенты' : 'Настройки'}</span>
-            </button>
+            {appMode === 'agents' && agentChatAgentId && (
+              <>
+                <button
+                  onClick={() => window.dispatchEvent(new CustomEvent('agent-chat-new-thread'))}
+                  className="flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-xs text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)] transition-all"
+                >
+                  <MessageSquarePlus size={11} />
+                  <span className="hidden md:block">Новый чат</span>
+                </button>
+                <button
+                  onClick={() => setAgentChatAgentId(null)}
+                  className="flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-xs text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)] transition-all"
+                >
+                  <X size={11} />
+                  <span className="hidden md:block">К списку</span>
+                </button>
+              </>
+            )}
+            {appMode === 'agents' && (
+              <button
+                onClick={() => window.location.href = '/agents'}
+                className="flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-xs text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)] transition-all"
+                title="Редактор графов"
+              >
+                <Pencil size={11} />
+                <span className="hidden md:block">Редактор</span>
+              </button>
+            )}
+            {appMode !== 'agents' && (
+              <button
+                onClick={toggleSettingsSidebar}
+                className={`flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-all ${
+                  settingsSidebarOpen
+                    ? appMode === 'arena'
+                      ? 'border-amber-400/30 bg-amber-400/10 text-amber-400'
+                      : 'border-[var(--border-strong)] bg-[var(--surface-3)] text-[var(--text-primary)]'
+                    : 'border-transparent text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
+                }`}
+                title={appMode === 'arena' ? 'Агенты' : 'Настройки'}
+              >
+                {appMode === 'arena' ? <Zap size={13} /> : <SlidersHorizontal size={13} />}
+                <span className="hidden md:block">{appMode === 'arena' ? 'Агенты' : 'Настройки'}</span>
+              </button>
+            )}
             
             {messages.length > 0 && (
               <button
@@ -2830,40 +2919,25 @@ export default function Home() {
           onScroll={handleScroll}
         >
           {appMode === 'agents' ? (
-            // Agent Chat Mode
-            activeAgentId ? (
-              // Show agent chat page (будет реализовано позже)
-              <div className="flex flex-col items-center justify-center h-full text-center p-8">
-                <div className="w-20 h-20 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mb-4">
-                  <Zap size={32} className="text-indigo-400" />
-                </div>
-                <h2 className="text-xl font-semibold text-[var(--text-primary)] mb-2">
-                  Агентный чат
-                </h2>
-                <p className="text-[var(--text-dim)] max-w-md mb-6">
-                  Функция агентного чата будет доступна в следующей версии.
-                  Пока вы можете создавать и редактировать агентов во вкладке "Agents" в навигации.
-                </p>
-                <button
-                  onClick={() => setActiveAgentId(null)}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors"
-                >
-                  Вернуться к списку
-                </button>
-              </div>
+            agentChatAgentId ? (
+              <AgentChatPage
+                key={agentChatRenderKey}
+                agentConfigId={agentChatAgentId}
+                threadId={agentChatThreadId || undefined}
+                onBack={() => {
+                  setAgentChatAgentId(null);
+                  setAgentChatThreadId(null);
+                  setAgentChatRenderKey(prev => prev + 1);
+                }}
+              />
             ) : (
-              // Show agent list (будет реализовано позже)
-              <div className="flex flex-col items-center justify-center h-full text-center p-8">
-                <div className="w-20 h-20 rounded-full bg-[var(--surface-2)] flex items-center justify-center mb-4">
-                  <Zap size={32} className="text-[var(--text-dim)]" />
-                </div>
-                <h2 className="text-xl font-semibold text-[var(--text-primary)] mb-2">
-                  Нет опубликованных агентов
-                </h2>
-                <p className="text-[var(--text-dim)] max-w-md mb-6">
-                  Создайте агента в редакторе графов (вкладка "Agents" в навигации) и опубликуйте его, чтобы начать чат
-                </p>
-              </div>
+              <AgentChatList
+                onSelectAgent={(configId) => {
+                  setAgentChatAgentId(configId);
+                  setAgentChatThreadId(null);
+                  setAgentChatRenderKey(prev => prev + 1); // Принудительный ре-рендер
+                }}
+              />
             )
           ) : showLiveCanvas ? (
             <LivePreviewPanel
@@ -3000,7 +3074,7 @@ export default function Home() {
         </div>
 
         {/* Input */}
-        <div className={`flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper ${appMode === 'agents' ? 'hidden' : ''}`}>
+        <div className={`flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper ${appMode === 'agents' && !agentChatAgentId ? 'hidden' : ''}`}>
           {appMode === 'chat' && (
             <div className="px-4 mb-2 flex items-center justify-end gap-2">
               <DeepThinkToggle
@@ -3024,13 +3098,13 @@ export default function Home() {
             onSend={appMode === 'arena'
               ? (text, files) => arena.sendUserMessage(text, files)
               : appMode === 'agents'
-              ? handleAgentSend
+              ? (text: string) => window.dispatchEvent(new CustomEvent('agent-chat-send', { detail: text }))
               : handleSend
             }
-            onStop={appMode === 'arena' ? arena.stopStreaming : handleStop}
+            onStop={appMode === 'arena' ? arena.stopStreaming : appMode === 'agents' ? () => window.dispatchEvent(new CustomEvent('agent-chat-stop')) : handleStop}
             onAddUserMessage={appMode === 'arena' ? () => {} : handleAddUserMessage}
-            isStreaming={appMode === 'arena' ? arena.isStreaming : isStreaming}
-            disabled={appMode === 'arena' ? !arena.activeSession : appMode === 'agents' ? !activeAgentId : !hasApiAndModel}
+            isStreaming={appMode === 'arena' ? arena.isStreaming : appMode === 'agents' ? isAgentRunning : isStreaming}
+            disabled={appMode === 'arena' ? !arena.activeSession : appMode === 'agents' ? !agentChatAgentId : !hasApiAndModel}
             canContinue={appMode === 'arena' ? (
               arena.activeSession?.messages.some(m => m.role === 'model' && !m.isStreaming && m.parts.some(p => 'text' in p && (p as {text:string}).text.length > 0)) ?? false
             ) : canContinue}
@@ -3054,6 +3128,7 @@ export default function Home() {
             onAnnotationClick={() => {}}
             deepThinkEnabled={appMode === 'arena' ? false : deepThinkState.enabled}
             onDeepThinkToggle={appMode === 'arena' ? () => {} : toggleDeepThink}
+            maxUploadSizeMB={app.maxUploadSizeMB}
           />
           {/* Arena Input Bar */}
           {appMode === 'arena' && arena.activeSession && (

@@ -626,15 +626,15 @@ input[type='range']::-moz-range-thumb {
   --node-bg-hover: rgba(20, 20, 26, 0.98);
   --node-border: rgba(255, 255, 255, 0.07);
   --node-border-hover: rgba(255, 255, 255, 0.14);
-  --node-border-selected: rgba(99, 102, 241, 0.6);
+  --node-border-selected: rgba(255, 255, 255, 0.6);
   --node-shadow: 0 2px 16px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255,255,255,0.04);
   --node-shadow-hover: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255,255,255,0.08);
-  --node-shadow-selected: 0 0 0 2px rgba(99,102,241,0.4), 0 8px 32px rgba(0,0,0,0.5);
+  --node-shadow-selected: 0 0 0 2px rgba(255,255,255,0.4), 0 8px 32px rgba(0,0,0,0.5);
   --node-radius: 14px;
   --node-header-height: 36px;
 
   /* Port colors — muted, professional palette */
-  --port-text: #818cf8;
+  --port-text: #888;
   --port-number: #34d399;
   --port-boolean: #f472b6;
   --port-object: #fb923c;
@@ -642,12 +642,12 @@ input[type='range']::-moz-range-thumb {
   --port-any: #94a3b8;
 
   /* Category accent colors — subtle gradients */
-  --cat-ai: #6366f1;
+  --cat-ai: #888;
   --cat-logic: #f59e0b;
   --cat-memory: #10b981;
-  --cat-chat: #8b5cf6;
+  --cat-chat: #888;
   --cat-utility: #64748b;
-  --cat-io: #3b82f6;
+  --cat-io: #888;
 }
 
 /* ── Node Structure ────────────────────────────────────────── */
@@ -673,19 +673,19 @@ input[type='range']::-moz-range-thumb {
 }
 
 .react-flow__edge.selected .react-flow__edge-path {
-  stroke: #818cf8 !important;
+  stroke: #fbbf24 !important;
   stroke-width: 2.5 !important;
-  filter: drop-shadow(0 0 6px rgba(99,102,241,0.5));
+  filter: drop-shadow(0 0 6px rgba(251,191,36,0.5));
 }
 
 .react-flow__edge:hover .react-flow__edge-path {
-  stroke: rgba(129, 140, 248, 0.7) !important;
+  stroke: rgba(251, 191, 36, 0.7) !important;
   stroke-width: 2.5 !important;
 }
 
 /* ── Connection line ───────────────────────────────────────── */
 .react-flow__connection-path {
-  stroke: #818cf8 !important;
+  stroke: #888 !important;
   stroke-width: 2 !important;
   stroke-dasharray: 6 4 !important;
   animation: connectionDash 0.4s linear infinite !important;
@@ -732,8 +732,8 @@ input[type='range']::-moz-range-thumb {
 }
 
 @keyframes nodeRunning {
-  0%, 100% { box-shadow: 0 0 0 2px rgba(99,102,241,0.3), 0 8px 32px rgba(0,0,0,0.5); }
-  50% { box-shadow: 0 0 0 3px rgba(99,102,241,0.6), 0 0 20px rgba(99,102,241,0.15), 0 8px 32px rgba(0,0,0,0.5); }
+  0%, 100% { box-shadow: 0 0 0 2px rgba(255,255,255,0.3), 0 8px 32px rgba(0,0,0,0.5); }
+  50% { box-shadow: 0 0 0 3px rgba(255,255,255,0.6), 0 0 20px rgba(255,255,255,0.15), 0 8px 32px rgba(0,0,0,0.5); }
 }
 
 @keyframes nodeSuccess {
@@ -747,7 +747,7 @@ input[type='range']::-moz-range-thumb {
 }
 
 .edge-executing .react-flow__edge-path {
-  stroke: #818cf8 !important;
+  stroke: #888 !important;
   stroke-width: 2.5 !important;
   stroke-dasharray: 8 6 !important;
   animation: flowPulse 0.5s linear infinite !important;

@@ -29,7 +29,10 @@ export interface NodeData extends Record<string, unknown> {
   outputs: Record<string, any>;
   settings: Record<string, any>;
   status?: 'idle' | 'running' | 'success' | 'warning' | 'error' | 'disabled' | 'waiting';
-  error?: string;
+  // 🔴 ФИКС #6: error может быть строкой или structured
+  error?: string | StructuredError;
+  // 🔴 ФИКС #6: debug snapshot для отображения в ноде
+  debugInputSnapshot?: Record<string, unknown>;
 }
 
 export interface EdgeData extends Record<string, unknown> {
@@ -62,7 +65,18 @@ export interface NodeRunResult {
   duration: number;
   input?: Record<string, unknown>;
   output?: Record<string, unknown>;
-  error?: string;
+  // 🔴 ФИКС #6: Structured Error
+  error?: string | StructuredError;
+}
+
+// 🔴 ФИКС #6: Structured Error для детального дебага
+export interface StructuredError {
+  message: string;
+  type: string;              // TypeError, NetworkError, ValidationError
+  inputSnapshot?: Record<string, unknown>;  // что было на входных портах
+  nodeType?: string;         // тип ноды где произошла ошибка
+  timestamp: number;
+  stack?: string;            // stack trace
 }
 
 // Options for the GraphExecutor

@@ -23,6 +23,7 @@ interface ChatInputProps {
   onAnnotationClick?: (text: string) => void;
   deepThinkEnabled?: boolean;
   onDeepThinkToggle?: () => void;
+  maxUploadSizeMB?: number;
 }
 
 const ACCEPTED_TYPES = {
@@ -72,7 +73,8 @@ const ACCEPTED_TYPES = {
 };
 
 // Максимальный размер файла в байтах (3.5MB для безопасности, учитывая лимит Vercel 4.5MB)
-const MAX_FILE_SIZE = 3.5 * 1024 * 1024;
+// DEPRECATED: теперь используется проп maxUploadSizeMB
+// const MAX_FILE_SIZE = 3.5 * 1024 * 1024;
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -268,8 +270,11 @@ export default function ChatInput({
   onSend, onStop, isStreaming, disabled,
   canContinue, onContinue, canRun, onRun, onAddUserMessage,
   pendingCanvasElement, onCanvasElementConsumed, onAnnotationClick,
-  deepThinkEnabled, onDeepThinkToggle
+  deepThinkEnabled, onDeepThinkToggle,
+  maxUploadSizeMB = 3.5,
 }: ChatInputProps) {
+  const MAX_FILE_SIZE = maxUploadSizeMB * 1024 * 1024; // Вычисляем из пропа
+  
   const [text, setText] = useState('');
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [annotationRefs, setAnnotationRefs] = useState<AnnotationReference[]>([]);
@@ -485,17 +490,17 @@ export default function ChatInput({
         // Для изображений пробуем сжать
         if (finalMimeType.startsWith('image/')) {
           try {
-            processedFile = await compressImage(file);
+            processedFile = await compressImage(file, maxUploadSizeMB);
             console.log(`Изображение сжато: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(processedFile.size / 1024 / 1024).toFixed(2)}MB`);
           } catch (err) {
-            alert(`Не удалось сжать изображение. Максимальный размер: ${(MAX_FILE_SIZE / 1024 / 1024).toFixed(1)}MB`);
+            alert(`Не удалось сжать изображение. Максимальный размер: ${maxUploadSizeMB.toFixed(1)}MB`);
             return null;
           }
         }
         // Для видео показываем предупреждение
         else if (finalMimeType.startsWith('video/')) {
           try {
-            await compressVideo(file);
+            await compressVideo(file, maxUploadSizeMB);
             return null; // compressVideo выбросит ошибку для больших файлов
           } catch {
             return null;
@@ -503,14 +508,14 @@ export default function ChatInput({
         }
         // Для остальных файлов просто отклоняем
         else {
-          alert(`Файл слишком большой (${(file.size / 1024 / 1024).toFixed(1)}MB). Максимальный размер: ${(MAX_FILE_SIZE / 1024 / 1024).toFixed(1)}MB`);
+          alert(`Файл слишком большой (${(file.size / 1024 / 1024).toFixed(1)}MB). Максимальный размер: ${maxUploadSizeMB.toFixed(1)}MB`);
           return null;
         }
       }
       
       // Финальная проверка размера после сжатия
       if (processedFile.size > MAX_FILE_SIZE) {
-        alert(`Файл все еще слишком большой после сжатия. Максимальный размер: ${(MAX_FILE_SIZE / 1024 / 1024).toFixed(1)}MB`);
+        alert(`Файл все еще слишком большой после сжатия. Максимальный размер: ${maxUploadSizeMB.toFixed(1)}MB`);
         return null;
       }
 
@@ -531,7 +536,7 @@ export default function ChatInput({
       console.error('File processing error:', err);
       return null;
     }
-  }, []);
+  }, [maxUploadSizeMB]);
 
   const handleFiles = useCallback(async (fileList: FileList | File[]) => {
     const arr = Array.from(fileList);

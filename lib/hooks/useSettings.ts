@@ -19,6 +19,7 @@ import {
   createSystemPrompt,
   loadGhostNudgeEnabled, saveGhostNudgeEnabled,
   loadGhostNudgeMaxRetries, saveGhostNudgeMaxRetries,
+  loadMaxUploadSizeMB, saveMaxUploadSizeMB, DEFAULT_MAX_UPLOAD_SIZE_MB,
 } from '@/lib/storage';
 import { DEFAULT_DEEPTHINK_SYSTEM_PROMPT } from '@/lib/gemini';
 
@@ -52,6 +53,7 @@ export function useSettings() {
   const [maxMemoryCalls, setMaxMemoryCalls] = useState<number>(100);
   const [ghostNudgeEnabled, setGhostNudgeEnabled] = useState<boolean>(true);
   const [ghostNudgeMaxRetries, setGhostNudgeMaxRetries] = useState<number>(3);
+  const [maxUploadSizeMB, setMaxUploadSizeMBState] = useState<number>(DEFAULT_MAX_UPLOAD_SIZE_MB);
 
   // Load from localStorage
   useEffect(() => {
@@ -109,6 +111,7 @@ export function useSettings() {
       const savedDeepThinkPrompt = loadDeepThinkSystemPrompt();
       const savedGhostNudgeEnabled = loadGhostNudgeEnabled();
       const savedGhostNudgeMaxRetries = loadGhostNudgeMaxRetries();
+      const savedMaxUploadSizeMB = loadMaxUploadSizeMB();
 
       if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
       if (savedTemp) setTemperature(parseFloat(savedTemp));
@@ -119,6 +122,7 @@ export function useSettings() {
       if (savedMaxMemoryCalls !== null) setMaxMemoryCalls(parseInt(savedMaxMemoryCalls));
       setGhostNudgeEnabled(savedGhostNudgeEnabled);
       setGhostNudgeMaxRetries(savedGhostNudgeMaxRetries);
+      setMaxUploadSizeMBState(savedMaxUploadSizeMB);
     };
     loadData();
   }, []);
@@ -153,6 +157,7 @@ export function useSettings() {
   useEffect(() => { localStorage.setItem('gemini_max_memory_calls', maxMemoryCalls.toString()); }, [maxMemoryCalls]);
   useEffect(() => { saveGhostNudgeEnabled(ghostNudgeEnabled); }, [ghostNudgeEnabled]);
   useEffect(() => { saveGhostNudgeMaxRetries(ghostNudgeMaxRetries); }, [ghostNudgeMaxRetries]);
+  useEffect(() => { saveMaxUploadSizeMB(maxUploadSizeMB); }, [maxUploadSizeMB]);
 
   // Helper: get current API key
   const effectiveProviderId = activeModel?.providerId || activeProviderId;
@@ -278,6 +283,8 @@ export function useSettings() {
     setGhostNudgeEnabled,
     ghostNudgeMaxRetries,
     setGhostNudgeMaxRetries,
+    maxUploadSizeMB,
+    setMaxUploadSizeMB: setMaxUploadSizeMBState,
 
     // Model handlers
     onModelsLoad: handleModelsLoad,

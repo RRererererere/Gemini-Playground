@@ -114,17 +114,17 @@ export const AgentEditorSidebar = () => {
       {/* Header */}
       <div className="p-4 border-b border-[var(--border)] bg-[var(--surface-2)]/50">
         <h3 className="text-xs font-bold text-[var(--text-primary)] mb-3 flex items-center gap-2 uppercase tracking-widest">
-          <Zap size={14} className="text-indigo-400 fill-indigo-400/20" />
+          <Zap size={14} className="text-[var(--text-muted)] fill-white/10" />
           Nodes Library
         </h3>
         <div className="relative group">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)] group-focus-within:text-indigo-400 transition-colors" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)] group-focus-within:text-white transition-colors" />
           <input
             type="text"
             placeholder="Search nodes..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-xs bg-[var(--surface-3)] border border-[var(--border)] rounded-xl text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500/50 transition-all placeholder:text-[var(--text-dim)]/50 font-medium"
+            className="w-full pl-9 pr-3 py-2 text-xs bg-[var(--surface-3)] border border-[var(--border)] rounded-xl text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-white/20 focus:border-white/50 transition-all placeholder:text-[var(--text-dim)]/50 font-medium"
           />
         </div>
       </div>
@@ -153,10 +153,10 @@ export const AgentEditorSidebar = () => {
                     key={node.type}
                     onDragStart={(e) => onDragStart(e, node.type, node.label)}
                     draggable
-                    className="flex items-center gap-3 p-2.5 rounded-xl border border-transparent bg-[var(--surface-2)]/40 cursor-grab active:cursor-grabbing hover:bg-[var(--surface-3)] hover:border-indigo-500/20 hover:shadow-lg hover:shadow-indigo-500/5 transition-all group overflow-hidden"
+                    className="flex items-center gap-3 p-2.5 rounded-xl border border-transparent bg-[var(--surface-2)]/40 cursor-grab active:cursor-grabbing hover:bg-[var(--surface-3)] hover:border-white/20 hover:shadow-lg transition-all group overflow-hidden"
                   >
-                    <div className="w-8 h-8 rounded-lg bg-[var(--surface-3)] border border-[var(--border)] flex items-center justify-center flex-shrink-0 group-hover:bg-indigo-500/10 group-hover:border-indigo-500/30 transition-colors">
-                      <span className="text-[var(--text-dim)] group-hover:text-indigo-400 transition-colors">{node.icon}</span>
+                    <div className="w-8 h-8 rounded-lg bg-[var(--surface-3)] border border-[var(--border)] flex items-center justify-center flex-shrink-0 group-hover:bg-white/10 group-hover:border-white/30 transition-colors">
+                      <span className="text-[var(--text-dim)] group-hover:text-white transition-colors">{node.icon}</span>
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="text-[11px] font-bold text-[var(--text-primary)] truncate">

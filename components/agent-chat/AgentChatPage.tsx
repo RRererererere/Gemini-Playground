@@ -2,11 +2,12 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { nanoid } from 'nanoid';
-import { ArrowLeft, MessageSquare, Loader2 } from 'lucide-react';
-import { AgentChatConfig, AgentChatThread, AgentChatMessage, AgentStep } from '@/lib/agent-engine/chat-types';
+import { Loader2 } from 'lucide-react';
+import { AgentChatConfig, AgentChatThread, AgentChatMessage, AgentStep, FeedbackRequest, FeedbackResponse } from '@/lib/agent-engine/chat-types';
 import {
   getAgentConfig,
   getThread,
+  getThreads,
   saveThread,
   appendMessage,
   updateMessage,
@@ -15,8 +16,7 @@ import {
 import { getGraphById } from '@/lib/agent-engine/graph-storage';
 import { GraphExecutor } from '@/lib/agent-engine/executor';
 import { AgentChatMessageComponent } from './AgentChatMessage';
-import { AgentChatInput } from './AgentChatInput';
-import { AgentThreadsSidebar } from './AgentThreadsSidebar';
+import { InlineFeedbackWidget } from './InlineFeedbackWidget';
 
 interface AgentChatPageProps {
   agentConfigId: string;
@@ -29,11 +29,15 @@ export function AgentChatPage({ agentConfigId, threadId: initialThreadId, onBack
   const [thread, setThread] = useState<AgentChatThread | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [currentSteps, setCurrentSteps] = useState<AgentStep[]>([]);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [feedbackRequest, setFeedbackRequest] = useState<{
+    request: FeedbackRequest;
+    resolve: (val: FeedbackResponse) => void;
+  } | null>(null);
+  
   const executorRef = useRef<GraphExecutor | null>(null);
-  const pendingUserInputRef = useRef<{ resolve: (val: any) => void; reject: (err: any) => void } | null>(null);
+  // 🔴 ФИКС #4: RAF ref для throttle стриминга
+  const streamingRafRef = useRef<number | undefined>(undefined);
 
   // Load config and thread
   useEffect(() => {
@@ -44,16 +48,84 @@ export function AgentChatPage({ agentConfigId, threadId: initialThreadId, onBack
       const loadedThread = getThread(initialThreadId);
       setThread(loadedThread);
     } else if (loadedConfig) {
-      // Create new thread
+      // Создаём новый тред только если нет initialThreadId
       const newThread = createThread(agentConfigId, loadedConfig.graphId);
       setThread(newThread);
     }
   }, [agentConfigId, initialThreadId]);
 
-  // Auto-scroll to bottom
+  // Sync status back to main UI
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [thread?.messages]);
+    if (thread) {
+      window.dispatchEvent(new CustomEvent('agent-chat-status', { 
+        detail: { running: isRunning, title: thread.title } 
+      }));
+    }
+  }, [isRunning, thread?.title]);
+
+  // Listen for global events
+  useEffect(() => {
+    const onSend = (e: Event) => handleSendMessage((e as CustomEvent).detail);
+    const onStop = () => handleStop();
+    const onNewChat = () => handleNewChat();
+    const onLoadThread = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      let threadId: string;
+      
+      if (typeof detail === 'object' && detail.threadId) {
+        threadId = detail.threadId;
+      } else {
+        threadId = detail;
+      }
+      
+      const loadedThread = getThread(threadId);
+      if (loadedThread) {
+        setThread(loadedThread);
+        setFeedbackRequest(null);
+        setCurrentSteps([]);
+      }
+    };
+
+    window.addEventListener('agent-chat-send', onSend);
+    window.addEventListener('agent-chat-stop', onStop);
+    window.addEventListener('agent-chat-new-thread', onNewChat);
+    window.addEventListener('agent-chat-load-thread', onLoadThread);
+
+    return () => {
+      window.removeEventListener('agent-chat-send', onSend);
+      window.removeEventListener('agent-chat-stop', onStop);
+      window.removeEventListener('agent-chat-new-thread', onNewChat);
+      window.removeEventListener('agent-chat-load-thread', onLoadThread);
+    };
+  }, [thread, config, isRunning]);
+
+  const handleStop = useCallback(() => {
+    if (executorRef.current) {
+      executorRef.current.cancel();
+      setIsRunning(false);
+      
+      if (thread) {
+        const lastMsg = thread.messages[thread.messages.length - 1];
+        if (lastMsg?.status === 'streaming') {
+          updateMessage(thread.id, lastMsg.id, { 
+            status: 'done', 
+            content: lastMsg.content || '*(Остановлено пользователем)*' 
+          });
+          const updatedThread = getThread(thread.id);
+          if (updatedThread) setThread(updatedThread);
+        }
+      }
+    }
+  }, [thread]);
+
+  const handleNewChat = useCallback(() => {
+    if (!config) return;
+    const newThread = createThread(agentConfigId, config.graphId);
+    setThread(newThread);
+    setCurrentSteps([]);
+    setFeedbackRequest(null);
+    setIsRunning(false);
+  }, [agentConfigId, config]);
 
   const handleSendMessage = useCallback(async (text: string) => {
     if (!thread || !config || isRunning) return;
@@ -70,9 +142,9 @@ export function AgentChatPage({ agentConfigId, threadId: initialThreadId, onBack
     };
 
     appendMessage(thread.id, userMessage);
-    setThread(prev => prev ? { ...prev, messages: [...prev.messages, userMessage] } : null);
+    const updatedThreadAfterUser = getThread(thread.id);
+    if (updatedThreadAfterUser) setThread(updatedThreadAfterUser);
 
-    // Start agent execution
     setIsRunning(true);
     setCurrentSteps([]);
 
@@ -86,83 +158,105 @@ export function AgentChatPage({ agentConfigId, threadId: initialThreadId, onBack
     };
 
     appendMessage(thread.id, agentMessage);
-    setThread(prev => prev ? { ...prev, messages: [...prev.messages, agentMessage] } : null);
+    const updatedThreadAfterAgent = getThread(thread.id);
+    if (updatedThreadAfterAgent) setThread(updatedThreadAfterAgent);
 
     try {
       const graph = getGraphById(config.graphId);
-      if (!graph) {
-        throw new Error('Graph not found');
-      }
+      if (!graph) throw new Error('Graph not found');
 
       const executor = new GraphExecutor(graph, {
         chatMode: true,
         threadId: thread.id,
         onAgentStep: (step: AgentStep) => {
-          setCurrentSteps(prev => [...prev, step]);
-          agentMessage.steps.push(step);
+          setCurrentSteps(prev => {
+            const idx = prev.findIndex(s => s.nodeId === step.nodeId && s.status === 'running');
+            if (idx >= 0 && step.status !== 'running') {
+              return prev.map((s, i) => i === idx ? step : s);
+            }
+            return [...prev, step];
+          });
+          
+          const existingStepIdx = agentMessage.steps.findIndex(s => s.nodeId === step.nodeId && s.status === 'running');
+          if (existingStepIdx >= 0 && step.status !== 'running') {
+            agentMessage.steps[existingStepIdx] = step;
+          } else {
+            agentMessage.steps.push(step);
+          }
         },
         onNodeStream: (nodeId: string, chunk: string, accumulated: string) => {
+          // 🔴 ФИКС #4: Throttle стриминга через RAF для плавного отображения
+          // Прямое обновление объекта без лишних setThread вызовов
           agentMessage.content = accumulated;
-          updateMessage(thread.id, agentMessage.id, { content: accumulated });
+          
+          // Throttle: обновляем React не чаще 60fps
+          if (!streamingRafRef.current) {
+            streamingRafRef.current = requestAnimationFrame(() => {
+              updateMessage(thread.id, agentMessage.id, { content: accumulated });
+              setThread(prev => {
+                if (!prev) return null;
+                const updated = { ...prev };
+                const msgIndex = updated.messages.findIndex(m => m.id === agentMessage.id);
+                if (msgIndex >= 0) updated.messages[msgIndex] = { ...agentMessage };
+                return updated;
+              });
+              streamingRafRef.current = undefined;
+            });
+          }
+        },
+        onChatOutput: async (message: string) => {
+          agentMessage.content = message;
+          updateMessage(thread.id, agentMessage.id, { content: message });
           setThread(prev => {
             if (!prev) return null;
             const updated = { ...prev };
             const msgIndex = updated.messages.findIndex(m => m.id === agentMessage.id);
-            if (msgIndex >= 0) {
-              updated.messages[msgIndex] = { ...agentMessage };
-            }
+            if (msgIndex >= 0) updated.messages[msgIndex] = { ...agentMessage };
             return updated;
           });
         },
         onChatInputRequest: async (source: string, options?: Record<string, any>) => {
-          if (source === 'user_message') {
-            return text;
-          }
+          if (source === 'user_message') return text;
           if (source === 'inline_feedback') {
-            // Show inline feedback widget
-            return new Promise((resolve, reject) => {
-              pendingUserInputRef.current = { resolve, reject };
-              // TODO: Show feedback modal
+            return new Promise((resolve) => {
+              setFeedbackRequest({
+                request: options as FeedbackRequest,
+                resolve: (response) => {
+                  setFeedbackRequest(null);
+                  resolve(response);
+                }
+              });
             });
           }
           return null;
         },
-        onRunComplete: (run) => {
-          console.log('[AgentChatPage] Run complete:', run);
-        },
       });
 
       executorRef.current = executor;
-      const run = await executor.run({ userMessage: text });
+      const run = await executor.run(text);
 
-      // Extract final output
-      const finalOutput = run.nodeResults
-        .reverse()
-        .find(r => r.output && typeof r.output === 'object' && 'output' in (r.output as any));
+      if (!agentMessage.content) {
+        const finalResult = [...run.nodeResults].reverse().find(r => 
+          r.output && typeof r.output === 'object' && ('output' in (r.output as any) || 'message' in (r.output as any))
+        );
+        agentMessage.content = (finalResult?.output as any)?.output || (finalResult?.output as any)?.message || 'Агент завершил работу';
+      }
 
-      agentMessage.content = (finalOutput?.output as any)?.output || agentMessage.content || 'No response';
       agentMessage.status = 'done';
-
       updateMessage(thread.id, agentMessage.id, {
         content: agentMessage.content,
         status: 'done',
         steps: agentMessage.steps,
       });
 
-      setThread(prev => {
-        if (!prev) return null;
-        const updated = { ...prev };
-        const msgIndex = updated.messages.findIndex(m => m.id === agentMessage.id);
-        if (msgIndex >= 0) {
-          updated.messages[msgIndex] = { ...agentMessage };
-        }
-        return updated;
-      });
+      const finalThread = getThread(thread.id);
+      if (finalThread) setThread(finalThread);
     } catch (error) {
-      console.error('[AgentChatPage] Execution error:', error);
       agentMessage.status = 'error';
-      agentMessage.content = `Error: ${error instanceof Error ? error.message : String(error)}`;
+      agentMessage.content = `Ошибка выполнения: ${error instanceof Error ? error.message : String(error)}`;
       updateMessage(thread.id, agentMessage.id, { status: 'error', content: agentMessage.content });
+      const errorThread = getThread(thread.id);
+      if (errorThread) setThread(errorThread);
     } finally {
       setIsRunning(false);
       setCurrentSteps([]);
@@ -170,124 +264,88 @@ export function AgentChatPage({ agentConfigId, threadId: initialThreadId, onBack
     }
   }, [thread, config, isRunning]);
 
-  const handleStop = useCallback(() => {
-    if (executorRef.current) {
-      // TODO: Implement abort
-      setIsRunning(false);
-    }
-  }, []);
-
   if (!config || !thread) {
     return (
-      <div className="flex items-center justify-center h-screen bg-[var(--surface-0)]">
-        <Loader2 className="animate-spin text-indigo-500" size={32} />
+      <div className="flex-1 flex items-center justify-center">
+        <Loader2 className="animate-spin text-[var(--text-dim)]" size={32} />
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen bg-[var(--surface-0)]">
-      {/* Sidebar */}
-      {sidebarOpen && (
-        <AgentThreadsSidebar
-          agentConfigId={agentConfigId}
-          currentThreadId={thread.id}
-          onThreadSelect={(threadId) => {
-            const newThread = getThread(threadId);
-            setThread(newThread);
-          }}
-          onClose={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col">
-        {/* Header */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--border)] bg-[var(--surface-1)]">
-          <button
-            onClick={onBack}
-            className="p-2 hover:bg-[var(--surface-3)] rounded-lg transition-colors"
-          >
-            <ArrowLeft size={20} className="text-[var(--text-dim)]" />
-          </button>
-
+    <div className="max-w-4xl mx-auto w-full">
+      {thread.messages.length === 0 ? (
+        <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-center px-4">
           <div
-            className="flex items-center gap-2 cursor-pointer"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl mb-6 shadow-lg border border-white/5"
+            style={{ backgroundColor: config.avatarColor }}
           >
-            <div
-              className="w-10 h-10 rounded-full flex items-center justify-center text-2xl"
-              style={{ backgroundColor: config.avatarColor }}
-            >
-              {config.avatarEmoji}
-            </div>
-            <div>
-              <div className="font-medium text-[var(--text-primary)]">{config.name}</div>
-              {config.description && (
-                <div className="text-xs text-[var(--text-dim)]">{config.description}</div>
-              )}
-            </div>
+            {config.avatarEmoji}
           </div>
-
-          <div className="ml-auto">
-            <button
-              onClick={() => {
-                const graph = getGraphById(config.graphId);
-                if (graph) {
-                  // TODO: Navigate to graph editor
-                  console.log('Open graph:', graph.id);
-                }
-              }}
-              className="px-3 py-1.5 text-sm text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-colors"
-            >
-              Открыть граф
-            </button>
-          </div>
+          <h2 className="text-2xl font-semibold text-white mb-2 tracking-tight">
+            {config.name}
+          </h2>
+          <p className="text-[var(--text-muted)] max-w-sm leading-relaxed text-sm">
+            {config.description || 'Агент готов к работе.'}
+          </p>
         </div>
-
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-6">
-          {thread.messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-center">
-              <div
-                className="w-20 h-20 rounded-full flex items-center justify-center text-5xl mb-4"
-                style={{ backgroundColor: config.avatarColor + '20' }}
-              >
-                {config.avatarEmoji}
-              </div>
-              <h2 className="text-2xl font-semibold text-[var(--text-primary)] mb-2">
-                {config.name}
-              </h2>
-              <p className="text-[var(--text-dim)] max-w-md">
-                {config.description || 'Начните разговор с агентом'}
-              </p>
-            </div>
-          ) : (
-            <div className="max-w-3xl mx-auto space-y-6">
-              {thread.messages.map((message) => (
-                <AgentChatMessageComponent
-                  key={message.id}
-                  message={message}
-                  agentConfig={config}
-                />
+      ) : (
+        <div className="space-y-8">
+          {thread.messages.map((message) => (
+            <AgentChatMessageComponent
+              key={message.id}
+              message={message}
+              agentConfig={config}
+            />
+          ))}
+          
+          {/* Текущие шаги выполнения (Trace) */}
+          {/* 🔴 ФИКС #5: Показываем ВСЕ шаги, не только running/error */}
+          {isRunning && currentSteps.length > 0 && (
+            <div className="my-8 font-mono text-[13px] ml-12 border-l border-white/5 pl-4 py-2 space-y-2">
+              {currentSteps.map((step, idx) => (
+                <div 
+                  key={step.nodeId + idx} 
+                  className={`flex items-center gap-3 transition-opacity ${
+                    step.status === 'done' ? 'opacity-40 text-slate-400' :
+                    step.status === 'running' ? 'text-white animate-pulse' :
+                    step.status === 'error' ? 'text-red-400' :
+                    'text-slate-500'
+                  }`}
+                >
+                  {step.status === 'running' ? (
+                    <div className="w-2 h-2 rounded-full bg-indigo-500 ring-4 ring-indigo-500/20 animate-pulse" />
+                  ) : step.status === 'error' ? (
+                    <span className="text-red-500 font-bold">×</span>
+                  ) : step.status === 'done' ? (
+                    <span className="text-emerald-500 text-xs">✓</span>
+                  ) : (
+                    <div className="w-2 h-2 rounded-full bg-slate-600" />
+                  )}
+                  <span className="text-xs">
+                    {String(idx + 1).padStart(2, '0')} → {step.nodeLabel}
+                  </span>
+                  {step.duration && (
+                    <span className="text-[10px] text-slate-600 ml-auto">
+                      {(step.duration / 1000).toFixed(1)}s
+                    </span>
+                  )}
+                </div>
               ))}
-              <div ref={messagesEndRef} />
+            </div>
+          )}
+
+          {/* Виджет фидбека */}
+          {feedbackRequest && (
+            <div className="my-6">
+              <InlineFeedbackWidget
+                request={feedbackRequest.request}
+                onResponse={feedbackRequest.resolve}
+              />
             </div>
           )}
         </div>
-
-        {/* Input */}
-        <div className="border-t border-[var(--border)] bg-[var(--surface-1)]">
-          <div className="max-w-3xl mx-auto px-4 py-4">
-            <AgentChatInput
-              onSend={handleSendMessage}
-              onStop={handleStop}
-              disabled={isRunning}
-              isRunning={isRunning}
-            />
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

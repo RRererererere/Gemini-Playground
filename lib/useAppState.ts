@@ -69,6 +69,8 @@ export interface UseAppStateReturn {
   setGhostNudgeEnabled: React.Dispatch<React.SetStateAction<boolean>>;
   ghostNudgeMaxRetries: number;
   setGhostNudgeMaxRetries: React.Dispatch<React.SetStateAction<number>>;
+  maxUploadSizeMB: number;
+  setMaxUploadSizeMB: React.Dispatch<React.SetStateAction<number>>;
   savedPrompts: SavedSystemPrompt[];
   setSavedPrompts: React.Dispatch<React.SetStateAction<SavedSystemPrompt[]>>;
 
@@ -202,6 +204,7 @@ export function useAppState(): UseAppStateReturn {
     memoryEnabled, setMemoryEnabled, maxToolRounds, setMaxToolRounds,
     maxMemoryCalls, setMaxMemoryCalls,
     ghostNudgeEnabled, setGhostNudgeEnabled, ghostNudgeMaxRetries, setGhostNudgeMaxRetries,
+    maxUploadSizeMB, setMaxUploadSizeMB,
     savedPrompts, setSavedPrompts,
     onModelsLoad, onRefreshModels,
   } = settings;
@@ -478,6 +481,8 @@ export function useAppState(): UseAppStateReturn {
     onGhostNudgeEnabledChange: setGhostNudgeEnabled,
     ghostNudgeMaxRetries,
     onGhostNudgeMaxRetriesChange: setGhostNudgeMaxRetries,
+    maxUploadSizeMB,
+    onMaxUploadSizeMBChange: setMaxUploadSizeMB,
     onSkillsChanged: () => setSkillsRevision(r => r + 1),
   };
 
@@ -508,6 +513,7 @@ export function useAppState(): UseAppStateReturn {
     memoryEnabled, setMemoryEnabled, maxToolRounds, setMaxToolRounds,
     maxMemoryCalls, setMaxMemoryCalls,
     ghostNudgeEnabled, setGhostNudgeEnabled, ghostNudgeMaxRetries, setGhostNudgeMaxRetries,
+    maxUploadSizeMB, setMaxUploadSizeMB,
     savedPrompts, setSavedPrompts,
 
     // Chat — delegated to useChat hook

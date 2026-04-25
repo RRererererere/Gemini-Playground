@@ -173,7 +173,7 @@ export const AgentEditorProperties: React.FC<AgentEditorPropertiesProps> = ({
                         (node.data as Record<string, any>)?.[setting.id] ?? 
                         setting.defaultValue;
 
-    const inputClass = "w-full bg-[var(--surface-3)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-indigo-500/40 transition-all";
+    const inputClass = "w-full bg-[var(--surface-3)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-white/20 transition-all";
 
     // Wrapper functions for inputs
     const handleDebouncedChange = (val: string) => {
@@ -231,7 +231,7 @@ export const AgentEditorProperties: React.FC<AgentEditorPropertiesProps> = ({
                 step="0.1"
                 value={currentValue}
                 onChange={(e) => onChange(setting.id, Number(e.target.value))}
-                className="flex-1 accent-indigo-500"
+                className="flex-1 accent-white"
                 style={{ height: 4 }}
               />
               <span className="text-[10px] font-mono text-[var(--text-dim)] w-6 text-right">{currentValue}</span>
@@ -256,7 +256,7 @@ export const AgentEditorProperties: React.FC<AgentEditorPropertiesProps> = ({
                 type="checkbox"
                 checked={currentValue}
                 onChange={(e) => onChange(setting.id, e.target.checked)}
-                className="w-4 h-4 rounded border-[var(--border)] bg-[var(--surface-3)] text-indigo-500 focus:ring-1 focus:ring-indigo-500/40"
+                className="w-4 h-4 rounded border-[var(--border)] bg-[var(--surface-3)] text-white focus:ring-1 focus:ring-white/20"
               />
             </div>
             <span className="text-xs text-[var(--text-dim)] group-hover:text-[var(--text-primary)] transition-colors">
@@ -356,13 +356,13 @@ export const AgentEditorProperties: React.FC<AgentEditorPropertiesProps> = ({
           <div style={{
             marginTop: 12,
             padding: '8px 10px',
-            background: 'rgba(99,102,241,0.04)',
-            border: '1px solid rgba(99,102,241,0.1)',
+            background: 'rgba(255, 255, 255, 0.04)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
             borderRadius: 10,
             display: 'flex',
             gap: 6,
           }}>
-            <Info size={12} style={{ color: '#818cf8', flexShrink: 0, marginTop: 1 }} />
+            <Info size={12} style={{ color: '#888', flexShrink: 0, marginTop: 1 }} />
             <span style={{ fontSize: 10, color: '#94a3b8', lineHeight: 1.5 }}>
               {nodeDef.description}
             </span>

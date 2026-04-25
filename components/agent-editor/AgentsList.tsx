@@ -15,6 +15,11 @@ import {
   GRAPHS_UPDATED_EVENT 
 } from '@/lib/agent-engine/graph-storage';
 import { AGENT_TEMPLATES } from '@/lib/agent-engine/templates';
+import { 
+  getAgentConfigByGraphId, 
+  createAgentConfig, 
+  saveAgentConfig 
+} from '@/lib/agent-engine/agent-chat-store';
 
 interface AgentsListProps {
   onOpenGraph: (graph: AgentGraph) => void;
@@ -98,6 +103,21 @@ export const AgentsList: React.FC<AgentsListProps> = ({ onOpenGraph, onCreateNew
   const handleTogglePublish = (graph: AgentGraph) => {
     const isPublished = !graph.metadata.published;
     
+    // Синхронизация с AgentChatConfig
+    if (isPublished) {
+      const existingConfig = getAgentConfigByGraphId(graph.id);
+      if (!existingConfig) {
+        createAgentConfig(graph.id, graph.name, graph.description || '');
+      } else {
+        saveAgentConfig({ ...existingConfig, isPublished: true, name: graph.name, updatedAt: Date.now() });
+      }
+    } else {
+      const existingConfig = getAgentConfigByGraphId(graph.id);
+      if (existingConfig) {
+        saveAgentConfig({ ...existingConfig, isPublished: false, updatedAt: Date.now() });
+      }
+    }
+
     // При публикации — блокируем входы
     const updatedNodes = graph.nodes.map(node => {
       if (isPublished && (node.type === 'agent_input' || node.type === 'chat_input')) {

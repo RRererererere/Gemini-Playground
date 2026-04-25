@@ -6,7 +6,7 @@ import { AgentEditor } from '@/components/agent-editor/AgentEditor';
 import { AgentsHistory } from '@/components/agent-editor/AgentsHistory';
 import { AgentGraph } from '@/lib/agent-engine/types';
 import { getGraphById, createEmptyGraph, saveGraph } from '@/lib/agent-engine/graph-storage';
-import { Zap, History, ArrowLeft, Pencil, Check } from 'lucide-react';
+import { Zap, History, ArrowLeft, Pencil, Check, MessageSquare } from 'lucide-react';
 import { loadApiKeys } from '@/lib/apiKeyManager';
 
 type View = 'list' | 'editor' | 'history';
@@ -52,7 +52,7 @@ const AgentTitleEditor = ({
           onChange={(e) => setName(e.target.value)}
           onKeyDown={handleKeyDown}
           onBlur={handleSave}
-          className="bg-[var(--surface-3)] px-2 py-0.5 rounded text-sm text-[var(--text-primary)] font-medium outline-none border border-indigo-500/50"
+          className="bg-[var(--surface-3)] px-2 py-0.5 rounded text-sm text-[var(--text-primary)] font-medium outline-none border border-[var(--border-strong)]"
         />
         <button onMouseDown={(e) => { e.preventDefault(); handleSave(); }} className="text-emerald-400 hover:text-emerald-300">
           <Check size={14} />
@@ -64,7 +64,7 @@ const AgentTitleEditor = ({
   return (
     <div className="flex items-center gap-2 group cursor-pointer" onClick={() => setIsEditing(true)}>
       <span className="text-[var(--text-primary)] font-medium">{graph.name}</span>
-      <button className="text-[var(--text-dim)] group-hover:text-indigo-400 opacity-0 group-hover:opacity-100 transition-all">
+      <button className="text-[var(--text-dim)] group-hover:text-[var(--text-primary)] opacity-0 group-hover:opacity-100 transition-all">
         <Pencil size={12} />
       </button>
     </div>
@@ -168,7 +168,7 @@ export default function AgentsPage() {
           onClick={() => setView('list')}
           className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
             view === 'list'
-              ? 'bg-indigo-600 text-white'
+              ? 'bg-[var(--surface-4)] text-[var(--text-primary)] border border-[var(--border-strong)]'
               : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'
           }`}
         >
@@ -180,7 +180,7 @@ export default function AgentsPage() {
           onClick={() => setView('history')}
           className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${
             view === 'history'
-              ? 'bg-indigo-600 text-white'
+              ? 'bg-[var(--surface-4)] text-[var(--text-primary)] border border-[var(--border-strong)]'
               : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'
           }`}
         >
@@ -188,8 +188,17 @@ export default function AgentsPage() {
           History
         </button>
 
+        {/* Кнопка перехода в чат */}
+        <button
+          onClick={() => window.location.href = '/'}
+          className="ml-auto flex items-center gap-2 px-3 py-1.5 text-sm text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-colors"
+        >
+          <MessageSquare size={16} />
+          <span className="hidden md:inline">К чату</span>
+        </button>
+
         {view === 'editor' && currentGraph && (
-          <div className="ml-auto text-sm text-[var(--text-dim)] flex items-center gap-2">
+          <div className="text-sm text-[var(--text-dim)] flex items-center gap-2">
             Editing: 
             <AgentTitleEditor 
               graph={currentGraph} 

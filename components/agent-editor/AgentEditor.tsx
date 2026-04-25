@@ -36,9 +36,11 @@ import {
   ChatInputNode, ChatOutputNode, DatabaseHubNode, MemoryReadNode, MemoryWriteNode,
   CodeNode, DebugNode, HTTPRequestNode, TextNode,
   TemplateNode, VariableNode, JsonExtractNode, DelayNode, SubAgentNode, GlobalDbNode, FeedbackNode,
-  PlannerNode
+  PlannerNode, CommentNode
 } from './nodes/CustomNodes';
 import { FeedbackModal } from './FeedbackModal';
+import { ValidationModal } from './ValidationModal';
+import { validateGraph, ValidationResult } from '@/lib/agent-engine/validator';
 
 
 const nodeTypes: NodeTypes = {
@@ -73,6 +75,7 @@ const nodeTypes: NodeTypes = {
   subagent: SubAgentNode,
   global_db: GlobalDbNode,
   feedback: FeedbackNode,
+  comment: CommentNode,
 };
 
 const initialNodes: Node[] = [
@@ -104,7 +107,7 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState(graph?.nodes || initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(graph?.edges || initialEdges);
-  const { screenToFlowPosition, setViewport, getViewport } = useReactFlow();
+  const { screenToFlowPosition, setViewport, getViewport, setCenter } = useReactFlow();
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
 
@@ -185,6 +188,10 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
 
   // Publication state
   const [isPublished, setIsPublished] = useState(false);
+
+  // 🟢 ФИКС #12: Validation state
+  const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
+  const [showValidationModal, setShowValidationModal] = useState(false);
 
   // Check if graph is published
   useEffect(() => {
@@ -649,8 +656,62 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
     }
   }, [graph, nodes, edges, getViewport, setNodes, showToast]);
 
+  // 🟢 ФИКС #12: Валидация графа
+  const handleValidateGraph = useCallback(() => {
+    const currentGraph: AgentGraph = {
+      ...(graph || {
+        id: `graph_${Date.now()}`,
+        name: 'Graph',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        metadata: { version: '1.0.0', tags: [], runCount: 0 },
+        viewport: getViewport(),
+      }),
+      nodes: nodes as Node<NodeData>[],
+      edges: edges as Edge<EdgeData>[],
+      viewport: getViewport(),
+      updatedAt: Date.now(),
+    };
+
+    const result = validateGraph(currentGraph);
+    setValidationResult(result);
+    setShowValidationModal(true);
+    
+    if (result.valid) {
+      showToast('✅ Граф валиден!', 'info');
+    } else {
+      showToast(`❌ Найдено ${result.errors.length} ошибок`, 'error');
+    }
+    
+    return result;
+  }, [graph, nodes, edges, getViewport, showToast]);
+
   const handleRunGraph = useCallback(async () => {
     if (isRunning) return;
+
+    // 🟢 ФИКС #12: Валидация перед запуском
+    const currentGraph: AgentGraph = {
+      ...(graph || {
+        id: `graph_${Date.now()}`,
+        name: 'Graph',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        metadata: { version: '1.0.0', tags: [], runCount: 0 },
+        viewport: getViewport(),
+      }),
+      nodes: nodes as Node<NodeData>[],
+      edges: edges as Edge<EdgeData>[],
+      viewport: getViewport(),
+      updatedAt: Date.now(),
+    };
+
+    const validation = validateGraph(currentGraph);
+    if (!validation.valid) {
+      setValidationResult(validation);
+      setShowValidationModal(true);
+      showToast(`❌ Граф имеет ${validation.errors.length} ошибок. Исправьте их перед запуском.`, 'error');
+      return;
+    }
 
     // Найти все Input ноды с типом user_input
     const userInputNodes = nodes.filter(n =>
@@ -720,6 +781,7 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
   }, [graph, nodes, edges, getViewport, onGraphChange, showToast]);
 
   // Export graph to JSON
+  // 🟢 ФИКС #11: Экспорт графа в JSON
   const handleExportGraph = useCallback(() => {
     const currentGraph: AgentGraph = {
       ...(graph || {
@@ -744,88 +806,72 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
     a.download = `${currentGraph.name.replace(/\s+/g, '_')}.agent.json`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast('Agent exported!', 'info');
+    showToast('💾 Граф экспортирован!', 'info');
   }, [graph, nodes, edges, getViewport, showToast]);
 
-  // Import graph from JSON
+  // 🟢 ФИКС #11: Импорт графа из JSON
   const handleImportGraph = useCallback(() => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json,.agent.json';
-    input.onchange = (e) => {
+    input.onchange = async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        try {
-          const jsonStr = ev.target?.result as string;
-          const imported = importGraph(jsonStr);
-          if (onGraphChange) onGraphChange(imported);
-          setNodes(imported.nodes);
-          setEdges(imported.edges);
-          if (imported.viewport) setViewport(imported.viewport);
-          showToast('Agent imported successfully!', 'info');
-        } catch {
-          showToast('Failed to import: invalid file format', 'error');
+      
+      try {
+        const text = await file.text();
+        const imported = importGraph(text);
+        
+        // Загружаем импортированный граф
+        setNodes(imported.nodes);
+        setEdges(imported.edges);
+        setViewport(imported.viewport);
+        
+        // Сохраняем как новый граф
+        const newGraph: AgentGraph = {
+          ...imported,
+          id: `graph_${Date.now()}`, // Новый ID чтобы не перезаписать существующий
+          updatedAt: Date.now(),
+        };
+        
+        saveGraph(newGraph);
+        
+        if (onGraphChange) {
+          onGraphChange(newGraph);
         }
-      };
-      reader.readAsText(file);
+        
+        showToast(`📂 Граф "${imported.name}" импортирован!`, 'info');
+      } catch (error) {
+        showToast(`❌ Ошибка импорта: ${error instanceof Error ? error.message : 'Неверный формат файла'}`, 'error');
+      }
     };
     input.click();
-  }, [onGraphChange, setNodes, setEdges, setViewport, showToast]);
+  }, [setNodes, setEdges, setViewport, onGraphChange, showToast]);
 
   // Publish/Unpublish agent
   const handleTogglePublish = useCallback(() => {
     if (!graph) return;
 
     const existingConfig = getAgentConfigByGraphId(graph.id);
+    const isCurrentlyPublished = existingConfig ? existingConfig.isPublished : false;
+    const isPublishing = !isCurrentlyPublished;
 
-    if (existingConfig && existingConfig.isPublished) {
+    if (!isPublishing) {
       // Unpublish
-      existingConfig.isPublished = false;
-      saveAgentConfig(existingConfig);
+      if (existingConfig) {
+        existingConfig.isPublished = false;
+        saveAgentConfig(existingConfig);
+      }
       setIsPublished(false);
+      const updatedGraph = { ...graph, metadata: { ...graph.metadata, published: false }, updatedAt: Date.now() };
+      saveGraph(updatedGraph);
+      if (onGraphChange) onGraphChange(updatedGraph);
       showToast('Агент снят с публикации', 'info');
     } else {
-      // Find existing chat_input node
-      const chatInputNode = nodes.find(n => n.type === 'chat_input');
-      
-      if (chatInputNode) {
-        // Check if it's already in ask_user mode
-        const currentSource = (chatInputNode.data.settings as any)?.source;
-        
-        if (currentSource !== 'ask_user') {
-          // Switch to ask_user mode
-          const updatedNodes = nodes.map(n => {
-            if (n.id === chatInputNode.id) {
-              return {
-                ...n,
-                data: {
-                  ...n.data,
-                  settings: {
-                    ...(n.data.settings as any),
-                    source: 'ask_user',
-                  },
-                },
-              };
-            }
-            return n;
-          });
-          setNodes(updatedNodes);
-          takeSnapshot();
-          showToast('Нода "Chat Input" переключена в режим "Ask User"', 'info');
-        }
-      } else {
-        // No chat_input node found - show error
-        showToast('Для публикации агента нужна нода "Chat Input" (Получить ввод из чата)', 'error');
-        return;
-      }
-
-      // Create or update config
+      // Publish
       if (existingConfig) {
         existingConfig.isPublished = true;
-        saveAgentConfig(existingConfig);
+        saveAgentConfig({ ...existingConfig, name: graph.name, updatedAt: Date.now() });
       } else {
         createAgentConfig(
           graph.id,
@@ -835,9 +881,13 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
       }
 
       setIsPublished(true);
+      const updatedGraph = { ...graph, metadata: { ...graph.metadata, published: true }, updatedAt: Date.now() };
+      saveGraph(updatedGraph);
+      if (onGraphChange) onGraphChange(updatedGraph);
       showToast('Агент опубликован! Доступен во вкладке "Агенты"', 'info');
     }
-  }, [graph, nodes, setNodes, takeSnapshot, showToast]);
+  }, [graph, onGraphChange, showToast]);
+
 
   // Показываем онбординг если только стартовая нода
   const showOnboarding = nodes.length === 1 && nodes[0]?.type === 'agent_input';
@@ -857,7 +907,7 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
               <h3 className="text-lg font-semibold text-[var(--text-primary)] mb-2">Build Your Agent</h3>
               <p className="text-sm text-[var(--text-dim)] mb-4 leading-relaxed">
                 Drag nodes from the left panel to the canvas.<br />
-                Connect them by dragging from an output <span className="text-indigo-400">●</span> to an input <span className="text-indigo-400">●</span>.<br />
+                Connect them by dragging from an output <span className="text-white">●</span> to an input <span className="text-white">●</span>.<br />
                 Click <strong>Run Agent</strong> to execute.
               </p>
               <div className="text-xs text-[var(--text-dim)] space-y-1">
@@ -1005,6 +1055,71 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
             Save
           </button>
 
+          {/* 🟢 ФИКС #12: Кнопка валидации */}
+          <button
+            onClick={handleValidateGraph}
+            title="Проверить граф на ошибки"
+            style={{
+              padding: '5px 12px',
+              fontSize: 11,
+              fontWeight: 600,
+              background: 'rgba(245,158,11,0.15)',
+              border: '1px solid rgba(245,158,11,0.25)',
+              color: '#fbbf24',
+              cursor: 'pointer',
+              borderRadius: 8,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+            }}
+          >
+            <AlertCircle size={11} />
+            Validate
+          </button>
+
+          {/* 🟢 ФИКС #11: Экспорт/импорт графа */}
+          <button
+            onClick={handleExportGraph}
+            title="Экспортировать граф в JSON"
+            style={{
+              padding: '5px 12px',
+              fontSize: 11,
+              fontWeight: 600,
+              background: 'rgba(148,163,184,0.15)',
+              border: '1px solid rgba(148,163,184,0.25)',
+              color: '#94a3b8',
+              cursor: 'pointer',
+              borderRadius: 8,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+            }}
+          >
+            <Download size={11} />
+            Экспорт
+          </button>
+
+          <button
+            onClick={handleImportGraph}
+            title="Импортировать граф из JSON"
+            style={{
+              padding: '5px 12px',
+              fontSize: 11,
+              fontWeight: 600,
+              background: 'rgba(148,163,184,0.15)',
+              border: '1px solid rgba(148,163,184,0.25)',
+              color: '#94a3b8',
+              cursor: 'pointer',
+              borderRadius: 8,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+            }}
+          >
+            <Upload size={11} />
+            Импорт
+          </button>
+
           <button
             onClick={handleTogglePublish}
             title={isPublished ? 'Снять публикацию' : 'Опубликовать как агента'}
@@ -1026,6 +1141,25 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
             {isPublished ? 'Опубликован ✓' : 'Опубликовать'}
           </button>
         </div>
+
+        {/* 🔴 ФИКС #7: Empty State канваса */}
+        {nodes.length === 0 && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+            <div className="text-center">
+              <div className="text-6xl mb-4 animate-bounce">🤖</div>
+              <h3 className="text-xl font-semibold text-slate-200 mb-2">
+                Создай своего агента
+              </h3>
+              <p className="text-slate-400 mb-4 max-w-md">
+                Перетащи ноду из панели слева чтобы начать
+              </p>
+              <div className="flex items-center justify-center gap-2 text-slate-500">
+                <div className="animate-pulse text-4xl">←</div>
+                <span className="text-sm">Начни отсюда</span>
+              </div>
+            </div>
+          </div>
+        )}
 
         <ReactFlow
           nodes={nodes}
@@ -1179,6 +1313,32 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
           onSubmit={(feedback) => {
             feedbackRequest.resolve(feedback);
             setFeedbackRequest(null);
+          }}
+        />
+      )}
+
+      {/* 🟢 ФИКС #12: Validation Modal */}
+      {showValidationModal && validationResult && (
+        <ValidationModal
+          result={validationResult}
+          onClose={() => setShowValidationModal(false)}
+          onHighlightNode={(nodeId) => {
+            // Подсветить ноду
+            const node = nodes.find(n => n.id === nodeId);
+            if (node) {
+              setSelectedNode(node);
+              // Центрировать на ноде
+              setCenter(node.position.x + 120, node.position.y + 50, { zoom: 1.2, duration: 500 });
+            }
+            setShowValidationModal(false);
+          }}
+          onFixNode={(nodeId) => {
+            // Открыть properties panel для ноды
+            const node = nodes.find(n => n.id === nodeId);
+            if (node) {
+              setSelectedNode(node);
+            }
+            setShowValidationModal(false);
           }}
         />
       )}

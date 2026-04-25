@@ -12,7 +12,20 @@ import {
 
 const STORAGE_KEY_CONFIGS = 'agent_chat_configs';
 const STORAGE_KEY_THREADS = 'agent_chat_threads';
-const STORAGE_KEY_ACTIVE_THREAD = 'agent_chat_active_thread';
+const STORAGE_KEY_ACTIVE_THREAD = 'agent_chat_active_thread_id';
+
+// Custom events for UI sync
+export const AGENT_THREADS_UPDATED_EVENT = 'agent_threads_updated';
+
+function notifyThreadsUpdated() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(AGENT_THREADS_UPDATED_EVENT));
+  }
+}
+
+function generateId(length: number = 8): string {
+  return Math.random().toString(36).substring(2, 2 + length) + Date.now().toString(36);
+}
 
 // ============================================================================
 // AGENT CHAT CONFIG
@@ -49,6 +62,7 @@ export function saveAgentConfig(config: AgentChatConfig): void {
   }
   
   localStorage.setItem(STORAGE_KEY_CONFIGS, JSON.stringify(configs));
+  notifyThreadsUpdated();
 }
 
 export function deleteAgentConfig(id: string): void {
@@ -67,7 +81,7 @@ export function createAgentConfig(
   description: string = ''
 ): AgentChatConfig {
   const config: AgentChatConfig = {
-    id: nanoid(8),
+    id: generateId(),
     graphId,
     name,
     description,
@@ -110,7 +124,7 @@ export function getThread(threadId: string): AgentChatThread | null {
 
 export function createThread(agentConfigId: string, graphId: string): AgentChatThread {
   const thread: AgentChatThread = {
-    id: nanoid(8),
+    id: generateId(),
     agentConfigId,
     graphId,
     title: 'Новый чат',
@@ -125,6 +139,7 @@ export function createThread(agentConfigId: string, graphId: string): AgentChatT
   // Добавляем ID треда в конфиг
   const config = getAgentConfig(agentConfigId);
   if (config) {
+    if (!config.threadIds) config.threadIds = [];
     config.threadIds.push(thread.id);
     saveAgentConfig(config);
   }
@@ -141,10 +156,11 @@ export function saveThread(thread: AgentChatThread): void {
   if (index >= 0) {
     threads[index] = thread;
   } else {
-    threads.push(thread);
+    threads.unshift(thread);
   }
   
   localStorage.setItem(STORAGE_KEY_THREADS, JSON.stringify(threads));
+  notifyThreadsUpdated();
 }
 
 export function deleteThread(threadId: string): void {
@@ -152,9 +168,8 @@ export function deleteThread(threadId: string): void {
   const thread = threads.find(t => t.id === threadId);
   
   if (thread) {
-    // Удаляем из конфига
     const config = getAgentConfig(thread.agentConfigId);
-    if (config) {
+    if (config && config.threadIds) {
       config.threadIds = config.threadIds.filter(id => id !== threadId);
       saveAgentConfig(config);
     }
@@ -162,6 +177,7 @@ export function deleteThread(threadId: string): void {
   
   const filtered = threads.filter(t => t.id !== threadId);
   localStorage.setItem(STORAGE_KEY_THREADS, JSON.stringify(filtered));
+  notifyThreadsUpdated();
 }
 
 // ============================================================================
@@ -174,7 +190,6 @@ export function appendMessage(threadId: string, message: AgentChatMessage): void
   
   thread.messages.push(message);
   
-  // Авто-генерация заголовка из первого сообщения
   if (thread.messages.length === 1 && message.role === 'user' && message.userText) {
     thread.title = message.userText.slice(0, 50) + (message.userText.length > 50 ? '...' : '');
   }

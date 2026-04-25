@@ -248,7 +248,7 @@ export const RunPanel: React.FC<RunPanelProps> = ({
                       <div>
                         <div className="text-xs font-semibold text-red-400 uppercase mb-1">Error</div>
                         <div className="bg-red-500/10 border border-red-500/30 rounded p-2 text-xs text-red-400">
-                          {result.error}
+                          {typeof result.error === 'string' ? result.error : result.error.message}
                         </div>
                       </div>
                     )}

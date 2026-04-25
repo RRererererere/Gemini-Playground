@@ -155,6 +155,8 @@ export async function callLLM(options: LLMCallOptions): Promise<LLMResponse> {
 
 /**
  * Подготовка промпта из NodeData
+ * 🔴 БАГ-ФИКС #1: Добавлен фолбэк — если prompt пустой после обработки,
+ * используем inputData.input напрямую как основной промпт
  */
 export function preparePromptFromNode(nodeData: NodeData, inputData: Record<string, any>): string {
   let prompt = nodeData.settings?.prompt || nodeData.prompt || '';
@@ -169,6 +171,11 @@ export function preparePromptFromNode(nodeData: NodeData, inputData: Record<stri
   for (const [key, value] of Object.entries(variables)) {
     const regex = new RegExp(`\\{\\{${key}\\}\\}`, 'g');
     prompt = prompt.replace(regex, String(value));
+  }
+
+  // 🔴 ФИКС: Если prompt пустой после обработки, используем сырой input
+  if (!prompt.trim() && inputData.input) {
+    prompt = String(inputData.input);
   }
 
   return prompt;

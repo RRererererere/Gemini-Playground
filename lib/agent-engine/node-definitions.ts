@@ -3,6 +3,60 @@
  * Single source of truth for Agent Editor
  */
 
+// ============================================================================
+// NODE TYPE CONSTANTS
+// ============================================================================
+// 🟡 ФИКС: NODE_TYPE_MAP — единый источник истины для типов нод
+// Предотвращает расхождение между definitions, executor и CustomNodes
+
+export const NODE_TYPES = {
+  // AI
+  LLM: 'llm',
+  PLANNER: 'planner',
+  SKILL: 'skill',
+  SUBAGENT: 'subagent',
+  
+  // Memory
+  MEMORY_READ: 'memory_read',
+  MEMORY_WRITE: 'memory_write',
+  MEMORY: 'memory', // legacy alias
+  GLOBAL_DB: 'global_db',
+  
+  // Logic
+  CONDITION: 'condition',
+  ROUTER: 'router',
+  LOOP: 'loop',
+  MERGE: 'merge',
+  SPLIT: 'split',
+  FEEDBACK: 'feedback',
+  INLINE_FEEDBACK: 'inline_feedback',
+  
+  // Chat
+  CHAT_INPUT: 'chat_input',
+  CHAT_OUTPUT: 'chat_output',
+  DATABASE_HUB: 'database_hub',
+  USER_MESSAGE_INPUT: 'user_message_input',
+  AGENT_RESPONSE_OUTPUT: 'agent_response_output',
+  CHAT_HISTORY: 'chat_history',
+  CONTEXT_INJECTOR: 'context_injector',
+  
+  // Utilities
+  TRANSFORM: 'transform',
+  CODE: 'code',
+  HTTP_REQUEST: 'http_request',
+  DEBUG: 'debug',
+  INPUT: 'input',
+  OUTPUT: 'output',
+  AGENT_INPUT: 'agent_input',
+  AGENT_OUTPUT: 'agent_output',
+  TEXT: 'text',
+  TEMPLATE: 'template',
+  VARIABLE: 'variable',
+  JSON_EXTRACT: 'json_extract',
+  DELAY: 'delay',
+  COMMENT: 'comment',
+} as const;
+
 export type PortType = 'text' | 'number' | 'boolean' | 'object' | 'array' | 'any';
 
 export interface PortDef {
@@ -1254,6 +1308,52 @@ const DELAY_NODE: NodeDef = {
   ]
 };
 
+// 🟢 ФИКС #10: Нода Comment/Note для документирования графов
+const COMMENT_NODE: NodeDef = {
+  type: 'comment',
+  label: 'Комментарий',
+  category: 'utilities',
+  description: 'Текстовый стикер для документирования графа. Не участвует в выполнении.',
+  inputs: [],
+  outputs: [],
+  settings: [
+    {
+      id: 'text',
+      label: 'Текст',
+      type: 'textarea',
+      defaultValue: 'Заметка...',
+      placeholder: 'Введите комментарий',
+      description: 'Текст комментария'
+    },
+    {
+      id: 'color',
+      label: 'Цвет',
+      type: 'select',
+      options: [
+        { value: 'yellow', label: '🟨 Жёлтый' },
+        { value: 'blue', label: '🟦 Синий' },
+        { value: 'green', label: '🟩 Зелёный' },
+        { value: 'pink', label: '🟪 Розовый' },
+        { value: 'gray', label: '⬜ Серый' },
+      ],
+      defaultValue: 'yellow',
+      description: 'Цвет стикера'
+    },
+    {
+      id: 'fontSize',
+      label: 'Размер шрифта',
+      type: 'select',
+      options: [
+        { value: 'small', label: 'Маленький' },
+        { value: 'medium', label: 'Средний' },
+        { value: 'large', label: 'Большой' },
+      ],
+      defaultValue: 'medium',
+      description: 'Размер текста'
+    }
+  ]
+};
+
 const SUBAGENT_NODE: NodeDef = {
   type: 'subagent',
   label: 'Sub-Agent',
@@ -1315,11 +1415,25 @@ const FEEDBACK_NODE: NodeDef = {
   ],
   outputs: [
     {
+      id: 'approved',
+      label: 'Одобрено ✓',
+      type: 'boolean',
+      required: false,
+      description: 'true если пользователь нажал 👍'
+    },
+    {
+      id: 'rejected',
+      label: 'Отклонено ✗',
+      type: 'boolean',
+      required: false,
+      description: 'true если пользователь нажал 👎'
+    },
+    {
       id: 'feedback_result',
-      label: 'Результат',
+      label: 'Полный результат',
       type: 'object',
       required: true,
-      description: 'JSON объект: { reaction: "like"|"dislike", message: "...", context: "..." }'
+      description: 'JSON объект: { reaction: "like"|"dislike", comment: "...", timestamp: number }'
     }
   ],
   settings: [
@@ -1329,6 +1443,27 @@ const FEEDBACK_NODE: NodeDef = {
       type: 'text',
       defaultValue: 'Оцените ответ ИИ',
       description: 'Текст запроса для пользователя'
+    },
+    {
+      id: 'showContent',
+      label: 'Показывать контент',
+      type: 'checkbox',
+      defaultValue: true,
+      description: 'Показывать ли входные данные в виджете'
+    },
+    {
+      id: 'allowComment',
+      label: 'Разрешить комментарий',
+      type: 'checkbox',
+      defaultValue: true,
+      description: 'Показывать ли текстовое поле для комментария'
+    },
+    {
+      id: 'commentPlaceholder',
+      label: 'Placeholder комментария',
+      type: 'text',
+      defaultValue: 'Ваш комментарий...',
+      description: 'Placeholder для поля комментария'
     }
   ]
 };
@@ -1466,25 +1601,25 @@ const INLINE_FEEDBACK_NODE: NodeDef = {
   ],
   outputs: [
     {
-      id: 'feedback_result',
-      label: 'Feedback Result',
-      type: 'object',
-      required: true,
-      description: '{ reaction: "like"|"dislike", comment: string, timestamp: number }'
-    },
-    {
       id: 'approved',
-      label: 'Approved',
+      label: 'Одобрено ✓',
       type: 'boolean',
       required: false,
       description: 'true если "like"'
     },
     {
       id: 'rejected',
-      label: 'Rejected',
+      label: 'Отклонено ✗',
       type: 'boolean',
       required: false,
       description: 'true если "dislike"'
+    },
+    {
+      id: 'feedback_result',
+      label: 'Полный результат',
+      type: 'object',
+      required: true,
+      description: '{ reaction: "like"|"dislike", comment: string, timestamp: number }'
     }
   ],
   settings: [
@@ -1719,6 +1854,7 @@ export const NODE_DEFINITIONS: Record<string, NodeDef> = {
   variable: VARIABLE_NODE,
   json_extract: JSON_EXTRACT_NODE,
   delay: DELAY_NODE,
+  comment: COMMENT_NODE,
   
   // Aliases for backward compatibility
   agent_input: INPUT_NODE,

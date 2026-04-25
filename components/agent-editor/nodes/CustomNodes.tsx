@@ -687,3 +687,47 @@ export const FeedbackNode = ({ data, selected }: NodeProps) => {
     </BaseNode>
   );
 };
+
+// ─── Comment Node ────────────────────────────────────────────
+// 🟢 ФИКС #10: Нода Comment/Note для документирования графов
+
+export const CommentNode = ({ data, selected }: NodeProps) => {
+  const nodeDef = NODE_DEFINITIONS['comment'];
+  const settings = (data.settings as any) || {};
+  
+  const colorMap: Record<string, { bg: string; border: string; text: string }> = {
+    yellow: { bg: 'rgba(251,191,36,0.08)', border: 'rgba(251,191,36,0.25)', text: '#fbbf24' },
+    blue: { bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.25)', text: '#60a5fa' },
+    green: { bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.25)', text: '#4ade80' },
+    pink: { bg: 'rgba(236,72,153,0.08)', border: 'rgba(236,72,153,0.25)', text: '#f472b6' },
+    gray: { bg: 'rgba(148,163,184,0.08)', border: 'rgba(148,163,184,0.25)', text: '#94a3b8' },
+  };
+  
+  const color = colorMap[settings.color || 'yellow'];
+  const fontSize = settings.fontSize === 'small' ? 10 : settings.fontSize === 'large' ? 14 : 12;
+  
+  return (
+    <div
+      style={{
+        minWidth: 200,
+        maxWidth: 400,
+        padding: '12px 16px',
+        background: color.bg,
+        border: `2px solid ${color.border}`,
+        borderRadius: 12,
+        boxShadow: selected ? `0 0 0 2px ${color.border}` : '0 2px 8px rgba(0,0,0,0.1)',
+        transition: 'box-shadow 0.2s ease',
+      }}
+    >
+      <div style={{
+        fontSize,
+        color: color.text,
+        lineHeight: 1.6,
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+      }}>
+        {settings.text || 'Заметка...'}
+      </div>
+    </div>
+  );
+};

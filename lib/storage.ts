@@ -222,6 +222,44 @@ export async function loadSavedChats(): Promise<SavedChat[]> {
   }
 }
 
+// Возвращает 'ok' | 'quota'
+function trySetItem(key: string, value: string): 'ok' | 'quota' {
+  try {
+    localStorage.setItem(key, value);
+    return 'ok';
+  } catch (e: any) {
+    if (e?.name === 'QuotaExceededError' || e?.code === 22) return 'quota';
+    throw e; // другие ошибки пробрасываем
+  }
+}
+
+// Обрезает messages у самых старых чатов, кроме текущего
+function evictOldMessages(chats: SavedChat[], keepId: string): SavedChat[] {
+  return chats.map((c, i) => {
+    if (c.id === keepId || i < 3) return c; // защищаем 3 самых новых
+    return { ...c, messages: c.messages.slice(-3) }; // оставляем 3 последних сообщения
+  });
+}
+
+// Удаляет старые чаты, оставляя keepCount самых новых + текущий
+function evictOldChats(chats: SavedChat[], keepId: string, keepCount: number): SavedChat[] {
+  const current = chats.find(c => c.id === keepId);
+  const others = chats.filter(c => c.id !== keepId).slice(0, keepCount);
+  return current ? [current, ...others] : others;
+}
+
+// Storage warning — через sessionStorage (не localStorage, чтобы не зациклиться)
+const STORAGE_WARNING_KEY = 'gp_storage_warning';
+function setStorageWarning(msg: string) {
+  try { sessionStorage.setItem(STORAGE_WARNING_KEY, msg); } catch {}
+}
+export function getStorageWarning(): string | null {
+  try { return sessionStorage.getItem(STORAGE_WARNING_KEY); } catch { return null; }
+}
+export function clearStorageWarning() {
+  try { sessionStorage.removeItem(STORAGE_WARNING_KEY); } catch {}
+}
+
 export async function saveChatToStorage(chat: SavedChat): Promise<void> {
   if (typeof window === 'undefined') return;
   
@@ -236,7 +274,28 @@ export async function saveChatToStorage(chat: SavedChat): Promise<void> {
   } else {
     chats.unshift(strippedChat);
   }
-  localStorage.setItem(CHATS_KEY, JSON.stringify(chats));
+  
+  const result = trySetItem(CHATS_KEY, JSON.stringify(chats));
+  if (result === 'ok') return;
+
+  // Стратегия 1: обрезать сообщения в старых чатах (оставить только заголовок+метадату)
+  const evicted1 = evictOldMessages(chats, chat.id);
+  if (trySetItem(CHATS_KEY, JSON.stringify(evicted1)) === 'ok') return;
+
+  // Стратегия 2: удалить самые старые чаты полностью
+  const evicted2 = evictOldChats(evicted1, chat.id, 5);
+  if (trySetItem(CHATS_KEY, JSON.stringify(evicted2)) === 'ok') return;
+
+  // Стратегия 3: сохранить только текущий чат
+  if (trySetItem(CHATS_KEY, JSON.stringify([strippedChat])) === 'ok') {
+    setStorageWarning('Хранилище переполнено. Старые чаты были удалены для сохранения текущего.');
+    return;
+  }
+
+  // Стратегия 4: сохранить только метадату (без messages)
+  const skeleton = { ...strippedChat, messages: [] };
+  trySetItem(CHATS_KEY, JSON.stringify([skeleton]));
+  setStorageWarning('critical');
 }
 
 // Sync version without file data restoration (for internal use)
@@ -266,7 +325,7 @@ export async function deleteChatFromStorage(id: string): Promise<void> {
   }
   
   const filtered = chats.filter(c => c.id !== id);
-  localStorage.setItem(CHATS_KEY, JSON.stringify(filtered));
+  trySetItem(CHATS_KEY, JSON.stringify(filtered));
 }
 
 export function getActiveChatId(): string | null {
@@ -474,7 +533,7 @@ export function loadSystemPrompts(): SavedSystemPrompt[] {
 
 export function saveSystemPrompts(prompts: SavedSystemPrompt[]): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(SYSTEM_PROMPTS_KEY, JSON.stringify(prompts));
+  trySetItem(SYSTEM_PROMPTS_KEY, JSON.stringify(prompts));
 }
 
 export function createSystemPrompt(name: string, content: string): SavedSystemPrompt {
@@ -504,7 +563,7 @@ export function loadDeepThinkSystemPrompt(): string {
 
 export function saveDeepThinkSystemPrompt(prompt: string): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(DEEPTHINK_SYSTEM_PROMPT_KEY, prompt);
+  trySetItem(DEEPTHINK_SYSTEM_PROMPT_KEY, prompt);
 }
 
 // ====================== ПОЛНЫЙ ЭКСПОРТ/ИМПОРТ НАСТРОЕК ======================
@@ -543,6 +602,9 @@ export function exportAllSettings(): void {
     // ↓ НОВЫЕ ПОЛЯ для Ghost Nudge Protocol
     ghostNudgeEnabled: localStorage.getItem(GNP_ENABLED_KEY) || String(GNP_ENABLED_DEFAULT),
     ghostNudgeMaxRetries: localStorage.getItem(GNP_MAX_RETRIES_KEY) || String(GNP_MAX_RETRIES_DEFAULT),
+    
+    // ↓ НОВЫЕ ПОЛЯ для Max Upload Size
+    maxUploadSizeMB: localStorage.getItem(MAX_UPLOAD_SIZE_KEY) || String(DEFAULT_MAX_UPLOAD_SIZE_MB),
   };
   
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -607,6 +669,9 @@ export async function importAllSettings(file: File): Promise<void> {
           if (raw.ghostNudgeEnabled !== undefined) localStorage.setItem(GNP_ENABLED_KEY, String(raw.ghostNudgeEnabled));
           if (raw.ghostNudgeMaxRetries !== undefined) localStorage.setItem(GNP_MAX_RETRIES_KEY, String(raw.ghostNudgeMaxRetries));
 
+          // ↓ НОВЫЕ ПОЛЯ для Max Upload Size
+          if (raw.maxUploadSizeMB !== undefined) trySetItem(MAX_UPLOAD_SIZE_KEY, String(raw.maxUploadSizeMB));
+
           window.location.reload();
           resolve();
         } else {
@@ -642,7 +707,7 @@ export function loadGhostNudgeEnabled(): boolean {
 
 export function saveGhostNudgeEnabled(enabled: boolean): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(GNP_ENABLED_KEY, enabled.toString());
+  trySetItem(GNP_ENABLED_KEY, enabled.toString());
 }
 
 export function loadGhostNudgeMaxRetries(): number {
@@ -657,7 +722,7 @@ export function loadGhostNudgeMaxRetries(): number {
 export function saveGhostNudgeMaxRetries(max: number): void {
   if (typeof window === 'undefined') return;
   const clamped = Math.max(1, Math.min(5, max));
-  localStorage.setItem(GNP_MAX_RETRIES_KEY, clamped.toString());
+  trySetItem(GNP_MAX_RETRIES_KEY, clamped.toString());
 }
 
 export interface SkillPromptOverride {
@@ -678,7 +743,7 @@ export function loadSkillPrompts(): Record<string, string> {
 export function saveSkillPrompt(skillId: string, prompt: string) {
   const prompts = loadSkillPrompts();
   prompts[skillId] = prompt;
-  localStorage.setItem(SKILL_PROMPTS_KEY, JSON.stringify(prompts));
+  trySetItem(SKILL_PROMPTS_KEY, JSON.stringify(prompts));
 }
 
 export function getSkillPrompt(skillId: string): string | null {
@@ -689,5 +754,66 @@ export function getSkillPrompt(skillId: string): string | null {
 export function resetSkillPrompt(skillId: string) {
   const prompts = loadSkillPrompts();
   delete prompts[skillId];
-  localStorage.setItem(SKILL_PROMPTS_KEY, JSON.stringify(prompts));
+  trySetItem(SKILL_PROMPTS_KEY, JSON.stringify(prompts));
+}
+
+// ====================== MAX UPLOAD SIZE ======================
+
+const MAX_UPLOAD_SIZE_KEY = 'gemini_max_upload_size_mb';
+export const DEFAULT_MAX_UPLOAD_SIZE_MB = 3.5;
+
+export function loadMaxUploadSizeMB(): number {
+  if (typeof window === 'undefined') return DEFAULT_MAX_UPLOAD_SIZE_MB;
+  const raw = localStorage.getItem(MAX_UPLOAD_SIZE_KEY);
+  if (!raw) return DEFAULT_MAX_UPLOAD_SIZE_MB;
+  const val = parseFloat(raw);
+  if (isNaN(val) || val < 0.5 || val > 20) return DEFAULT_MAX_UPLOAD_SIZE_MB;
+  return val;
+}
+
+export function saveMaxUploadSizeMB(mb: number): void {
+  if (typeof window === 'undefined') return;
+  const clamped = Math.max(0.5, Math.min(20, mb));
+  trySetItem(MAX_UPLOAD_SIZE_KEY, clamped.toString());
+}
+
+// ====================== STORAGE REPAIR ======================
+
+export function checkAndRepairStorage(): { ok: boolean; warning?: string } {
+  if (typeof window === 'undefined') return { ok: true };
+
+  try {
+    // Тест записи
+    const testKey = '__gp_storage_test__';
+    localStorage.setItem(testKey, '1');
+    localStorage.removeItem(testKey);
+  } catch {
+    // localStorage вообще недоступен или заполнен под завязку
+    // Пробуем освободить место принудительно
+    try {
+      const chatsRaw = localStorage.getItem(CHATS_KEY);
+      if (chatsRaw) {
+        const chats = JSON.parse(chatsRaw) as SavedChat[];
+        // Оставляем только последние 5 чатов без messages
+        const trimmed = chats.slice(0, 5).map(c => ({ ...c, messages: [] }));
+        localStorage.removeItem(CHATS_KEY); // сначала освобождаем
+        localStorage.setItem(CHATS_KEY, JSON.stringify(trimmed));
+        setStorageWarning('Хранилище переполнено — старые чаты были обрезаны. Экспортируй данные для сохранности.');
+        return { ok: false, warning: 'repaired' };
+      }
+    } catch {
+      return { ok: false, warning: 'critical' };
+    }
+  }
+
+  // Проверка на corrupt JSON
+  try {
+    const raw = localStorage.getItem(CHATS_KEY);
+    if (raw) JSON.parse(raw);
+  } catch {
+    localStorage.removeItem(CHATS_KEY);
+    return { ok: false, warning: 'corrupt_json_cleared' };
+  }
+
+  return { ok: true };
 }

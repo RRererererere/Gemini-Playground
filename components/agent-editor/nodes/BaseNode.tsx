@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Handle, Position, useNodeId, useNodeConnections, useNodesData } from '@xyflow/react';
-import { Loader2, CheckCircle2, XCircle, AlertCircle, Info } from 'lucide-react';
+import { Loader2, CheckCircle2, XCircle, AlertCircle, Info, Copy, ChevronDown, ChevronRight } from 'lucide-react';
 import { PortDef, getPortColor } from '@/lib/agent-engine/node-definitions';
+import type { StructuredError } from '@/lib/agent-engine/types';
 
 export interface PortState {
   portId: string;
@@ -20,7 +21,7 @@ interface BaseNodeProps {
   outputs?: PortDef[];
   portStates?: PortState[];
   status?: 'idle' | 'running' | 'success' | 'warning' | 'error' | 'disabled' | 'waiting' | 'skipped';
-  error?: string;
+  error?: string | import('@/lib/agent-engine/types').StructuredError;
   description?: string;
   duration?: number;
   nodeData?: any;
@@ -186,6 +187,190 @@ const OutputPortRow = ({ port, portState }: { port: PortDef; portState: PortStat
   );
 };
 
+// ─── STRUCTURED ERROR DISPLAY ─────────────────────────────────
+
+interface StructuredErrorDisplayProps {
+  error: StructuredError;
+  nodeData?: any;
+}
+
+const StructuredErrorDisplay = ({ error, nodeData }: StructuredErrorDisplayProps) => {
+  const [showInput, setShowInput] = useState(false);
+  const [showStack, setShowStack] = useState(false);
+
+  const copyToClipboard = () => {
+    const fullError = {
+      message: error.message,
+      type: error.type,
+      nodeType: error.nodeType,
+      timestamp: new Date(error.timestamp).toISOString(),
+      inputSnapshot: error.inputSnapshot,
+      stack: error.stack,
+    };
+    navigator.clipboard.writeText(JSON.stringify(fullError, null, 2));
+  };
+
+  return (
+    <div style={{
+      marginTop: 6,
+      background: 'rgba(239,68,68,0.08)',
+      border: '1px solid rgba(239,68,68,0.2)',
+      borderRadius: 8,
+      overflow: 'hidden',
+    }}>
+      {/* Header */}
+      <div style={{
+        padding: '6px 8px',
+        background: 'rgba(239,68,68,0.12)',
+        borderBottom: '1px solid rgba(239,68,68,0.15)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+      }}>
+        <XCircle size={12} style={{ color: '#f87171', flexShrink: 0 }} />
+        <span style={{
+          fontSize: 10,
+          fontWeight: 600,
+          color: '#fca5a5',
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+          flex: 1,
+        }}>
+          {error.type || 'Error'}
+        </span>
+        <button
+          onClick={copyToClipboard}
+          title="Копировать в буфер"
+          style={{
+            background: 'rgba(255,255,255,0.05)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: 4,
+            padding: '2px 4px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            transition: 'all 0.15s',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'rgba(255,255,255,0.1)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
+          }}
+        >
+          <Copy size={10} style={{ color: '#94a3b8' }} />
+        </button>
+      </div>
+
+      {/* Message */}
+      <div style={{
+        padding: '6px 8px',
+        fontSize: 10,
+        color: '#f87171',
+        lineHeight: 1.5,
+        wordBreak: 'break-word',
+      }}>
+        {error.message}
+      </div>
+
+      {/* Input Snapshot */}
+      {error.inputSnapshot && Object.keys(error.inputSnapshot).length > 0 && (
+        <div style={{ borderTop: '1px solid rgba(239,68,68,0.1)' }}>
+          <button
+            onClick={() => setShowInput(!showInput)}
+            style={{
+              width: '100%',
+              padding: '4px 8px',
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              fontSize: 9,
+              color: '#94a3b8',
+              textAlign: 'left',
+            }}
+          >
+            {showInput ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+            <span>Input данные</span>
+          </button>
+          {showInput && (
+            <pre style={{
+              margin: 0,
+              padding: '4px 8px',
+              fontSize: 8,
+              color: '#cbd5e1',
+              background: 'rgba(0,0,0,0.2)',
+              overflowX: 'auto',
+              fontFamily: 'var(--font-mono)',
+              lineHeight: 1.4,
+            }}>
+              {JSON.stringify(error.inputSnapshot, null, 2)}
+            </pre>
+          )}
+        </div>
+      )}
+
+      {/* Stack Trace */}
+      {error.stack && (
+        <div style={{ borderTop: '1px solid rgba(239,68,68,0.1)' }}>
+          <button
+            onClick={() => setShowStack(!showStack)}
+            style={{
+              width: '100%',
+              padding: '4px 8px',
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              fontSize: 9,
+              color: '#94a3b8',
+              textAlign: 'left',
+            }}
+          >
+            {showStack ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+            <span>Stack trace</span>
+          </button>
+          {showStack && (
+            <pre style={{
+              margin: 0,
+              padding: '4px 8px',
+              fontSize: 7,
+              color: '#64748b',
+              background: 'rgba(0,0,0,0.2)',
+              overflowX: 'auto',
+              fontFamily: 'var(--font-mono)',
+              lineHeight: 1.3,
+              maxHeight: 120,
+              overflowY: 'auto',
+            }}>
+              {error.stack}
+            </pre>
+          )}
+        </div>
+      )}
+
+      {/* Metadata */}
+      <div style={{
+        padding: '4px 8px',
+        borderTop: '1px solid rgba(239,68,68,0.1)',
+        fontSize: 8,
+        color: '#64748b',
+        display: 'flex',
+        gap: 8,
+      }}>
+        {error.nodeType && <span>Node: {error.nodeType}</span>}
+        <span>
+          {new Date(error.timestamp).toLocaleTimeString()}
+        </span>
+      </div>
+    </div>
+  );
+};
+
 // ─── MAIN BaseNode ────────────────────────────────────────────
 
 export const BaseNode = ({
@@ -326,18 +511,24 @@ export const BaseNode = ({
         {/* Node Center / Floating Error — Render only if there's an error */}
         {error && (
           <div style={{ flex: 1, minWidth: 0, padding: '2px 8px' }}>
-            <div style={{
-              marginTop: 6,
-              padding: '4px 8px',
-              background: 'rgba(239,68,68,0.08)',
-              border: '1px solid rgba(239,68,68,0.2)',
-              borderRadius: 6,
-              fontSize: 10,
-              color: '#f87171',
-              wordBreak: 'break-word',
-            }}>
-              {error}
-            </div>
+            {typeof error === 'string' ? (
+              // Простая строка (legacy)
+              <div style={{
+                marginTop: 6,
+                padding: '4px 8px',
+                background: 'rgba(239,68,68,0.08)',
+                border: '1px solid rgba(239,68,68,0.2)',
+                borderRadius: 6,
+                fontSize: 10,
+                color: '#f87171',
+                wordBreak: 'break-word',
+              }}>
+                {error}
+              </div>
+            ) : (
+              // 🔴 ФИКС #6: Structured Error Display
+              <StructuredErrorDisplay error={error} nodeData={nodeData} />
+            )}
           </div>
         )}
 

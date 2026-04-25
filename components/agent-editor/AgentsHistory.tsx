@@ -162,7 +162,7 @@ export const AgentsHistory: FC = () => {
 
                       {result.error && (
                         <div className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-400">
-                          {result.error}
+                          {typeof result.error === 'string' ? result.error : result.error.message}
                         </div>
                       )}
 

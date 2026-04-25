@@ -41,6 +41,7 @@ import { addApiKey, removeApiKey, getKeyStatus, timeUntilUnblock, unblockKey } f
 import { loadProviders, saveCustomProvider, removeProvider, loadModelsCache, saveModelsCache, clearModelsCache } from '@/lib/providerStorage';
 import { ProviderModal } from './AddProviderModal';
 import { getAgents, deleteAgent, AGENTS_UPDATED_EVENT } from '@/lib/agents/agent-store';
+import { getAgentConfigs, getAgentConfig, getThreads, deleteThread, AGENT_THREADS_UPDATED_EVENT } from '@/lib/agent-engine/agent-chat-store';
 import type { Agent } from '@/lib/agents/types';
 import {
   exportAllSettings,
@@ -171,6 +172,9 @@ export interface SidebarSharedProps {
   onGhostNudgeEnabledChange: (enabled: boolean) => void;
   ghostNudgeMaxRetries: number;
   onGhostNudgeMaxRetriesChange: (v: number) => void;
+  // Max Upload Size
+  maxUploadSizeMB: number;
+  onMaxUploadSizeMBChange: (v: number) => void;
   onSkillsChanged?: () => void;
   onClose?: () => void;
   // Agents
@@ -313,31 +317,25 @@ export function ChatSidebar({
   
   // Agents state
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [agentGraphs, setAgentGraphs] = useState<AgentGraph[]>([]);
+  const [agentConfigs, setAgentConfigs] = useState<any[]>([]);
+  const [agentThreads, setAgentThreads] = useState<any[]>([]);
   const [collapsedChats, setCollapsedChats] = useState<Set<string>>(new Set());
-  
+
   useEffect(() => {
-    setAgents(getAgents());
-    const { getGraphs } = require('@/lib/agent-engine/graph-storage');
-    setAgentGraphs(getGraphs().filter((g: AgentGraph) => g.metadata.published));
-    
-    const handleAgentsUpdate = () => {
+    const refresh = () => {
       setAgents(getAgents());
+      setAgentConfigs(getAgentConfigs().filter(c => c.isPublished));
+      setAgentThreads(getThreads());
     };
-    const handleGraphsUpdate = () => {
-      const { getGraphs } = require('@/lib/agent-engine/graph-storage');
-      setAgentGraphs(getGraphs().filter((g: AgentGraph) => g.metadata.published));
-    };
-    
-    window.addEventListener(AGENTS_UPDATED_EVENT, handleAgentsUpdate);
-    const { GRAPHS_UPDATED_EVENT } = require('@/lib/agent-engine/graph-storage');
-    window.addEventListener(GRAPHS_UPDATED_EVENT, handleGraphsUpdate);
+    refresh();
+
+    window.addEventListener(AGENTS_UPDATED_EVENT, refresh);
+    window.addEventListener(AGENT_THREADS_UPDATED_EVENT, refresh);
     return () => {
-      window.removeEventListener(AGENTS_UPDATED_EVENT, handleAgentsUpdate);
-      window.removeEventListener(GRAPHS_UPDATED_EVENT, handleGraphsUpdate);
+      window.removeEventListener(AGENTS_UPDATED_EVENT, refresh);
+      window.removeEventListener(AGENT_THREADS_UPDATED_EVENT, refresh);
     };
-  }, []);
-  
+  }, []);  
   // Группировка чатов по родителям и фильтрация для агентов
   const { parentChats, subChatsByParent, standaloneChats } = useMemo(() => {
     const parents: SavedChat[] = [];
@@ -459,31 +457,35 @@ export function ChatSidebar({
         )}
 
         {/* Published Agents List — only in Agents Mode */}
-        {isAgentsMode && agentGraphs.length > 0 && (
+        {isAgentsMode && agentConfigs.length > 0 && (
           <div className="px-5 pt-4 pb-2">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-indigo-400 mb-3">
               Агенты
             </p>
             <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-2">
-              {agentGraphs.map(graph => (
+              {agentConfigs.map(config => (
                 <button
-                  key={graph.id}
-                  onClick={() => onSelectAgent?.(graph.id)}
+                  key={config.id}
+                  onClick={() => onSelectAgent?.(config.id)}
                   className={`flex-shrink-0 flex flex-col items-center justify-center w-20 h-24 rounded-2xl border transition-all ${
-                    activeAgentId === graph.id
+                    activeAgentId === config.id
                       ? 'border-indigo-500 bg-indigo-500/10 shadow-[0_0_15px_rgba(99,102,241,0.2)]'
                       : 'border-[var(--border)] bg-[var(--surface-2)] hover:bg-[var(--surface-3)]'
                   }`}
                 >
                   <div className={`w-10 h-10 rounded-xl mb-2 flex items-center justify-center ${
-                    activeAgentId === graph.id ? 'bg-indigo-500/20' : 'bg-[var(--surface-3)]'
-                  }`}>
-                    <Zap size={20} className={activeAgentId === graph.id ? 'text-indigo-400' : 'text-[var(--text-dim)]'} />
+                    activeAgentId === config.id ? 'bg-indigo-500/20' : 'bg-[var(--surface-3)]'
+                  }`} style={{ backgroundColor: activeAgentId === config.id ? undefined : config.avatarColor }}>
+                    {activeAgentId === config.id ? (
+                      <Zap size={20} className="text-indigo-400" />
+                    ) : (
+                      <span className="text-xl">{config.avatarEmoji || '🤖'}</span>
+                    )}
                   </div>
                   <span className={`text-[10px] font-bold truncate w-full px-2 text-center ${
-                    activeAgentId === graph.id ? 'text-indigo-400' : 'text-[var(--text-muted)]'
+                    activeAgentId === config.id ? 'text-indigo-400' : 'text-[var(--text-muted)]'
                   }`}>
-                    {graph.name}
+                    {config.name}
                   </span>
                 </button>
               ))}
@@ -555,11 +557,13 @@ export function ChatSidebar({
         {/* Section header */}
         <div className="px-5 pb-3 pt-5">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-dim)]">
-            {isArena ? 'Сессии' : 'История'}
+            {isArena ? 'Сессии' : isAgentsMode ? 'Агенты' : 'История'}
           </p>
           <p className="mt-1 text-xs text-[var(--text-muted)]">
             {isArena
               ? (arenaSessions && arenaSessions.length > 0 ? `${arenaSessions.length} сессий` : 'Пока пусто')
+              : isAgentsMode
+              ? (agentConfigs.length > 0 ? `${agentConfigs.length} агентов` : 'Пока пусто')
               : (savedChats.length > 0 ? `${savedChats.length} сохранённых диалогов` : 'Пока пусто')
             }
           </p>
@@ -567,7 +571,92 @@ export function ChatSidebar({
 
         {/* List */}
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-          {isArena ? (
+          {isAgentsMode ? (
+            /* Agent configs and threads list */
+            agentConfigs.length === 0 ? (
+              <div className="mx-2 rounded-[24px] border border-dashed border-indigo-500/20 bg-[var(--surface-1)] px-5 py-8 text-center">
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-400">
+                  <Zap size={20} />
+                </div>
+                <p className="text-sm font-medium text-[var(--text-primary)]">Нет агентов</p>
+                <p className="mt-2 text-xs leading-relaxed text-[var(--text-muted)]">
+                  Создайте агента в редакторе графов и опубликуйте его.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {agentConfigs.map(config => {
+                  const threads = agentThreads.filter(t => t.agentConfigId === config.id);
+                  const isExpanded = !collapsedChats.has(config.id);
+                  
+                  return (
+                    <div key={config.id} className="space-y-1">
+                      {/* Agent header */}
+                      <div
+                        onClick={() => toggleCollapse(config.id)}
+                        className="group flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer hover:bg-white/[0.04] transition-all"
+                      >
+                        <div
+                          className="w-8 h-8 rounded-lg flex items-center justify-center text-lg flex-shrink-0"
+                          style={{ backgroundColor: config.avatarColor }}
+                        >
+                          {config.avatarEmoji}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-[var(--text-primary)] truncate">{config.name}</p>
+                          <p className="text-[10px] text-[var(--text-dim)]">{threads.length} чатов</p>
+                        </div>
+                        <ChevronDown
+                          size={14}
+                          className={`text-[var(--text-dim)] transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                        />
+                      </div>
+                      
+                      {/* Threads list */}
+                      {isExpanded && threads.length > 0 && (
+                        <div className="ml-6 space-y-0.5">
+                          {[...threads].reverse().map(thread => (
+                            <div
+                              key={thread.id}
+                              onClick={() => {
+                                window.dispatchEvent(new CustomEvent('agent-chat-load-thread', { 
+                                  detail: { 
+                                    threadId: thread.id,
+                                    agentConfigId: config.id 
+                                  } 
+                                }));
+                                onClose?.();
+                              }}
+                              className="group flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer hover:bg-white/[0.04] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-all"
+                            >
+                              <MessageSquare size={12} className="flex-shrink-0" />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs truncate">{thread.title}</p>
+                                <p className="text-[10px] text-[var(--text-dim)]">
+                                  {thread.messages.length} сообщ. • {formatDate(thread.updatedAt)}
+                                </p>
+                              </div>
+                              <button
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  deleteThread(thread.id);
+                                  setAgentThreads(getThreads());
+                                }}
+                                className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-[var(--text-dim)] opacity-0 hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100 transition-all"
+                                title="Удалить чат"
+                              >
+                                <Trash2 size={10} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          ) : isArena ? (
             /* Arena sessions list */
             (!arenaSessions || arenaSessions.length === 0) ? (
               <div className="mx-2 rounded-[24px] border border-dashed border-amber-400/20 bg-[var(--surface-1)] px-5 py-8 text-center">
@@ -851,6 +940,8 @@ export function SettingsSidebar({
   onGhostNudgeEnabledChange,
   ghostNudgeMaxRetries,
   onGhostNudgeMaxRetriesChange,
+  maxUploadSizeMB,
+  onMaxUploadSizeMBChange,
   onSkillsChanged,
   onClose,
 }: SidebarSharedProps) {
@@ -1588,6 +1679,31 @@ export function SettingsSidebar({
                           <span>1</span>
                           <span>200</span>
                         </div>
+                      </div>
+
+                      {/* Max Upload Size */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-[11px] text-[var(--text-muted)]">Макс. размер файла</label>
+                          <span className="rounded-md border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 text-xs font-mono text-[var(--text-primary)] min-w-[3rem] text-center">
+                            {maxUploadSizeMB.toFixed(1)} MB
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.5"
+                          max="20"
+                          step="0.5"
+                          value={maxUploadSizeMB}
+                          onChange={e => onMaxUploadSizeMBChange(parseFloat(e.target.value))}
+                        />
+                        <div className="mt-1 flex justify-between text-[9px] text-[var(--text-dim)]">
+                          <span>0.5 MB</span>
+                          <span>20 MB</span>
+                        </div>
+                        <p className="text-[9px] text-[var(--text-dim)] mt-1 leading-relaxed">
+                          Верхний лимит Vercel API route — 4.5 MB. Выше 4 MB файлы пойдут напрямую через Gemini File API.
+                        </p>
                       </div>
                     </div>
                   </details>
