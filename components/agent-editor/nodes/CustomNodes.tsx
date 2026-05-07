@@ -199,6 +199,12 @@ export const RouterNode = ({ data, selected }: NodeProps) => {
   const nodeDef = NODE_DEFINITIONS['router'];
   const settings = (data.settings as any) || {};
   
+  const conditions = [
+    settings.routeACondition && `A: ${String(settings.routeACondition).substring(0, 18)}`,
+    settings.routeBCondition && `B: ${String(settings.routeBCondition).substring(0, 18)}`,
+    settings.routeCCondition && `C: ${String(settings.routeCCondition).substring(0, 18)}`,
+  ].filter(Boolean);
+  
   return (
     <BaseNode 
       title={data.label as string || 'Router'} 
@@ -211,12 +217,22 @@ export const RouterNode = ({ data, selected }: NodeProps) => {
       nodeData={data} 
       error={data.error as string}
     >
-      <div style={{ fontSize: 10, color: '#94a3b8' }}>
-        Mode: {settings.routerMode || 'if_else'}
+      <div style={{ fontSize: 10, color: '#94a3b8', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span style={{ color: '#fbbf24', fontWeight: 600 }}>{settings.routerMode || 'if_else'}</span>
+        {conditions.length > 0 ? (
+          conditions.map((c, i) => (
+            <span key={i} style={{ fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {c}
+            </span>
+          ))
+        ) : (
+          <span style={{ fontStyle: 'italic', opacity: 0.6 }}>No conditions set</span>
+        )}
       </div>
     </BaseNode>
   );
 };
+
 
 export const LoopNode = ({ data, selected }: NodeProps) => {
   const nodeDef = NODE_DEFINITIONS['loop'];

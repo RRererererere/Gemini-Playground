@@ -53,6 +53,12 @@ export interface UseAppStateReturn {
   setTools: React.Dispatch<React.SetStateAction<ChatTool[]>>;
   deepThinkSystemPrompt: string;
   setDeepThinkSystemPrompt: React.Dispatch<React.SetStateAction<string>>;
+  deepThinkProviderId: string;
+  setDeepThinkProviderId: (id: string) => void;
+  deepThinkModelId: string;
+  setDeepThinkModelId: (id: string) => void;
+  deepThinkApiKeyIndex: number;
+  setDeepThinkApiKeyIndex: (idx: number) => void;
   temperature: number;
   setTemperature: React.Dispatch<React.SetStateAction<number>>;
   thinkingBudget: number;
@@ -199,6 +205,9 @@ export function useAppState(): UseAppStateReturn {
     model, models,
     systemPrompt, setSystemPrompt, tools, setTools,
     deepThinkSystemPrompt, setDeepThinkSystemPrompt,
+    deepThinkProviderId, setDeepThinkProviderId,
+    deepThinkModelId, setDeepThinkModelId,
+    deepThinkApiKeyIndex, setDeepThinkApiKeyIndex,
     temperature, setTemperature, thinkingBudget, setThinkingBudget,
     maxOutputTokens, setMaxOutputTokens,
     memoryEnabled, setMemoryEnabled, maxToolRounds, setMaxToolRounds,
@@ -508,6 +517,9 @@ export function useAppState(): UseAppStateReturn {
     selectedApiKeyEntry, selectedApiKey, selectedApiKeySuffix, activeProvider,
     systemPrompt, setSystemPrompt, tools, setTools,
     deepThinkSystemPrompt, setDeepThinkSystemPrompt,
+    deepThinkProviderId, setDeepThinkProviderId,
+    deepThinkModelId, setDeepThinkModelId,
+    deepThinkApiKeyIndex, setDeepThinkApiKeyIndex,
     temperature, setTemperature, thinkingBudget, setThinkingBudget,
     maxOutputTokens, setMaxOutputTokens,
     memoryEnabled, setMemoryEnabled, maxToolRounds, setMaxToolRounds,

@@ -340,13 +340,33 @@ export class GraphExecutor {
     const prompt = preparePromptFromNode(data, inputData);
     const systemPrompt = settings.systemPrompt || '';
 
+    // Собираем инструменты из skills executor (активные скиллы)
+    let skillTools: any[] = [];
+    try {
+      const { collectSkillTools } = await import('@/lib/skills/executor');
+      const declarations = collectSkillTools();
+      if (declarations.length > 0) {
+        skillTools = [{ functionDeclarations: declarations }];
+      }
+    } catch (e) {
+      console.warn('[LLMNode] Could not load skill tools:', e);
+    }
+
+    // Добавляем инструменты из input порта если переданы
+    const inputTools = inputData.tools;
+    const allTools = [
+      ...skillTools,
+      ...(Array.isArray(inputTools) ? inputTools : []),
+    ];
+
     let accumulated = '';
-    const response = await callLLM({
+    let currentResponse = await callLLM({
       model,
       prompt,
       systemPrompt,
       temperature: settings.temperature || 1,
       apiKey,
+      tools: allTools.length > 0 ? allTools : undefined,
       onChunk: (chunk: string) => {
         accumulated += chunk;
         if (this.options.onNodeStream && nodeId) {
@@ -355,7 +375,112 @@ export class GraphExecutor {
       },
     });
 
-    return { output: response.text, tool_calls: response.toolCalls };
+    // === Agentic Tool Call Loop ===
+    // Если LLM вернул вызовы инструментов — обрабатываем их и отправляем ответ обратно
+    const MAX_TOOL_ROUNDS = 5;
+    let toolRound = 0;
+    const toolCallsHistory: any[] = [];
+
+    while (
+      currentResponse.toolCalls &&
+      currentResponse.toolCalls.length > 0 &&
+      toolRound < MAX_TOOL_ROUNDS
+    ) {
+      toolRound++;
+      const functionResponses: Array<{ functionResponse: { name: string; response: unknown } }> = [];
+
+      for (const toolCall of currentResponse.toolCalls) {
+        const toolName: string = toolCall.name || toolCall.functionName || '';
+        const toolArgs: Record<string, unknown> = toolCall.args || toolCall.arguments || {};
+
+        toolCallsHistory.push({ name: toolName, args: toolArgs });
+
+        // Уведомляем UI о вызове инструмента
+        if (this.options.onAgentStep && this.options.chatMode) {
+          this.options.onAgentStep({
+            type: 'tool_use',
+            nodeId: nodeId || '',
+            nodeLabel: `Tool: ${toolName}`,
+            content: { toolName, args: toolArgs },
+            timestamp: Date.now(),
+            status: 'running',
+          });
+        }
+
+        let toolResult: unknown = null;
+        try {
+          const { executeSkillToolCall, isSkillToolCall } = await import('@/lib/skills/executor');
+          if (isSkillToolCall(toolName)) {
+            // Это инструмент из Skills — делегируем в executor
+            const chatId = this.options.chatId || 'agent';
+            const skillResult = await executeSkillToolCall(
+              toolName,
+              toolArgs,
+              chatId,
+              [], // messages snapshot не нужен в агент-режиме
+              (event: any) => {
+                if (this.options.onAgentStep && this.options.chatMode) {
+                  this.options.onAgentStep({
+                    type: 'tool_use',
+                    nodeId: nodeId || '',
+                    nodeLabel: `Skill UI Event`,
+                    content: event,
+                    timestamp: Date.now(),
+                    status: 'done',
+                  });
+                }
+              }
+            );
+            toolResult = skillResult.functionResponse ?? { success: true };
+          } else {
+            // Неизвестный инструмент — возвращаем ошибку
+            toolResult = { error: `Tool "${toolName}" not found in active skills` };
+          }
+        } catch (err) {
+          toolResult = { error: String(err) };
+        }
+
+        functionResponses.push({
+          functionResponse: { name: toolName, response: toolResult },
+        });
+
+        // Обновляем UI
+        if (this.options.onAgentStep && this.options.chatMode) {
+          this.options.onAgentStep({
+            type: 'tool_use',
+            nodeId: nodeId || '',
+            nodeLabel: `Tool: ${toolName}`,
+            content: (toolResult as string | object),
+            timestamp: Date.now(),
+            status: 'done',
+          });
+        }
+      }
+
+      // Отправляем functionResponse обратно в LLM и получаем следующий ответ
+      accumulated = '';
+      currentResponse = await callLLM({
+        model,
+        prompt: '', // пустой — мы передаём parts
+        systemPrompt,
+        temperature: settings.temperature || 1,
+        apiKey,
+        tools: allTools.length > 0 ? allTools : undefined,
+        parts: functionResponses as any,
+        onChunk: (chunk: string) => {
+          accumulated += chunk;
+          if (this.options.onNodeStream && nodeId) {
+            this.options.onNodeStream(nodeId, chunk, accumulated);
+          }
+        },
+      });
+    }
+
+    return {
+      output: currentResponse.text,
+      tool_calls: toolCallsHistory.length > 0 ? toolCallsHistory : currentResponse.toolCalls,
+      thinking: currentResponse.thinking,
+    };
   }
 
   private async executeConditionNode(data: NodeData, inputData: Record<string, any>, nodeId?: string): Promise<any> {
@@ -375,18 +500,43 @@ export class GraphExecutor {
   private async executeRouterNode(data: NodeData, inputData: Record<string, any>, nodeId?: string): Promise<any> {
     const settings = (data.settings as any) ?? {};
     const input = inputData.input;
+    const mode = settings.routerMode || 'if_else';
     const condA = settings.routeACondition;
     const condB = settings.routeBCondition;
-    
+    const condC = settings.routeCCondition;
+
     let active: string = 'default';
-    if (condA && new Function('input', `return ${condA}`)(input)) active = 'route_a';
-    else if (condB && new Function('input', `return ${condB}`)(input)) active = 'route_b';
+
+    if (mode === 'if_else' || mode === 'js_expression') {
+      // Последовательно проверяем условия
+      if (condA && condA.trim()) {
+        try { if (new Function('input', `return !!(${condA})`)(input)) { active = 'route_a'; } } catch { /* ignore */ }
+      }
+      if (active === 'default' && condB && condB.trim()) {
+        try { if (new Function('input', `return !!(${condB})`)(input)) { active = 'route_b'; } } catch { /* ignore */ }
+      }
+      if (active === 'default' && condC && condC.trim()) {
+        try { if (new Function('input', `return !!(${condC})`)(input)) { active = 'route_c'; } } catch { /* ignore */ }
+      }
+    } else if (mode === 'regex_match') {
+      const str = String(input ?? '');
+      if (condA && condA.trim()) {
+        try { if (new RegExp(condA).test(str)) { active = 'route_a'; } } catch { /* ignore */ }
+      }
+      if (active === 'default' && condB && condB.trim()) {
+        try { if (new RegExp(condB).test(str)) { active = 'route_b'; } } catch { /* ignore */ }
+      }
+      if (active === 'default' && condC && condC.trim()) {
+        try { if (new RegExp(condC).test(str)) { active = 'route_c'; } } catch { /* ignore */ }
+      }
+    }
+    // llm_classify — пока fallback на default (требует async LLM вызов)
 
     if (nodeId) {
-      ['route_a', 'route_b', 'default'].filter(r => r !== active).forEach(r => this.markDownstreamSkipped(nodeId, r));
+      ['route_a', 'route_b', 'route_c', 'default'].filter(r => r !== active).forEach(r => this.markDownstreamSkipped(nodeId, r));
     }
 
-    return { [active]: input };
+    return { [active]: input, _activeRoute: active };
   }
 
   private async executeUserMessageInputNode(data: NodeData, inputData: Record<string, any>): Promise<any> {

@@ -28,6 +28,8 @@ import FileEditorCanvas from '@/components/FileEditorCanvas';
 import InsightsPanel from '@/components/InsightsPanel';
 import { useDeepThink } from '@/lib/useDeepThink';
 import DeepThinkToggle from '@/components/DeepThinkToggle';
+import { DeepThinkSettingsDialog } from '@/components/DeepThinkSettingsDialog';
+
 import AgentMessageHeader from '@/components/AgentMessageHeader';
 import ArenaInputBar from '@/components/ArenaInputBar';
 import ArenaAgentsSidebar from '@/components/ArenaAgentsSidebar';
@@ -214,6 +216,9 @@ export default function Home() {
     setActiveProviderId: setActiveProviderIdState,
     systemPrompt, setSystemPrompt, tools, setTools,
     deepThinkSystemPrompt, setDeepThinkSystemPrompt,
+    deepThinkProviderId, setDeepThinkProviderId,
+    deepThinkModelId, setDeepThinkModelId,
+    deepThinkApiKeyIndex, setDeepThinkApiKeyIndex,
     temperature, setTemperature, thinkingBudget, setThinkingBudget,
     maxOutputTokens, maxMemoryCalls, maxToolRounds,
     memoryEnabled, ghostNudgeEnabled, ghostNudgeMaxRetries,
@@ -504,11 +509,19 @@ export default function Home() {
         }
       ));
 
+      // Вычисляем правильный ключ и модель для DeepThink
+      // Если настроен кастомный провайдер — берём из него, иначе используем текущий
+      const dtProviderId = deepThinkProviderId || effectiveProviderId;
+      const dtKeys = apiKeys[dtProviderId] || currentProviderKeys;
+      const dtKeyIndex = deepThinkProviderId ? deepThinkApiKeyIndex : currentKeyIndex;
+      const dtKey = dtKeys[dtKeyIndex]?.key || key;
+      const dtModel = deepThinkModelId || model;
+
       const dtResult = await deepThinkAnalyze(
         history,
         effectiveSystemPrompt, // Передаём с памятью!
-        key,
-        model,
+        dtKey,
+        dtModel,
         deepThinkSystemPrompt,
         (thinking: string) => {
           setMessages(prev => prev.map(m =>
@@ -3507,68 +3520,26 @@ export default function Home() {
 
       {/* DeepThink Dialog */}
       {showDeepThinkDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-full max-w-2xl rounded-3xl border border-[var(--border-strong)] bg-[var(--surface-1)] shadow-2xl">
-            <div className="border-b border-[var(--border)] px-6 py-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold text-[var(--text-primary)]">DeepThink системный промпт</h3>
-                  <p className="mt-1 text-xs text-[var(--text-muted)]">
-                    Промпт для анализа контекста перед генерацией ответа
-                  </p>
-                </div>
-                <button
-                  onClick={() => setShowDeepThinkDialog(false)}
-                  className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            </div>
-
-            <div className="p-6">
-              <textarea
-                value={deepThinkDraft}
-                onChange={e => setDeepThinkDraft(e.target.value)}
-                placeholder="Введите системный промпт для DeepThink..."
-                rows={12}
-                className="w-full rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm leading-relaxed text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
-                style={{ minHeight: '300px', maxHeight: '500px', resize: 'vertical' }}
-              />
-
-              <div className="mt-4 flex items-center justify-between gap-3">
-                <button
-                  onClick={() => {
-                    setDeepThinkDraft(DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
-                  }}
-                  className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
-                >
-                  <RefreshCw size={12} />
-                  Сбросить
-                </button>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setShowDeepThinkDialog(false)}
-                    className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2 text-sm text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
-                  >
-                    Отмена
-                  </button>
-                  <button
-                    onClick={() => {
-                      const nextValue = deepThinkDraft.trim() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT;
-                      setDeepThinkSystemPrompt(nextValue);
-                      saveDeepThinkSystemPrompt(nextValue);
-                      setShowDeepThinkDialog(false);
-                    }}
-                    className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90"
-                  >
-                    Сохранить
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <DeepThinkSettingsDialog
+          open={showDeepThinkDialog}
+          onClose={() => setShowDeepThinkDialog(false)}
+          deepThinkDraft={deepThinkDraft}
+          setDeepThinkDraft={setDeepThinkDraft}
+          deepThinkSystemPrompt={deepThinkSystemPrompt}
+          setDeepThinkSystemPrompt={setDeepThinkSystemPrompt}
+          deepThinkProviderId={deepThinkProviderId}
+          setDeepThinkProviderId={setDeepThinkProviderId}
+          deepThinkModelId={deepThinkModelId}
+          setDeepThinkModelId={setDeepThinkModelId}
+          deepThinkApiKeyIndex={deepThinkApiKeyIndex}
+          setDeepThinkApiKeyIndex={setDeepThinkApiKeyIndex}
+          providers={providers}
+          apiKeys={apiKeys}
+          allModels={allModels}
+          currentProviderId={effectiveProviderId}
+          currentModel={model}
+          currentApiKey={selectedApiKey}
+        />
       )}
 
       {/* Memory Modal */}

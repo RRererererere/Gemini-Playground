@@ -45,6 +45,9 @@ export function useSettings() {
   const [tools, setTools] = useState<ChatTool[]>([]);
   const [savedPrompts, setSavedPrompts] = useState<SavedSystemPrompt[]>([]);
   const [deepThinkSystemPrompt, setDeepThinkSystemPrompt] = useState<string>(DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
+  const [deepThinkProviderId, setDeepThinkProviderIdState] = useState<string>('');
+  const [deepThinkModelId, setDeepThinkModelIdState] = useState<string>('');
+  const [deepThinkApiKeyIndex, setDeepThinkApiKeyIndexState] = useState<number>(0);
   const [temperature, setTemperature] = useState<number>(1.0);
   const [thinkingBudget, setThinkingBudget] = useState<number>(-1);
   const [maxOutputTokens, setMaxOutputTokens] = useState<number>(8192);
@@ -116,6 +119,13 @@ export function useSettings() {
       if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
       if (savedTemp) setTemperature(parseFloat(savedTemp));
       setDeepThinkSystemPrompt(savedDeepThinkPrompt || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
+      // Load DeepThink model/provider/key settings
+      const savedDTProviderId = localStorage.getItem('gemini_deepthink_provider_id') || '';
+      const savedDTModelId = localStorage.getItem('gemini_deepthink_model_id') || '';
+      const savedDTKeyIndex = parseInt(localStorage.getItem('gemini_deepthink_api_key_index') || '0', 10);
+      if (savedDTProviderId) setDeepThinkProviderIdState(savedDTProviderId);
+      if (savedDTModelId) setDeepThinkModelIdState(savedDTModelId);
+      if (!isNaN(savedDTKeyIndex)) setDeepThinkApiKeyIndexState(savedDTKeyIndex);
       if (savedThinking !== null) setThinkingBudget(parseInt(savedThinking));
       if (savedMemoryEnabled !== null) setMemoryEnabled(savedMemoryEnabled === 'true');
       if (savedMaxToolRounds !== null) setMaxToolRounds(parseInt(savedMaxToolRounds));
@@ -158,6 +168,14 @@ export function useSettings() {
   useEffect(() => { saveGhostNudgeEnabled(ghostNudgeEnabled); }, [ghostNudgeEnabled]);
   useEffect(() => { saveGhostNudgeMaxRetries(ghostNudgeMaxRetries); }, [ghostNudgeMaxRetries]);
   useEffect(() => { saveMaxUploadSizeMB(maxUploadSizeMB); }, [maxUploadSizeMB]);
+  useEffect(() => { localStorage.setItem('gemini_deepthink_provider_id', deepThinkProviderId); }, [deepThinkProviderId]);
+  useEffect(() => { localStorage.setItem('gemini_deepthink_model_id', deepThinkModelId); }, [deepThinkModelId]);
+  useEffect(() => { localStorage.setItem('gemini_deepthink_api_key_index', deepThinkApiKeyIndex.toString()); }, [deepThinkApiKeyIndex]);
+
+  // Сеттеры с сохранением
+  const setDeepThinkProviderId = (id: string) => setDeepThinkProviderIdState(id);
+  const setDeepThinkModelId = (id: string) => setDeepThinkModelIdState(id);
+  const setDeepThinkApiKeyIndex = (idx: number) => setDeepThinkApiKeyIndexState(idx);
 
   // Helper: get current API key
   const effectiveProviderId = activeModel?.providerId || activeProviderId;
@@ -267,6 +285,12 @@ export function useSettings() {
     handleSavePrompt,
     deepThinkSystemPrompt,
     setDeepThinkSystemPrompt,
+    deepThinkProviderId,
+    setDeepThinkProviderId,
+    deepThinkModelId,
+    setDeepThinkModelId,
+    deepThinkApiKeyIndex,
+    setDeepThinkApiKeyIndex,
     temperature,
     setTemperature,
     thinkingBudget,
