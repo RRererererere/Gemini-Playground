@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { AgentRun } from '@/lib/agent-engine/types';
 
 interface RunPanelProps {
@@ -267,7 +268,7 @@ export const RunPanel: React.FC<RunPanelProps> = ({
               </div>
               <div className="text-sm text-[var(--text-primary)] bg-[var(--surface-3)] rounded-lg p-4 max-h-96 overflow-y-auto leading-relaxed prose prose-invert prose-sm max-w-none">
                 {typeof finalOutput === 'string' ? (
-                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{finalOutput}</ReactMarkdown>
+                   <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{finalOutput}</ReactMarkdown>
                 ) : (
                    <pre className="font-mono">{JSON.stringify(finalOutput, null, 2)}</pre>
                 )}

@@ -56,6 +56,8 @@ export function useDeepThink() {
     onThinkingUpdate?: (thinking: string) => void,
     retryAttempt: number = 0,
     sceneStateConfig?: { enabledCategories?: string[]; aiInstructions?: string },
+    baseUrl?: string,
+    providerType?: 'gemini' | 'openai'
   ): Promise<{ enhancedPrompt: string; analysis: DeepThinkAnalysis | null; sceneState: SceneState | null; error: string | null }> => {
     setState(prev => ({ ...prev, isAnalyzing: true, error: null, errorType: null }));
 
@@ -75,7 +77,7 @@ export function useDeepThink() {
       const response = await fetch('/api/deepthink', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, sceneStateConfig }),
+        body: JSON.stringify({ messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, sceneStateConfig, baseUrl, providerType }),
         signal: abortControllerRef.current.signal,
       });
 
@@ -154,7 +156,7 @@ export function useDeepThink() {
           }));
 
           await new Promise(resolve => setTimeout(resolve, delay));
-          return analyze(messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, onThinkingUpdate, retryAttempt + 1, sceneStateConfig);
+          return analyze(messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, onThinkingUpdate, retryAttempt + 1, sceneStateConfig, baseUrl, providerType);
         }
 
         // Все попытки исчерпаны — возвращаем пустой, не крашим
@@ -213,7 +215,7 @@ export function useDeepThink() {
 
         await new Promise(resolve => setTimeout(resolve, delay));
 
-        return analyze(messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, onThinkingUpdate, retryAttempt + 1, sceneStateConfig);
+        return analyze(messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, onThinkingUpdate, retryAttempt + 1, sceneStateConfig, baseUrl, providerType);
       }
 
       // Финальная ошибка — не фатальная, DeepThink optional

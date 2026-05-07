@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
+import remarkBreaks from 'remark-breaks';
 import rehypeKatex from 'rehype-katex';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/cjs/styles/prism';
@@ -508,7 +509,7 @@ function StreamingText({
   if (!isStreaming || !isLast) {
     return (
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
+        remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
         rehypePlugins={[rehypeKatex]}
         components={{
           code({ node, className, children, ...props }: any) {
@@ -539,7 +540,7 @@ function StreamingText({
     <>
       {oldText && (
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath]}
+          remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
           rehypePlugins={[rehypeKatex]}
           components={{
             code({ node, className, children, ...props }: any) {
@@ -661,7 +662,7 @@ function ThinkingBlock({ thinking, isStreaming }: { thinking: string; isStreamin
           ) : (
             <div className={translatedText ? 'animate-text-appear' : ''}>
               <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkMath]}
+                remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
                 rehypePlugins={[rehypeKatex]}
                 components={{
                   code({ node, className, children, ...props }: any) {
@@ -839,7 +840,7 @@ function DeepThinkingBlock({
           ) : (
             <div className={`text-xs text-purple-300/90 leading-relaxed ${translatedText ? 'animate-text-appear' : ''}`}>
               <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkMath]}
+                remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
                 rehypePlugins={[rehypeKatex]}
                 components={{
                   code({ node, className, children, ...props }: any) {

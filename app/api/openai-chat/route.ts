@@ -147,10 +147,10 @@ export async function POST(request: NextRequest) {
           buffer = lines.pop() || '';
 
           for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || !trimmed.startsWith('data: ')) continue;
+            const trimmedLine = line.trim();
+            if (!trimmedLine || !trimmedLine.startsWith('data:')) continue;
             
-            const data = trimmed.slice(6);
+            const data = trimmedLine.slice(5).trim();
             if (data === '[DONE]') {
               continue;
             }

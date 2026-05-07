@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { DEEPTHINK_MEMORY_MARKER } from '@/lib/gemini';
 import { classifyGeminiError, extractRetryAfterSeconds } from '@/lib/gemini-errors';
 import { getEnabledCategoryIdsForPrompt } from '@/lib/scene-state-storage';
+import { convertGeminiToOpenAI } from '@/lib/message-converter';
 
 export const maxDuration = 30;
 export const dynamic = 'force-dynamic';
@@ -118,7 +119,7 @@ function buildDeepThinkContents(messages: any[]) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, sceneStateConfig } = body;
+    const { messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, sceneStateConfig, baseUrl, providerType } = body;
 
     if (!apiKey) {
       return Response.json({ error: 'API key required' }, { status: 400 });
@@ -149,38 +150,74 @@ export async function POST(request: NextRequest) {
       return `${role}: ${texts}`;
     }).join('\n\n');
 
-    const requestBody: any = {
-      contents: [
-        ...limitedHistory,
-        {
-          role: 'user',
-          parts: [{ text: DEEPTHINK_PROMPT(historyText, systemInstruction || '', enabledIds.length > 0 ? enabledIds : undefined, aiInstructions) }],
-        },
-      ],
-      systemInstruction: {
-        parts: [{ text: deepThinkSystemPrompt || DEFAULT_DEEPTHINK_SYSTEM }],
-      },
-      generationConfig: {
+    let response: Response;
+    const isOpenAI = providerType === 'openai';
+
+    if (isOpenAI) {
+      // ── OpenAI / OpenRouter Formatting ──────────────────────────────────────
+      const oaiMessages = convertGeminiToOpenAI(messages, systemInstruction);
+      const limitedOaiHistory = oaiMessages.slice(-MAX_HISTORY_MESSAGES);
+      
+      let normalizedBase = (baseUrl || '').replace(/\/+$/, '');
+      if (!normalizedBase.endsWith('/v1')) normalizedBase += '/v1';
+      const endpoint = normalizedBase + '/chat/completions';
+
+      const oaiRequestBody = {
+        model,
+        messages: [
+          { role: 'system', content: deepThinkSystemPrompt || DEFAULT_DEEPTHINK_SYSTEM },
+          ...limitedOaiHistory,
+          { 
+            role: 'user', 
+            content: DEEPTHINK_PROMPT(historyText, systemInstruction || '', enabledIds.length > 0 ? enabledIds : undefined, aiInstructions) 
+          }
+        ],
         temperature: 0.7,
-        maxOutputTokens: 16384, // Увеличим лимит для длинных анализов
-      },
-    };
-
-    if (isThinkingModel) {
-      requestBody.generationConfig.thinkingConfig = {
-        includeThoughts: true,
+        max_tokens: 16384,
+        stream: true
       };
-      // Для thinking моделей температура обычно не поддерживается или должна быть 1.0
-      requestBody.generationConfig.temperature = 1.0;
+
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'HTTP-Referer': 'https://gemini-studio.app',
+          'X-Title': 'Gemini Studio',
+        },
+        body: JSON.stringify(oaiRequestBody),
+      });
+    } else {
+      // ── Gemini Formatting ───────────────────────────────────────────────────
+      const requestBody: any = {
+        contents: [
+          ...limitedHistory,
+          {
+            role: 'user',
+            parts: [{ text: DEEPTHINK_PROMPT(historyText, systemInstruction || '', enabledIds.length > 0 ? enabledIds : undefined, aiInstructions) }],
+          },
+        ],
+        systemInstruction: {
+          parts: [{ text: deepThinkSystemPrompt || DEFAULT_DEEPTHINK_SYSTEM }],
+        },
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 16384,
+        },
+      };
+
+      if (isThinkingModel) {
+        requestBody.generationConfig.thinkingConfig = { includeThoughts: true };
+        requestBody.generationConfig.temperature = 1.0;
+      }
+
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}&alt=sse`;
+      response = await fetch(geminiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
     }
-
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}&alt=sse`;
-
-    const response = await fetch(geminiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-    });
 
     if (!response.ok) {
       const errBody = await response.text();
@@ -195,7 +232,7 @@ export async function POST(request: NextRequest) {
         errStatus = errJson?.error?.status || errStatus;
       } catch {}
       
-      console.error(`[DeepThink API Error] Model: ${modelId}, Status: ${errCode}, Message: ${errMessage}`);
+      console.error(`[DeepThink API Error] Model: ${modelId}, Status: ${errCode}, Message: ${errMessage}, Provider: ${providerType || 'gemini'}`);
 
       // Классифицируем ошибку и получаем понятное сообщение
       const classified = classifyGeminiError(errCode, errMessage);
@@ -246,8 +283,11 @@ export async function POST(request: NextRequest) {
           buffer = lines.pop() || '';
 
           for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const jsonStr = line.slice(6).trim();
+            const trimmedLine = line.trim();
+            if (!trimmedLine || !trimmedLine.startsWith('data:')) continue;
+            
+            // Extract data after 'data:' prefix
+            let jsonStr = trimmedLine.slice(5).trim();
             if (!jsonStr || jsonStr === '[DONE]') continue;
 
             try {
@@ -269,22 +309,45 @@ export async function POST(request: NextRequest) {
                 continue;
               }
 
-              const candidate = parsed?.candidates?.[0];
-              const parts = candidate?.content?.parts || [];
+              if (isOpenAI) {
+                // OpenAI / OpenRouter Chunk Parsing
+                const choice = parsed.choices?.[0];
+                const delta = choice?.delta;
+                
+                // Reasoning content (DeepSeek R1 / models with reasoning field)
+                const reasoning = delta?.reasoning_content || delta?.thinking;
+                if (reasoning) {
+                  await writer.write(
+                    encoder.encode(`data: ${JSON.stringify({ thinking: reasoning })}\n\n`)
+                  );
+                }
 
-              for (const part of parts) {
-                if (part.thought === true && part.text) {
-                  // Нативные размышления thinking-модели
+                // Regular content
+                if (delta?.content) {
+                  textAccumulator += delta.content;
                   await writer.write(
-                    encoder.encode(`data: ${JSON.stringify({ thinking: part.text })}\n\n`)
+                    encoder.encode(`data: ${JSON.stringify({ thinking: delta.content })}\n\n`)
                   );
-                } else if (part.text !== undefined) {
-                  // Обычный текст — это размышления модели перед маркером
-                  textAccumulator += part.text;
-                  // Стримим как thinking чтобы показывать в реальном времени
-                  await writer.write(
-                    encoder.encode(`data: ${JSON.stringify({ thinking: part.text })}\n\n`)
-                  );
+                }
+              } else {
+                // Gemini Chunk Parsing
+                const candidate = parsed?.candidates?.[0];
+                const parts = candidate?.content?.parts || [];
+
+                for (const part of parts) {
+                  if (part.thought === true && part.text) {
+                    // Нативные размышления thinking-модели
+                    await writer.write(
+                      encoder.encode(`data: ${JSON.stringify({ thinking: part.text })}\n\n`)
+                    );
+                  } else if (part.text !== undefined) {
+                    // Обычный текст — это размышления модели перед маркером
+                    textAccumulator += part.text;
+                    // Стримим как thinking чтобы показывать в реальном времени
+                    await writer.write(
+                      encoder.encode(`data: ${JSON.stringify({ thinking: part.text })}\n\n`)
+                    );
+                  }
                 }
               }
             } catch {}

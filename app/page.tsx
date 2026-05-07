@@ -517,6 +517,8 @@ export default function Home() {
       const dtKey = dtKeys[dtKeyIndex]?.key || key;
       const dtModel = deepThinkModelId || model;
 
+      const dtProvider = providers.find(p => p.id === dtProviderId) || providers.find(p => p.isBuiltin);
+      const sceneStateConfig = loadSceneStateConfig();
       const dtResult = await deepThinkAnalyze(
         history,
         effectiveSystemPrompt, // Передаём с памятью!
@@ -531,7 +533,11 @@ export default function Home() {
               isStreaming: true,
             }
           ));
-        }
+        },
+        0,
+        sceneStateConfig,
+        dtProvider?.baseUrl || 'https://generativelanguage.googleapis.com/v1beta',
+        dtProvider?.type || 'gemini'
       );
 
       effectiveSystemPrompt = dtResult.enhancedPrompt;

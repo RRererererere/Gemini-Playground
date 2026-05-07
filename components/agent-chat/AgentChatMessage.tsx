@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import rehypeHighlight from 'rehype-highlight';
 import { AgentChatMessage, AgentChatConfig } from '@/lib/agent-engine/chat-types';
 import { User, Loader2, CheckCircle2, MessageCircle, ChevronDown } from 'lucide-react';
@@ -142,7 +143,7 @@ export function AgentChatMessageComponent({ message, agentConfig }: AgentChatMes
             ) : (
               message.content && typeof message.content === 'string' ? (
                 <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
+                  remarkPlugins={[remarkGfm, remarkBreaks]}
                   rehypePlugins={[rehypeHighlight]}
                   components={{
                     code({ node, inline, className, children, ...props }: any) {

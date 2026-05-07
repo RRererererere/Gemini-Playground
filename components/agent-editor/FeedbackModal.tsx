@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ThumbsUp, ThumbsDown, MessageSquare, Send, X, Info } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 
 interface FeedbackModalProps {
   promptText: string;
@@ -48,7 +49,7 @@ export const FeedbackModal: React.FC<FeedbackModalProps> = ({ promptText, contex
                 {typeof context === 'object' ? (
                   <pre className="font-mono text-xs">{JSON.stringify(context, null, 2)}</pre>
                 ) : (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
                     {String(context)}
                   </ReactMarkdown>
                 )}
