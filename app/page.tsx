@@ -21,7 +21,6 @@ import {
   Brain, Loader2, CheckCircle2, Bot, Pencil
 } from 'lucide-react';
 
-// @ts-ignore
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
 import LivePreviewPanel from '@/components/LivePreviewPanel';
 import FileEditorCanvas from '@/components/FileEditorCanvas';
