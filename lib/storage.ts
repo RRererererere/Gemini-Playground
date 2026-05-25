@@ -568,11 +568,11 @@ export function saveDeepThinkSystemPrompt(prompt: string): void {
 
 // ====================== ПОЛНЫЙ ЭКСПОРТ/ИМПОРТ НАСТРОЕК ======================
 
-export function exportAllSettings(): void {
+export async function exportAllSettings(): Promise<void> {
   if (typeof window === 'undefined') return;
 
   // Импортируем функцию экспорта памяти
-  const { exportAllMemories } = require('./memory-store');
+  const { exportAllMemories } = await import('./memory-store');
 
   const data = {
     version: 2, // bump версии
@@ -624,7 +624,7 @@ export async function importAllSettings(file: File): Promise<void> {
         const raw = JSON.parse(e.target?.result as string);
         if (raw.version && raw.exportedAt) {
           // Импортируем функцию импорта памяти
-          const { importAllMemories } = require('./memory-store');
+          const { importAllMemories } = await import('./memory-store');
           
           if (raw.keys) localStorage.setItem('gemini_api_keys', raw.keys);
           if (raw.chats) {

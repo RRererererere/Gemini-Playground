@@ -165,7 +165,7 @@ export async function getFile(fileId: string): Promise<{
 
     // Try to find metadata in localStorage chats
     if (typeof window !== 'undefined') {
-      const chatsJson = localStorage.getItem('chats');
+      const chatsJson = localStorage.getItem('gemini_saved_chats');
       if (chatsJson) {
         const chats = JSON.parse(chatsJson);
         
