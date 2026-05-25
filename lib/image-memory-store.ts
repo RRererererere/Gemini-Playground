@@ -136,8 +136,8 @@ export async function saveImageMemory(data: {
     computePerceptualHash(data.base64, data.mimeType),
   ]);
 
-  // Сохраняем ОРИГИНАЛ как thumbnail для UI — без сжатия
-  const thumbnail = data.base64;
+  // Создаём сжатый thumbnail (200x200px, JPEG 60%)
+  const thumbnail = await createThumbnail(data.base64, data.mimeType);
   
   // Проверяем дубликаты
   const index = getImageMemoryIndex();
