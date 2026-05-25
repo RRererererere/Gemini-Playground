@@ -146,8 +146,9 @@ async function restoreFileData(messages: Message[]): Promise<Message[]> {
 }
 
 // Restore previewUrl (object URL) for previewable files from base64 data
-// Кэш для Object URLs чтобы избежать утечек памяти
+// Кэш для Object URLs с LRU eviction для предотвращения утечек памяти
 const previewUrlCache = new Map<string, string>();
+const MAX_CACHE_SIZE = 50; // Лимит кэша
 
 function restoreFilePreviewUrl(file: AttachedFile): AttachedFile {
   const canPreviewInline =
@@ -160,7 +161,21 @@ function restoreFilePreviewUrl(file: AttachedFile): AttachedFile {
       const cacheKey = file.id || file.data.slice(0, 100);
       
       if (previewUrlCache.has(cacheKey)) {
-        return { ...file, previewUrl: previewUrlCache.get(cacheKey) };
+        // LRU: переместить в конец (удалить и добавить снова)
+        const url = previewUrlCache.get(cacheKey)!;
+        previewUrlCache.delete(cacheKey);
+        previewUrlCache.set(cacheKey, url);
+        return { ...file, previewUrl: url };
+      }
+      
+      // Если кэш переполнен — удалить самый старый (первый)
+      if (previewUrlCache.size >= MAX_CACHE_SIZE) {
+        const firstKey = previewUrlCache.keys().next().value;
+        const oldUrl = previewUrlCache.get(firstKey);
+        if (oldUrl) {
+          URL.revokeObjectURL(oldUrl);
+          previewUrlCache.delete(firstKey);
+        }
       }
       
       const blob = base64ToBlob(file.data, file.mimeType);
