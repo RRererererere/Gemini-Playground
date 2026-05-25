@@ -93,7 +93,7 @@ export function useDeepThink() {
         throw new Error(errorMessage);
       }
 
-      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+      reader = response.body?.getReader() || null;
       let buffer = '';
       let thinkingAccumulator = '';
       let enhancedPrompt = '';
