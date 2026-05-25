@@ -643,6 +643,7 @@ export default function Home() {
           break;
         }
         toolRoundCount++;
+        memoryCallsThisTurn = 0; // Сбрасываем счётчик memory calls для нового раунда
 
         shouldContinueLoop = false; // по умолчанию — выходим после одного прохода
 
