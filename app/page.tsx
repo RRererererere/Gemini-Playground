@@ -2269,7 +2269,7 @@ export default function Home() {
     }
   }, [currentChatId, activeFileId, openFiles]);
 
-  const handleEditDeepThinkAnalysis = useCallback((id: string, analysis: DeepThinkAnalysis) => {
+  const handleEditDeepThinkAnalysis = useCallback(async (id: string, analysis: DeepThinkAnalysis) => {
     // Найти сообщение и перегенерировать с новым анализом
     const msgIdx = messages.findIndex(m => m.id === id);
     if (msgIdx === -1) return;
@@ -2278,7 +2278,7 @@ export default function Home() {
     const historyUpTo = messages.slice(0, msgIdx);
     
     // Перегенерировать с кастомным анализом
-    streamGeneration(historyUpTo, id, false, analysis);
+    await streamGeneration(historyUpTo, id, false, analysis);
   }, [messages, streamGeneration]);
 
   const handleStop = useCallback(() => {
