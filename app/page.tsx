@@ -690,12 +690,9 @@ export default function Home() {
         // ── Ghost Nudge инъекция (если pending) ──
         if (ghostNudgePending) {
           ghostNudgePending = false;
-          console.log(`👻 [GNP] Injecting ghost nudge (attempt ${ghostRetryCount}/${MAX_GHOST_RETRIES})`);
-          contentsForRequest = [
-            ...contentsForRequest,
-            { role: 'model' as const, parts: [{ text: '...' }] },
-            { role: 'user'  as const, parts: [{ text: '...' }] },
-          ];
+          console.log(`👻 [GNP] Retrying request (attempt ${ghostRetryCount}/${MAX_GHOST_RETRIES})`);
+          // Не модифицируем contentsForRequest — просто повторяем запрос
+          // Можно добавить seed для детерминированности, но это опционально
         }
 
         // Собираем skill tools
