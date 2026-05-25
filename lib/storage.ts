@@ -171,10 +171,12 @@ function restoreFilePreviewUrl(file: AttachedFile): AttachedFile {
       // Если кэш переполнен — удалить самый старый (первый)
       if (previewUrlCache.size >= MAX_CACHE_SIZE) {
         const firstKey = previewUrlCache.keys().next().value;
-        const oldUrl = previewUrlCache.get(firstKey);
-        if (oldUrl) {
-          URL.revokeObjectURL(oldUrl);
-          previewUrlCache.delete(firstKey);
+        if (firstKey) {
+          const oldUrl = previewUrlCache.get(firstKey);
+          if (oldUrl) {
+            URL.revokeObjectURL(oldUrl);
+            previewUrlCache.delete(firstKey);
+          }
         }
       }
       
