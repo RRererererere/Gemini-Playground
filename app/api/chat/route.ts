@@ -97,6 +97,15 @@ function normalizeIncomingPart(part: any) {
 
 export async function POST(request: NextRequest) {
   try {
+    // APP-011: Проверка размера body (Vercel Hobby limit 4.5MB)
+    const contentLength = request.headers.get('content-length');
+    if (contentLength && parseInt(contentLength) > 4.5 * 1024 * 1024) {
+      return new Response(
+        JSON.stringify({ error: 'Request too large (max 4.5MB). Try reducing image count or quality.' }),
+        { status: 413 }
+      );
+    }
+
     const body = await request.json();
     const {
       messages,
@@ -263,14 +272,24 @@ export async function POST(request: NextRequest) {
 
     let geminiResponse: Response;
     try {
+      // APP-012: Добавляем timeout 30 секунд
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      
       geminiResponse = await fetch(geminiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
+        signal: controller.signal,
       });
+      
+      clearTimeout(timeoutId);
     } catch (fetchErr: any) {
+      const errorMessage = fetchErr.name === 'AbortError' 
+        ? 'Request timeout (30s)' 
+        : fetchErr.message || 'Network error';
       return new Response(
-        `data: ${JSON.stringify({ error: fetchErr.message || 'Network error' })}\n\ndata: [DONE]\n\n`,
+        `data: ${JSON.stringify({ error: errorMessage })}\n\ndata: [DONE]\n\n`,
         { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
       );
     }

@@ -10,6 +10,69 @@ import {
   hammingDistance,
 } from './image-memory-hash';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Thumbnail generation (browser-side Canvas API)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function createThumbnail(base64: string, mimeType: string): Promise<string> {
+  if (typeof window === 'undefined') {
+    // Server-side: return original (thumbnail generation only in browser)
+    return base64;
+  }
+
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        // Resize to 200x200 max (keep aspect ratio)
+        const maxSize = 200;
+        let width = img.width;
+        let height = img.height;
+        
+        if (width > height) {
+          if (width > maxSize) {
+            height = (height * maxSize) / width;
+            width = maxSize;
+          }
+        } else {
+          if (height > maxSize) {
+            width = (width * maxSize) / height;
+            height = maxSize;
+          }
+        }
+        
+        // Create canvas and draw resized image
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(base64); // fallback to original
+          return;
+        }
+        
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Convert to JPEG 60% quality
+        const thumbnailDataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        const thumbnailBase64 = thumbnailDataUrl.split(',')[1];
+        
+        resolve(thumbnailBase64);
+      } catch (err) {
+        console.error('[thumbnail] Failed to create thumbnail:', err);
+        resolve(base64); // fallback to original
+      }
+    };
+    
+    img.onerror = () => {
+      console.error('[thumbnail] Failed to load image for thumbnail');
+      resolve(base64); // fallback to original
+    };
+    
+    img.src = `data:${mimeType};base64,${base64}`;
+  });
+}
+
 export type ImageMemoryScope = 'local' | 'global';
 
 export interface StoredAnnotation {
