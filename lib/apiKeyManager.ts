@@ -195,18 +195,33 @@ export function isRateLimitError(message: string): boolean {
 // Проверить — является ли ошибка невалидным ключом
 export function isInvalidKeyError(message: string): boolean {
   const lower = message.toLowerCase();
-  // Более точная проверка: ищем HTTP коды как отдельные слова
-  const has401 = /\b401\b/.test(message);
-  const has403 = /\b403\b/.test(message);
-  const hasKeyword = lower.includes('api') && (lower.includes('key') || lower.includes('invalid') || lower.includes('permission'));
   
-  return (
-    lower.includes('api key') && lower.includes('invalid') ||
-    lower.includes('api_key_invalid') ||
-    lower.includes('permission denied') ||
-    (has401 && hasKeyword) ||
-    (has403 && lower.includes('key'))
-  );
+  // Точные паттерны ошибок API ключа
+  const exactPatterns = [
+    'api_key_invalid',
+    'api key not valid',
+    'invalid api key',
+    'invalid authentication credentials',
+  ];
+  
+  // Проверяем точные паттерны
+  if (exactPatterns.some(pattern => lower.includes(pattern))) {
+    return true;
+  }
+  
+  // HTTP 401 + ключевые слова (только если есть "key" или "invalid")
+  const has401 = /\b401\b/.test(message);
+  if (has401 && (lower.includes('api key') || lower.includes('invalid'))) {
+    return true;
+  }
+  
+  // HTTP 403 + точно "api key"
+  const has403 = /\b403\b/.test(message);
+  if (has403 && lower.includes('api key')) {
+    return true;
+  }
+  
+  return false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
