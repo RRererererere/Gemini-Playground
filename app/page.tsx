@@ -1805,32 +1805,31 @@ export default function Home() {
     rating: 'like' | 'dislike',
     comment?: string
   ) => {
-    // 1. Обновить message.feedback в массиве messages
-    setMessages(prev => {
-      const msg = prev.find(m => m.id === messageId);
-      if (!msg) return prev;
-      
-      const isToggleOff = msg.feedback?.rating === rating;
-      
-      // 2. Добавить в RPG Style Profile ЗДЕСЬ, с актуальными данными
-      if (!isToggleOff) {
-        const excerpt = getVisibleMessageText(msg.parts).slice(0, 200);
-        addFeedbackEntry({
-          rating,
-          comment: comment || '',
-          excerpt,
-          timestamp: Date.now()
-        });
-      }
-      
-      return prev.map(m =>
-        m.id !== messageId ? m :
-        isToggleOff
-          ? { ...m, feedback: undefined }          // toggle off
-          : { ...m, feedback: { rating, comment, timestamp: Date.now() } }
-      );
-    });
-  }, []); // убрать messages из deps
+    // 1. Найти сообщение и проверить toggle
+    const msg = messages.find(m => m.id === messageId);
+    if (!msg) return;
+    
+    const isToggleOff = msg.feedback?.rating === rating;
+    
+    // 2. Добавить в RPG Style Profile ДО setMessages (избегаем side effect)
+    if (!isToggleOff) {
+      const excerpt = getVisibleMessageText(msg.parts).slice(0, 200);
+      addFeedbackEntry({
+        rating,
+        comment: comment || '',
+        excerpt,
+        timestamp: Date.now()
+      });
+    }
+    
+    // 3. Обновить message.feedback в массиве messages
+    setMessages(prev => prev.map(m =>
+      m.id !== messageId ? m :
+      isToggleOff
+        ? { ...m, feedback: undefined }          // toggle off
+        : { ...m, feedback: { rating, comment, timestamp: Date.now() } }
+    ));
+  }, [messages]); // добавляем messages в deps т.к. используем его напрямую
 
   const handleRegenerateWithFeedback = useCallback(async (
     messageId: string,
