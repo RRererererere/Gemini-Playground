@@ -87,6 +87,11 @@ import {
   needsCondensation,
   buildCondensationPrompt,
 } from '@/lib/rpg-style-profile';
+import {
+  loadRPGFeedbackSettings,
+  saveRPGFeedbackSettings,
+  DEFAULT_RPG_FEEDBACK_SETTINGS,
+} from '@/lib/rpg-feedback-settings';
 // Skills system
 import {
   collectSkillTools,

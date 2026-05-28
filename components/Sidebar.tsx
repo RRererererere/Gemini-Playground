@@ -175,6 +175,12 @@ export interface SidebarSharedProps {
   // Max Upload Size
   maxUploadSizeMB: number;
   onMaxUploadSizeMBChange: (v: number) => void;
+  // RPG Feedback Settings
+  rpgFeedbackEnabled: boolean;
+  onRPGFeedbackEnabledChange: (enabled: boolean) => void;
+  rpgShowInlineFeedback: boolean;
+  onRPGShowInlineFeedbackChange: (enabled: boolean) => void;
+  onResetRPGProfile?: () => void;
   onSkillsChanged?: () => void;
   onClose?: () => void;
   // Agents
@@ -942,6 +948,11 @@ export function SettingsSidebar({
   onGhostNudgeMaxRetriesChange,
   maxUploadSizeMB,
   onMaxUploadSizeMBChange,
+  rpgFeedbackEnabled,
+  onRPGFeedbackEnabledChange,
+  rpgShowInlineFeedback,
+  onRPGShowInlineFeedbackChange,
+  onResetRPGProfile,
   onSkillsChanged,
   onClose,
 }: SidebarSharedProps) {
@@ -1748,6 +1759,52 @@ export function SettingsSidebar({
                             ))}
                           </div>
                         </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* RPG Feedback Settings */}
+                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[13px]">🎭</span>
+                        <span className="text-xs font-medium text-[var(--text-primary)]">RPG Feedback</span>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={rpgFeedbackEnabled}
+                          onChange={e => onRPGFeedbackEnabledChange(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-9 h-5 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-500"></div>
+                      </label>
+                    </div>
+                    <p className="text-[10px] text-[var(--text-muted)] leading-relaxed mb-2">
+                      Система обратной связи для RPG-чатов. Лайки/дизлайки влияют на стиль генерации
+                    </p>
+                    {rpgFeedbackEnabled && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-[var(--text-muted)]">Inline виджеты</span>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={rpgShowInlineFeedback}
+                              onChange={e => onRPGShowInlineFeedbackChange(e.target.checked)}
+                              className="sr-only peer"
+                            />
+                            <div className="w-7 h-4 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[1px] after:left-[1px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-purple-500"></div>
+                          </label>
+                        </div>
+                        {onResetRPGProfile && (
+                          <button
+                            onClick={onResetRPGProfile}
+                            className="w-full px-3 py-2 rounded-lg text-[10px] font-medium text-red-400 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-all"
+                          >
+                            Сбросить профиль
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

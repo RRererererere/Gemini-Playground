@@ -174,18 +174,13 @@ export function formatToolPayload(value: unknown): string {
 
 export function buildChatRequestMessages(messages: Message[]) {
   return messages
+    // Фильтруем bridge_data и tool_response из контекста модели
+    .filter(message => {
+      if (message.kind === 'bridge_data') return false;
+      if (message.kind === 'tool_response') return false;
+      return true;
+    })
     .map(message => {
-      // Для bridge_data сообщений создаем специальный формат
-      if (message.kind === 'bridge_data' && message.bridgeData) {
-        const dataText = JSON.stringify(message.bridgeData.data, null, 2);
-        return {
-          role: message.role,
-          parts: [{
-            text: `[🌐 SITE DATA] ${message.bridgeData.eventType}\n\`\`\`json\n${dataText}\n\`\`\``
-          }]
-        };
-      }
-      
       const parts: any[] = message.parts
         .filter(part => {
           if ('text' in part) return isThoughtPart(part) || Boolean(part.text);

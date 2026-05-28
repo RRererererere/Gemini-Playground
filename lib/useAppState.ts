@@ -77,6 +77,12 @@ export interface UseAppStateReturn {
   setGhostNudgeMaxRetries: React.Dispatch<React.SetStateAction<number>>;
   maxUploadSizeMB: number;
   setMaxUploadSizeMB: React.Dispatch<React.SetStateAction<number>>;
+  // RPG Feedback Settings
+  rpgFeedbackEnabled: boolean;
+  setRPGFeedbackEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  rpgShowInlineFeedback: boolean;
+  setRPGShowInlineFeedback: React.Dispatch<React.SetStateAction<boolean>>;
+  resetRPGProfile: () => void;
   savedPrompts: SavedSystemPrompt[];
   setSavedPrompts: React.Dispatch<React.SetStateAction<SavedSystemPrompt[]>>;
 
@@ -214,6 +220,9 @@ export function useAppState(): UseAppStateReturn {
     maxMemoryCalls, setMaxMemoryCalls,
     ghostNudgeEnabled, setGhostNudgeEnabled, ghostNudgeMaxRetries, setGhostNudgeMaxRetries,
     maxUploadSizeMB, setMaxUploadSizeMB,
+    rpgFeedbackEnabled, setRPGFeedbackEnabled,
+    rpgShowInlineFeedback, setRPGShowInlineFeedback,
+    resetRPGProfile,
     savedPrompts, setSavedPrompts,
     onModelsLoad, onRefreshModels,
   } = settings;
@@ -492,6 +501,11 @@ export function useAppState(): UseAppStateReturn {
     onGhostNudgeMaxRetriesChange: setGhostNudgeMaxRetries,
     maxUploadSizeMB,
     onMaxUploadSizeMBChange: setMaxUploadSizeMB,
+    rpgFeedbackEnabled,
+    onRPGFeedbackEnabledChange: setRPGFeedbackEnabled,
+    rpgShowInlineFeedback,
+    onRPGShowInlineFeedbackChange: setRPGShowInlineFeedback,
+    onResetRPGProfile: resetRPGProfile,
     onSkillsChanged: () => setSkillsRevision(r => r + 1),
   };
 
@@ -526,6 +540,9 @@ export function useAppState(): UseAppStateReturn {
     maxMemoryCalls, setMaxMemoryCalls,
     ghostNudgeEnabled, setGhostNudgeEnabled, ghostNudgeMaxRetries, setGhostNudgeMaxRetries,
     maxUploadSizeMB, setMaxUploadSizeMB,
+    rpgFeedbackEnabled, setRPGFeedbackEnabled,
+    rpgShowInlineFeedback, setRPGShowInlineFeedback,
+    resetRPGProfile,
     savedPrompts, setSavedPrompts,
 
     // Chat — delegated to useChat hook
