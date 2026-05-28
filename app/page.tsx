@@ -6,6 +6,7 @@ import ChatMessage from '@/components/ChatMessage';
 import ChatInput from '@/components/ChatInput';
 import { ToolBuilderModal } from '@/components/ToolBuilder';
 import MemoryModal from '@/components/MemoryModal';
+import { RPGProfileModal } from '@/components/RPGProfileModal';
 import MemoryPill from '@/components/MemoryPill';
 import ImageMemoryPill from '@/components/ImageMemoryPill';
 import ImageMemoryRecallPill from '@/components/ImageMemoryRecallPill';
@@ -267,6 +268,9 @@ export default function Home() {
   const [agentChatThreadId, setAgentChatThreadId] = useState<string | null>(null);
   const [agentChatRenderKey, setAgentChatRenderKey] = useState(0); // Для принудительного ре-рендера
   const [isAgentRunning, setIsAgentRunning] = useState(false);
+  
+  // RPG Profile Modal
+  const [showRPGProfileModal, setShowRPGProfileModal] = useState(false);
 
   // ============ STORAGE REPAIR ============
   useEffect(() => {
@@ -2653,6 +2657,7 @@ export default function Home() {
   settingsSidebarProps.onLoadChat = handleLoadChat;
   settingsSidebarProps.onNewChat = handleNewChat;
   settingsSidebarProps.onDeleteChat = handleDeleteSavedChat;
+  settingsSidebarProps.onOpenRPGProfileModal = () => setShowRPGProfileModal(true);
 
   // Messages to display: in arena mode use arena session messages
   const displayMessages = appMode === 'arena'
@@ -3554,6 +3559,16 @@ export default function Home() {
         open={showMemoryModal}
         onClose={() => setShowMemoryModal(false)}
         chatId={currentChatId || undefined}
+      />
+
+      {/* RPG Profile Modal */}
+      <RPGProfileModal
+        open={showRPGProfileModal}
+        onClose={() => setShowRPGProfileModal(false)}
+        onNavigateToChat={(chatId) => {
+          const chat = savedChats.find(c => c.id === chatId);
+          if (chat) handleLoadChat(chat);
+        }}
       />
 
       {/* Skills Market Modal */}

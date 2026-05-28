@@ -181,6 +181,7 @@ export interface SidebarSharedProps {
   rpgShowInlineFeedback: boolean;
   onRPGShowInlineFeedbackChange: (enabled: boolean) => void;
   onResetRPGProfile?: () => void;
+  onOpenRPGProfileModal?: () => void;
   onSkillsChanged?: () => void;
   onClose?: () => void;
   // Agents
@@ -953,6 +954,7 @@ export function SettingsSidebar({
   rpgShowInlineFeedback,
   onRPGShowInlineFeedbackChange,
   onResetRPGProfile,
+  onOpenRPGProfileModal,
   onSkillsChanged,
   onClose,
 }: SidebarSharedProps) {
@@ -1797,6 +1799,12 @@ export function SettingsSidebar({
                             <div className="w-7 h-4 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[1px] after:left-[1px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-purple-500"></div>
                           </label>
                         </div>
+                        <button
+                          onClick={() => onOpenRPGProfileModal?.()}
+                          className="w-full px-3 py-2 rounded-lg text-[10px] font-medium text-purple-400 bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/20 transition-all"
+                        >
+                          Управление профилем
+                        </button>
                         {onResetRPGProfile && (
                           <button
                             onClick={onResetRPGProfile}

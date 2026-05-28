@@ -506,6 +506,7 @@ export function useAppState(): UseAppStateReturn {
     rpgShowInlineFeedback,
     onRPGShowInlineFeedbackChange: setRPGShowInlineFeedback,
     onResetRPGProfile: resetRPGProfile,
+    onOpenRPGProfileModal: null as any, // будет установлен из page.tsx
     onSkillsChanged: () => setSkillsRevision(r => r + 1),
   };
 
