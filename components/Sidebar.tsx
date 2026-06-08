@@ -17,6 +17,7 @@ import {
   FolderOpen,
   Hash,
   Key,
+  Layers,
   MessageSquare,
   Plus,
   RefreshCw,
@@ -143,6 +144,7 @@ export interface SidebarSharedProps {
   onOpenSavePromptDialog?: () => void;
   onOpenDeepThinkDialog?: () => void;
   onOpenMemoryModal?: () => void;
+  onOpenContextInspector?: () => void;
   onOpenSkillsMarket?: () => void;
   onOpenHFSpaces?: () => void;
   deepThinkSystemPrompt: string;
@@ -923,6 +925,7 @@ export function SettingsSidebar({
   onOpenSavePromptDialog,
   onOpenDeepThinkDialog,
   onOpenMemoryModal,
+  onOpenContextInspector,
   onOpenSkillsMarket,
   onOpenHFSpaces,
   deepThinkSystemPrompt,
@@ -1984,6 +1987,19 @@ export function SettingsSidebar({
                       Сохранить промпт
                     </button>
                   )}
+
+                  <div className="mt-3 space-y-2">
+                    <button
+                      onClick={() => onOpenContextInspector?.()}
+                      className="flex w-full items-center justify-center gap-2 rounded-2xl border border-[var(--gem-teal)]/30 bg-[var(--gem-teal)]/10 px-4 py-3 text-xs font-medium text-[var(--gem-teal)] transition-all hover:bg-[var(--gem-teal)]/15 hover:border-[var(--gem-teal)]/50"
+                    >
+                      <Layers size={13} />
+                      Контекст запроса
+                    </button>
+                    <p className="text-[10px] text-center text-[var(--text-dim)] leading-relaxed">
+                      Просмотр и редактирование всего, что уходит в нейросеть
+                    </p>
+                  </div>
 
                   <div className="mt-3 space-y-2">
                     <div className="flex items-center justify-between">

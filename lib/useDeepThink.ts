@@ -93,13 +93,15 @@ export function useDeepThink() {
         throw new Error(errorMessage);
       }
 
-      reader = response.body?.getReader() || null;
+      if (!response.body) {
+        throw new Error('Ответ сервера не содержит тела (ReadableStream)');
+      }
+      reader = response.body.getReader();
       let buffer = '';
       let thinkingAccumulator = '';
       let enhancedPrompt = '';
       let sceneState: SceneState | null = null;
 
-      reader = response.body!.getReader();
       const decoder = new TextDecoder();
 
       while (true) {

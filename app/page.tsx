@@ -35,6 +35,7 @@ import ArenaInputBar from '@/components/ArenaInputBar';
 import ArenaAgentsSidebar from '@/components/ArenaAgentsSidebar';
 import { useArena } from '@/lib/useArena';
 import { SceneStateSettingsModal } from '@/components/SceneStateSettingsModal';
+import { ContextInspectorModal } from '@/components/ContextInspectorModal';
 import { loadSceneStateConfig, saveSceneStateConfig } from '@/lib/scene-state-storage';
 import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, ToolResponse, SavedSystemPrompt, SkillArtifact, CanvasElement, Provider, UniversalModel, ActiveModel, Message, AttachedFile, Part, DeepThinkAnalysis, WebsiteType, OpenFile, FileDiffOp } from '@/types';
 import {
@@ -64,7 +65,9 @@ import {
   isThoughtPart,
   normalizeToolResponseInput,
 } from '@/lib/gemini';
-import { buildMemoryPrompt, markMemoriesUsed } from '@/lib/memory-prompt';
+import { markMemoriesUsed } from '@/lib/memory-prompt';
+import { buildSystemPromptLayers } from '@/lib/context-layers';
+import { loadContextLayersConfig } from '@/lib/context-layers-storage';
 import { MEMORY_TOOLS, IMAGE_MEMORY_TOOLS } from '@/lib/memory-tools';
 import { saveMemory, updateMemory, forgetMemory, getMemories } from '@/lib/memory-store';
 import { getAgents } from '@/lib/agents/agent-store';
@@ -76,7 +79,6 @@ import {
   incrementImageMemoryMentions 
 } from '@/lib/image-memory-store';
 import { getImageDimensions } from '@/lib/image-utils';
-import { buildImageContext } from '@/lib/image-context';
 import { collectImages } from '@/lib/image-context';
 import { cropAndScale } from '@/lib/skills/built-in/image-analyser/cropper';
 import { generateImageId } from '@/lib/imageId';
@@ -84,7 +86,6 @@ import {
   loadRPGProfile,
   saveRPGProfile,
   addFeedbackEntry,
-  getStyleInjection,
   needsCondensation,
   buildCondensationPrompt,
 } from '@/lib/rpg-style-profile';
@@ -96,7 +97,6 @@ import {
 // Skills system
 import {
   collectSkillTools,
-  buildSkillsSystemPrompt,
   executeSkillToolCall,
   notifySkillsMessageComplete,
   isSkillToolCall,
@@ -226,7 +226,7 @@ export default function Home() {
     deepThinkApiKeyIndex, setDeepThinkApiKeyIndex,
     temperature, setTemperature, thinkingBudget, setThinkingBudget,
     maxOutputTokens, maxMemoryCalls, maxToolRounds,
-    memoryEnabled, ghostNudgeEnabled, ghostNudgeMaxRetries,
+    memoryEnabled, setMemoryEnabled, ghostNudgeEnabled, ghostNudgeMaxRetries,
     savedPrompts, setSavedPrompts,
     messages, setMessages, messagesRef,
     savedChats, setSavedChats,
@@ -247,6 +247,7 @@ export default function Home() {
     settingsSidebarOpen, setSettingsSidebarOpen,
     isMobile,
     showSkillsMarket, setShowSkillsMarket, showHFSpaces, setShowHFSpaces,
+    showContextInspector, setShowContextInspector,
     skillsRevision, setSkillsRevision,
     handleSkillEvent,
     showScrollBottom, isAtBottomRef, chatEndRef, handleScroll, scrollToBottom,
@@ -455,48 +456,27 @@ export default function Home() {
     ));
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // Память — добавляем в системный промпт
+    // Сборка системного промпта (слои из Context Inspector)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const userMessages = history
-      .filter(m => m.role === 'user')
-      .map(m => getVisibleMessageText(m.parts));
-    
-    const { prompt: memoryPrompt, usedMemoryIds, usedImageMemoryIds } = buildMemoryPrompt(
-      userMessages,
-      currentChatId || undefined,
-      memoryEnabled
-    );
+    const contextConfig = loadContextLayersConfig();
+    const messageFilters = contextConfig.messageFilters;
 
-    // Отмечаем использованные воспоминания
-    if (usedMemoryIds.length > 0 || usedImageMemoryIds.length > 0) {
-      markMemoriesUsed(usedMemoryIds, usedImageMemoryIds, currentChatId || undefined);
+    const initialBuilt = buildSystemPromptLayers({
+      messages: history,
+      systemPrompt,
+      chatId: currentChatId,
+      memoryEnabled,
+      config: contextConfig,
+      handleSkillEvent,
+    });
+
+    if (initialBuilt.usedMemoryIds.length > 0 || initialBuilt.usedImageMemoryIds.length > 0) {
+      markMemoriesUsed(initialBuilt.usedMemoryIds, initialBuilt.usedImageMemoryIds, currentChatId || undefined);
     }
 
-    // Skills System Prompt injection
-    const skillsPromptInjection = buildSkillsSystemPrompt(
-      currentChatId || '',
-      messages,
-      handleSkillEvent
-    );
+    let effectiveSystemPrompt = initialBuilt.baseBeforeDeepThink;
+    let deepThinkEnhancedForRequest: string | null = null;
 
-    // DeepThink Pass 1 — если включён, анализируем сначала
-    let effectiveSystemPrompt = systemPrompt;
-    if (memoryPrompt) {
-      effectiveSystemPrompt = memoryPrompt + '\n\n' + systemPrompt;
-    }
-    if (skillsPromptInjection) {
-      effectiveSystemPrompt = effectiveSystemPrompt + skillsPromptInjection;
-    }
-    
-    // RPG Style Profile injection
-    const rpgProfile = loadRPGProfile();
-    const styleInjection = getStyleInjection(rpgProfile);
-    if (styleInjection) {
-      effectiveSystemPrompt = effectiveSystemPrompt + '\n\n' + styleInjection;
-    }
-    
-    // ВАЖНО: imageContext добавляется ВНУТРИ tool loop, так как он должен обновляться
-    // после каждого zoom_region вызова (новые изображения добавляются в историю)
     let finalAnalysis: DeepThinkAnalysis | null = null;
     
     // Получаем текущее сообщение для возможного восстановления промпта при isAppending
@@ -549,6 +529,7 @@ export default function Home() {
       );
 
       effectiveSystemPrompt = dtResult.enhancedPrompt;
+      deepThinkEnhancedForRequest = dtResult.enhancedPrompt || null;
       finalAnalysis = dtResult.analysis;
       
       // Сохранить enhancedPrompt и originalPrompt на сообщение для последующего переиспользования
@@ -578,6 +559,7 @@ export default function Home() {
         
         // Продолжаем с оригинальным системным промптом (fallback)
         effectiveSystemPrompt = originalPromptBeforeDeepThink;
+        deepThinkEnhancedForRequest = null;
         
         // НЕ вызываем setIsStreaming(false) и return — продолжаем генерацию
       } else if (finalAnalysis) {
@@ -594,6 +576,7 @@ export default function Home() {
       // Путь 2: Используем кастомный анализ после редактирования
       finalAnalysis = customAnalysis;
       effectiveSystemPrompt = buildEnhancedPromptFromAnalysis(customAnalysis);
+      deepThinkEnhancedForRequest = effectiveSystemPrompt;
       
       // Обновляем анализ в сообщении
       setMessages(prev => prev.map(m =>
@@ -608,11 +591,13 @@ export default function Home() {
     } else if (prebuiltSystemPrompt) {
       // Путь 3: Готовый prompt (регенерация текста без DeepThink)
       effectiveSystemPrompt = prebuiltSystemPrompt;
+      deepThinkEnhancedForRequest = prebuiltSystemPrompt;
       // DeepThink НЕ запускается, deepThinking на сообщении НЕ трогается
     } else if (isAppending && targetMsg) {
       // Путь 4: Продолжение разорванной генерации (реюз старого промпта)
       if (targetMsg.deepThinkEnhancedPrompt) {
         effectiveSystemPrompt = targetMsg.deepThinkEnhancedPrompt;
+        deepThinkEnhancedForRequest = targetMsg.deepThinkEnhancedPrompt;
       }
     }
 
@@ -662,7 +647,7 @@ export default function Home() {
         localWasBlocked = false;
 
         // Строим историю с накопленными tool calls/responses от предыдущих раундов
-        const messagesForRequest = buildChatRequestMessages(history);
+        const messagesForRequest = buildChatRequestMessages(history, messageFilters);
 
         // Если есть завершённые раунды — добавляем их как отдельные model/user turns
         let contentsForRequest = messagesForRequest;
@@ -706,12 +691,17 @@ export default function Home() {
         // Собираем skill tools
         const skillTools = collectSkillTools();
         
-        // Добавляем контекст изображений ВНУТРИ цикла (обновляется после каждого zoom)
-        const imageContext = buildImageContext(history, currentChatId || undefined);
-        let effectiveSystemPromptWithImages = effectiveSystemPrompt;
-        if (imageContext) {
-          effectiveSystemPromptWithImages = effectiveSystemPrompt + imageContext;
-        }
+        // Пересобираем промпт внутри цикла (image context обновляется после zoom)
+        const loopBuilt = buildSystemPromptLayers({
+          messages: history,
+          systemPrompt,
+          chatId: currentChatId,
+          memoryEnabled,
+          config: contextConfig,
+          handleSkillEvent,
+          deepThinkEnhancedPrompt: deepThinkEnhancedForRequest,
+        });
+        const effectiveSystemPromptWithImages = loopBuilt.text;
         
         // Определяем endpoint и параметры в зависимости от типа провайдера
         const endpoint = activeProvider?.type === 'openai' ? '/api/openai-chat' : '/api/chat';
@@ -3601,12 +3591,36 @@ export default function Home() {
         }}
         onOpenSettings={() => setSettingsSidebarOpen(true)}
         onOpenMemory={() => setShowMemoryModal(true)}
+        onOpenContextInspector={() => setShowContextInspector(true)}
         onToggleCanvas={() => setShowLiveCanvas(prev => !prev)}
       />
 
       <SceneStateSettingsModal 
         isOpen={isSceneStateSettingsOpen}
         onClose={() => setIsSceneStateSettingsOpen(false)}
+      />
+
+      <ContextInspectorModal
+        open={showContextInspector}
+        onClose={() => {
+          setShowContextInspector(false);
+          setSkillsRevision(r => r + 1);
+        }}
+        messages={messages}
+        systemPrompt={systemPrompt}
+        chatId={currentChatId}
+        memoryEnabled={memoryEnabled}
+        onMemoryEnabledChange={setMemoryEnabled}
+        onSystemPromptChange={setSystemPrompt}
+        handleSkillEvent={handleSkillEvent}
+        deepThinkEnhancedPrompt={
+          messages.filter(m => m.role === 'model').slice(-1)[0]?.deepThinkEnhancedPrompt || null
+        }
+        onOpenMemory={() => setShowMemoryModal(true)}
+        onOpenSkills={() => setShowSkillsMarket(true)}
+        onOpenRPG={() => setShowRPGProfileModal(true)}
+        onOpenDeepThink={() => setShowDeepThinkDialog(true)}
+        onOpenSystem={() => setSettingsSidebarOpen(true)}
       />
 
       {/* Selection Toolbar */}

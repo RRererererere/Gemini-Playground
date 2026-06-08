@@ -169,6 +169,8 @@ export interface UseAppStateReturn {
   setShowSkillsMarket: React.Dispatch<React.SetStateAction<boolean>>;
   showHFSpaces: boolean;
   setShowHFSpaces: React.Dispatch<React.SetStateAction<boolean>>;
+  showContextInspector: boolean;
+  setShowContextInspector: React.Dispatch<React.SetStateAction<boolean>>;
   skillsRevision: number;
   setSkillsRevision: React.Dispatch<React.SetStateAction<number>>;
   handleSkillEvent: (e: any) => void;
@@ -297,6 +299,7 @@ export function useAppState(): UseAppStateReturn {
   // Skills state
   const [showSkillsMarket, setShowSkillsMarket] = useState(false);
   const [showHFSpaces, setShowHFSpaces] = useState(false);
+  const [showContextInspector, setShowContextInspector] = useState(false);
   const [skillsRevision, setSkillsRevision] = useState(0);
   const { handleSkillEvent } = useSkillsUI();
 
@@ -470,6 +473,7 @@ export function useAppState(): UseAppStateReturn {
     onOpenSavePromptDialog: () => { setNewPromptName(''); setShowSavePromptDialog(true); },
     onOpenDeepThinkDialog: () => setShowDeepThinkDialog(true),
     onOpenMemoryModal: () => setShowMemoryModal(true),
+    onOpenContextInspector: () => setShowContextInspector(true),
     onOpenSkillsMarket: () => setShowSkillsMarket(true),
     onOpenHFSpaces: () => setShowHFSpaces(true),
     deepThinkSystemPrompt,
@@ -578,6 +582,7 @@ export function useAppState(): UseAppStateReturn {
     settingsSidebarOpen, setSettingsSidebarOpen,
     isMobile, setIsMobile,
     showSkillsMarket, setShowSkillsMarket, showHFSpaces, setShowHFSpaces,
+    showContextInspector, setShowContextInspector,
     skillsRevision, setSkillsRevision,
     handleSkillEvent,
 

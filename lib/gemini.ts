@@ -172,12 +172,28 @@ export function formatToolPayload(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
-export function buildChatRequestMessages(messages: Message[]) {
+export interface ChatMessageFilterOptions {
+  excludeBridgeData?: boolean;
+  excludeRegeneratedHidden?: boolean;
+  excludeToolResponse?: boolean;
+}
+
+const DEFAULT_MESSAGE_FILTERS: ChatMessageFilterOptions = {
+  excludeBridgeData: true,
+  excludeRegeneratedHidden: true,
+  excludeToolResponse: true,
+};
+
+export function buildChatRequestMessages(
+  messages: Message[],
+  filters: ChatMessageFilterOptions = DEFAULT_MESSAGE_FILTERS
+) {
+  const f = { ...DEFAULT_MESSAGE_FILTERS, ...filters };
   return messages
-    // Фильтруем bridge_data и tool_response из контекста модели
     .filter(message => {
-      if (message.kind === 'bridge_data') return false;
-      if (message.kind === 'tool_response') return false;
+      if (f.excludeBridgeData && message.kind === 'bridge_data') return false;
+      if (f.excludeToolResponse && message.kind === 'tool_response') return false;
+      if (f.excludeRegeneratedHidden && message.kind === 'regenerated_hidden') return false;
       return true;
     })
     .map(message => {

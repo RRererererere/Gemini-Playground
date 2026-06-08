@@ -20,11 +20,15 @@ export function RPGProfileModal({ open, onClose, onNavigateToChat }: RPGProfileM
   const [selectedEntry, setSelectedEntry] = useState<FeedbackEntry | null>(null);
   const [editingEntry, setEditingEntry] = useState<FeedbackEntry | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [condensedDraft, setCondensedDraft] = useState('');
+  const [showCondensedEdit, setShowCondensedEdit] = useState(false);
 
   useEffect(() => {
     if (open) {
       const loaded = loadRPGProfile();
       setProfile(loaded);
+      setCondensedDraft(loaded.condensedRules || '');
+      setShowCondensedEdit(false);
     }
   }, [open]);
 
@@ -104,8 +108,8 @@ export function RPGProfileModal({ open, onClose, onNavigateToChat }: RPGProfileM
           </button>
         </div>
 
-        {/* Search */}
-        <div className="p-4 border-b border-[var(--border)]">
+        {/* Search + condensed rules */}
+        <div className="p-4 border-b border-[var(--border)] space-y-3">
           <input
             type="text"
             placeholder="Поиск по контексту или chat ID..."
@@ -113,6 +117,52 @@ export function RPGProfileModal({ open, onClose, onNavigateToChat }: RPGProfileM
             onChange={e => setSearchQuery(e.target.value)}
             className="w-full px-4 py-2 bg-[var(--surface-2)] border border-[var(--border)] rounded-lg text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:outline-none focus:ring-2 focus:ring-purple-500/50"
           />
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowCondensedEdit(v => !v)}
+              className="w-full flex items-center justify-between px-4 py-2.5 text-left text-xs font-medium text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+            >
+              <span>Сжатые правила стиля (уходят в промпт)</span>
+              <span className="text-[10px] text-[var(--text-dim)]">{showCondensedEdit ? '▲' : '▼'}</span>
+            </button>
+            {showCondensedEdit && (
+              <div className="px-4 pb-4 space-y-2 border-t border-[var(--border)]">
+                <textarea
+                  value={condensedDraft}
+                  onChange={e => setCondensedDraft(e.target.value)}
+                  rows={5}
+                  placeholder="Правила стиля для модели (по одному на строку)..."
+                  className="w-full mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface-3)] px-3 py-2 text-xs text-[var(--text-primary)] font-mono leading-relaxed resize-y focus:outline-none focus:ring-1 focus:ring-purple-500/40"
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = { ...profile!, condensedRules: condensedDraft.trim() || undefined };
+                      saveRPGProfile(next);
+                      setProfile(next);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-white text-black text-xs font-medium"
+                  >
+                    Сохранить
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = { ...profile!, condensedRules: undefined };
+                      saveRPGProfile(next);
+                      setProfile(next);
+                      setCondensedDraft('');
+                    }}
+                    className="px-3 py-1.5 rounded-lg border border-[var(--border)] text-xs text-[var(--text-dim)]"
+                  >
+                    Очистить
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Content */}

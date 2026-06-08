@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Search, MessageSquare, Plus, SlidersHorizontal, Brain, MonitorPlay } from 'lucide-react';
+import { Search, MessageSquare, Plus, SlidersHorizontal, Brain, MonitorPlay, Layers } from 'lucide-react';
 
 interface Command {
   id: string;
@@ -18,10 +18,11 @@ interface CommandPaletteProps {
   onLoadChat: (id: string) => void;
   onOpenSettings: () => void;
   onOpenMemory: () => void;
+  onOpenContextInspector?: () => void;
   onToggleCanvas: () => void;
 }
 
-export function CommandPalette({ savedChats, onNewChat, onLoadChat, onOpenSettings, onOpenMemory, onToggleCanvas }: CommandPaletteProps) {
+export function CommandPalette({ savedChats, onNewChat, onLoadChat, onOpenSettings, onOpenMemory, onOpenContextInspector, onToggleCanvas }: CommandPaletteProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -49,6 +50,7 @@ export function CommandPalette({ savedChats, onNewChat, onLoadChat, onOpenSettin
     { id: 'new-chat', label: 'Новый чат', icon: <Plus size={14} />, action: () => { onNewChat(); setOpen(false); }, keywords: 'new chat создать' },
     { id: 'settings', label: 'Настройки', icon: <SlidersHorizontal size={14} />, action: () => { onOpenSettings(); setOpen(false); }, keywords: 'settings настройки' },
     { id: 'memory', label: 'Управление памятью', icon: <Brain size={14} />, action: () => { onOpenMemory(); setOpen(false); }, keywords: 'memory память' },
+    { id: 'context', label: 'Контекст запроса', icon: <Layers size={14} />, action: () => { onOpenContextInspector?.(); setOpen(false); }, keywords: 'context контекст prompt промпт inspector слои' },
     { id: 'canvas', label: 'Открыть Canvas', icon: <MonitorPlay size={14} />, action: () => { onToggleCanvas(); setOpen(false); }, keywords: 'canvas preview' },
   ];
 
