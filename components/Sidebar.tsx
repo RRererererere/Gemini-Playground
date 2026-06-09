@@ -57,6 +57,9 @@ import {
   saveSystemPrompts,
   createSystemPrompt,
   cloneSystemPrompt,
+  formatUploadSize,
+  sizeMBToSliderValue,
+  sliderValueToSizeMB,
 } from '@/lib/storage';
 import { DEFAULT_DEEPTHINK_SYSTEM_PROMPT, formatToolPayload } from '@/lib/gemini';
 import { ToolBuilderModal } from '@/components/ToolBuilder';
@@ -1702,20 +1705,20 @@ export function SettingsSidebar({
                         <div className="flex items-center justify-between mb-1.5">
                           <label className="text-[11px] text-[var(--text-muted)]">Макс. размер файла</label>
                           <span className="rounded-md border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 text-xs font-mono text-[var(--text-primary)] min-w-[3rem] text-center">
-                            {maxUploadSizeMB.toFixed(1)} MB
+                            {formatUploadSize(maxUploadSizeMB)}
                           </span>
                         </div>
                         <input
                           type="range"
-                          min="0.5"
-                          max="20"
-                          step="0.5"
-                          value={maxUploadSizeMB}
-                          onChange={e => onMaxUploadSizeMBChange(parseFloat(e.target.value))}
+                          min="0"
+                          max="100"
+                          step="1"
+                          value={sizeMBToSliderValue(maxUploadSizeMB)}
+                          onChange={e => onMaxUploadSizeMBChange(sliderValueToSizeMB(parseFloat(e.target.value)))}
                         />
                         <div className="mt-1 flex justify-between text-[9px] text-[var(--text-dim)]">
-                          <span>0.5 MB</span>
-                          <span>20 MB</span>
+                          <span>1 KB</span>
+                          <span>1 GB</span>
                         </div>
                         <p className="text-[9px] text-[var(--text-dim)] mt-1 leading-relaxed">
                           Верхний лимит Vercel API route — 4.5 MB. Выше 4 MB файлы пойдут напрямую через Gemini File API.

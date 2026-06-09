@@ -4,6 +4,7 @@ const SESSIONS_KEY = 'arena_sessions';
 const ACTIVE_SESSION_KEY = 'arena_active_session_id';
 
 export function loadArenaSessions(): ArenaSession[] {
+  if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(SESSIONS_KEY);
     if (!raw) return [];
@@ -14,6 +15,7 @@ export function loadArenaSessions(): ArenaSession[] {
 }
 
 export function saveArenaSession(session: ArenaSession): void {
+  if (typeof window === 'undefined') return;
   const sessions = loadArenaSessions();
   const idx = sessions.findIndex(s => s.id === session.id);
   if (idx >= 0) {
@@ -25,6 +27,7 @@ export function saveArenaSession(session: ArenaSession): void {
 }
 
 export function deleteArenaSession(id: string): void {
+  if (typeof window === 'undefined') return;
   const sessions = loadArenaSessions().filter(s => s.id !== id);
   localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
   
@@ -35,10 +38,12 @@ export function deleteArenaSession(id: string): void {
 }
 
 export function getActiveArenaSessionId(): string | null {
+  if (typeof window === 'undefined') return null;
   return localStorage.getItem(ACTIVE_SESSION_KEY) || null;
 }
 
 export function setActiveArenaSessionId(id: string | null): void {
+  if (typeof window === 'undefined') return;
   if (id) {
     localStorage.setItem(ACTIVE_SESSION_KEY, id);
   } else {

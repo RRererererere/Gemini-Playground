@@ -13,6 +13,9 @@ const DEFAULT_CONFIG: SceneStateConfig = {
 };
 
 export function loadSceneStateConfig(): SceneStateConfig {
+  if (typeof window === 'undefined') {
+    return { ...DEFAULT_CONFIG };
+  }
   try {
     const stored = localStorage.getItem(SCENE_STATE_CONFIG_KEY);
     if (!stored) return { ...DEFAULT_CONFIG };
@@ -31,6 +34,7 @@ export function loadSceneStateConfig(): SceneStateConfig {
 }
 
 export function saveSceneStateConfig(config: SceneStateConfig): void {
+  if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(SCENE_STATE_CONFIG_KEY, JSON.stringify(config));
   } catch (e) {

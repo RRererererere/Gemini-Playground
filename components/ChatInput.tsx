@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import type { AttachedFile, CanvasElement, AnnotationReference } from '@/types';
 import { generateImageId } from '@/lib/imageId';
+import { formatUploadSize } from '@/lib/storage';
 
 interface ChatInputProps {
   onSend: (text: string, files: AttachedFile[], annotationRefs?: AnnotationReference[]) => void;
@@ -491,9 +492,9 @@ export default function ChatInput({
         if (finalMimeType.startsWith('image/')) {
           try {
             processedFile = await compressImage(file, maxUploadSizeMB);
-            console.log(`Изображение сжато: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(processedFile.size / 1024 / 1024).toFixed(2)}MB`);
+            console.log(`Изображение сжато: ${formatUploadSize(file.size / 1024 / 1024)} → ${formatUploadSize(processedFile.size / 1024 / 1024)}`);
           } catch (err) {
-            alert(`Не удалось сжать изображение. Максимальный размер: ${maxUploadSizeMB.toFixed(1)}MB`);
+            alert(`Не удалось сжать изображение. Максимальный размер: ${formatUploadSize(maxUploadSizeMB)}`);
             return null;
           }
         }
@@ -508,14 +509,14 @@ export default function ChatInput({
         }
         // Для остальных файлов просто отклоняем
         else {
-          alert(`Файл слишком большой (${(file.size / 1024 / 1024).toFixed(1)}MB). Максимальный размер: ${maxUploadSizeMB.toFixed(1)}MB`);
+          alert(`Файл слишком большой (${formatUploadSize(file.size / 1024 / 1024)}). Максимальный размер: ${formatUploadSize(maxUploadSizeMB)}`);
           return null;
         }
       }
       
       // Финальная проверка размера после сжатия
       if (processedFile.size > MAX_FILE_SIZE) {
-        alert(`Файл все еще слишком большой после сжатия. Максимальный размер: ${maxUploadSizeMB.toFixed(1)}MB`);
+        alert(`Файл все еще слишком большой после сжатия. Максимальный размер: ${formatUploadSize(maxUploadSizeMB)}`);
         return null;
       }
 

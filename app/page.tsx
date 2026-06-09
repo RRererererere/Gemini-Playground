@@ -1,5 +1,8 @@
 'use client';
 
+// Запрещаем статическую генерацию — страница использует localStorage
+export const dynamic = 'force-dynamic';
+
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { ChatSidebar, SettingsSidebar } from '@/components/Sidebar';
 import ChatMessage from '@/components/ChatMessage';

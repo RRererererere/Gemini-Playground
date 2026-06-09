@@ -779,18 +779,67 @@ export function resetSkillPrompt(skillId: string) {
 const MAX_UPLOAD_SIZE_KEY = 'gemini_max_upload_size_mb';
 export const DEFAULT_MAX_UPLOAD_SIZE_MB = 3.5;
 
+const MIN_KB = 1;
+const MAX_KB = 1024 * 1024; // 1 GB in KB
+
+export function sizeMBToSliderValue(mb: number): number {
+  const kb = mb * 1024;
+  if (kb <= MIN_KB) return 0;
+  if (kb >= MAX_KB) return 100;
+  return (100 * Math.log(kb / MIN_KB)) / Math.log(MAX_KB / MIN_KB);
+}
+
+export function sliderValueToSizeMB(val: number): number {
+  if (val <= 0) return MIN_KB / 1024;
+  if (val >= 100) return MAX_KB / 1024;
+  const kb = MIN_KB * Math.exp((val / 100) * Math.log(MAX_KB / MIN_KB));
+  
+  // Округляем до красивых значений
+  if (kb < 10) {
+    return Math.round(kb) / 1024;
+  } else if (kb < 100) {
+    return (Math.round(kb / 5) * 5) / 1024;
+  } else if (kb < 1024) {
+    return (Math.round(kb / 50) * 50) / 1024;
+  } else {
+    const mb = kb / 1024;
+    if (mb < 10) {
+      return Math.round(mb * 2) / 2; // 0.5 MB steps
+    } else if (mb < 100) {
+      return Math.round(mb); // 1 MB steps
+    } else if (mb < 500) {
+      return Math.round(mb / 10) * 10; // 10 MB steps
+    } else {
+      return Math.round(mb / 50) * 50; // 50 MB steps
+    }
+  }
+}
+
+export function formatUploadSize(mb: number): string {
+  const kb = mb * 1024;
+  if (kb < 1023.9) {
+    return `${Math.round(kb)} KB`;
+  }
+  const currentMB = kb / 1024;
+  if (currentMB < 1023.9) {
+    return `${currentMB.toFixed(currentMB < 10 ? 1 : 0)} MB`;
+  }
+  const gb = currentMB / 1024;
+  return `${gb.toFixed(gb < 10 ? 1 : 0)} GB`;
+}
+
 export function loadMaxUploadSizeMB(): number {
   if (typeof window === 'undefined') return DEFAULT_MAX_UPLOAD_SIZE_MB;
   const raw = localStorage.getItem(MAX_UPLOAD_SIZE_KEY);
   if (!raw) return DEFAULT_MAX_UPLOAD_SIZE_MB;
   const val = parseFloat(raw);
-  if (isNaN(val) || val < 0.5 || val > 20) return DEFAULT_MAX_UPLOAD_SIZE_MB;
+  if (isNaN(val) || val < 0.0009 || val > 1024) return DEFAULT_MAX_UPLOAD_SIZE_MB;
   return val;
 }
 
 export function saveMaxUploadSizeMB(mb: number): void {
   if (typeof window === 'undefined') return;
-  const clamped = Math.max(0.5, Math.min(20, mb));
+  const clamped = Math.max(0.0009765625, Math.min(1024, mb)); // от 1 KB до 1 GB
   trySetItem(MAX_UPLOAD_SIZE_KEY, clamped.toString());
 }
 

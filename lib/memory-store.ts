@@ -24,31 +24,41 @@ const LOCAL_KEY_PREFIX = 'memory_graph_local_';
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 export function exportAllMemories(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
   const result: Record<string, string> = {};
   
-  // Экспортируем глобальную память
-  const globalMemory = localStorage.getItem(GLOBAL_KEY);
-  if (globalMemory) {
-    result[GLOBAL_KEY] = globalMemory;
-  }
-  
-  // Экспортируем все локальные memory (итерируем все ключи с префиксом)
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key && key.startsWith(LOCAL_KEY_PREFIX)) {
-      const value = localStorage.getItem(key);
-      if (value) {
-        result[key] = value;
+  try {
+    // Экспортируем глобальную память
+    const globalMemory = localStorage.getItem(GLOBAL_KEY);
+    if (globalMemory) {
+      result[GLOBAL_KEY] = globalMemory;
+    }
+    
+    // Экспортируем все локальные memory (итерируем все ключи с префиксом)
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(LOCAL_KEY_PREFIX)) {
+        const value = localStorage.getItem(key);
+        if (value) {
+          result[key] = value;
+        }
       }
     }
+  } catch (e) {
+    console.error('Failed to export memories', e);
   }
   
   return result;
 }
 
 export function importAllMemories(memories: Record<string, string>): void {
-  for (const [key, value] of Object.entries(memories)) {
-    localStorage.setItem(key, value);
+  if (typeof window === 'undefined') return;
+  try {
+    for (const [key, value] of Object.entries(memories)) {
+      localStorage.setItem(key, value);
+    }
+  } catch (e) {
+    console.error('Failed to import memories', e);
   }
 }
 
@@ -57,10 +67,11 @@ export function importAllMemories(memories: Record<string, string>): void {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 export function getMemories(scope: MemoryScope, chatId?: string): Memory[] {
+  if (typeof window === 'undefined') return [];
   const key = scope === 'global' ? GLOBAL_KEY : `${LOCAL_KEY_PREFIX}${chatId}`;
-  const raw = localStorage.getItem(key);
-  if (!raw) return [];
   try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
     return JSON.parse(raw);
   } catch {
     return [];
@@ -78,6 +89,8 @@ export function saveMemory(
     created_at: Date.now(),
     updated_at: Date.now(),
   };
+
+  if (typeof window === 'undefined') return memory;
 
   const memories = getMemories(data.scope, chatId);
   memories.push(memory);
@@ -122,6 +135,7 @@ export function updateMemory(
   patch: Partial<Pick<Memory, 'fact' | 'confidence' | 'keywords' | 'category' | 'related_to'>>,
   chatId?: string
 ): Memory | null {
+  if (typeof window === 'undefined') return null;
   const memories = getMemories(scope, chatId);
   const idx = memories.findIndex(m => m.id === id);
   if (idx === -1) return null;
@@ -147,11 +161,16 @@ export function updateMemory(
 }
 
 export function forgetMemory(id: string, scope: MemoryScope, chatId?: string): void {
+  if (typeof window === 'undefined') return;
   const memories = getMemories(scope, chatId);
   const filtered = memories.filter(m => m.id !== id);
 
   const key = scope === 'global' ? GLOBAL_KEY : `${LOCAL_KEY_PREFIX}${chatId}`;
-  localStorage.setItem(key, JSON.stringify(filtered));
+  try {
+    localStorage.setItem(key, JSON.stringify(filtered));
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -169,6 +188,7 @@ function extractWords(text: string): Set<string> {
 }
 
 export function getRelevantMemories(userMessages: string[], chatId?: string): Memory[] {
+  if (typeof window === 'undefined') return [];
   const globalMemories = getMemories('global');
   const localMemories = chatId ? getMemories('local', chatId) : [];
 
@@ -203,6 +223,7 @@ export function getRelevantMemories(userMessages: string[], chatId?: string): Me
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 export function incrementMentions(ids: string[], chatId?: string): void {
+  if (typeof window === 'undefined') return;
   const globalIds = new Set<string>();
   const localIds = new Set<string>();
 
@@ -220,7 +241,11 @@ export function incrementMentions(ids: string[], chatId?: string): void {
     const updated = globalMemories.map(m =>
       globalIds.has(m.id) ? { ...m, mentions: m.mentions + 1 } : m
     );
-    localStorage.setItem(GLOBAL_KEY, JSON.stringify(updated));
+    try {
+      localStorage.setItem(GLOBAL_KEY, JSON.stringify(updated));
+    } catch (e) {
+      console.error(e);
+    }
   }
 
   // Инкрементим local
@@ -228,6 +253,10 @@ export function incrementMentions(ids: string[], chatId?: string): void {
     const updated = localMemories.map(m =>
       localIds.has(m.id) ? { ...m, mentions: m.mentions + 1 } : m
     );
-    localStorage.setItem(`${LOCAL_KEY_PREFIX}${chatId}`, JSON.stringify(updated));
+    try {
+      localStorage.setItem(`${LOCAL_KEY_PREFIX}${chatId}`, JSON.stringify(updated));
+    } catch (e) {
+      console.error(e);
+    }
   }
 }
