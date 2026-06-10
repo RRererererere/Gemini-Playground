@@ -458,9 +458,9 @@ export default function ChatInput({
         // Читаем как текст
         const text = await fileToText(file);
         
-        // Проверяем размер (для текстовых файлов лимит выше)
-        if (text.length > 100000) { // ~100KB текста
-          alert(`Файл слишком большой (${(text.length / 1024).toFixed(1)}KB текста). Максимум: 100KB`);
+        // Проверяем размер текстового файла на соответствие динамическому лимиту
+        if (file.size > MAX_FILE_SIZE) {
+          alert(`Файл слишком большой (${formatUploadSize(file.size / 1024 / 1024)}). Максимальный размер: ${formatUploadSize(maxUploadSizeMB)}`);
           return null;
         }
         
