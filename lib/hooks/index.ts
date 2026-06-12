@@ -5,3 +5,4 @@ export { useMemory } from './useMemory';
 export { useFileEditor } from './useFileEditor';
 export { useRPGProfile } from './useRPGProfile';
 export { useChat } from './useChat';
+export { useWindowedMessages } from './useWindowedMessages';

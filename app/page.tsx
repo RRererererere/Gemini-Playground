@@ -21,6 +21,7 @@ import { AgentChatList } from '@/components/agent-chat/AgentChatList';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,
+  ChevronUp,
   Save, X, ArrowDown, RefreshCw, MonitorPlay, Zap, FilePen, BarChart2,
   Brain, Loader2, CheckCircle2, Bot, Pencil
 } from 'lucide-react';
@@ -109,6 +110,7 @@ import { useSkillsUI } from '@/lib/useSkillsUI';
 import { SkillsMarket } from '@/components/SkillsMarket';
 import { HFSpaceManager } from '@/components/HFSpaceManager';
 import { useAppState } from '@/lib/useAppState';
+import { useWindowedMessages } from '@/lib/hooks/useWindowedMessages';
 import { AgentsHistory } from '@/components/agent-editor/AgentsHistory';
 import { GraphExecutor } from '@/lib/agent-engine/executor';
 import { getGraphById } from '@/lib/agent-engine/graph-storage';
@@ -254,6 +256,7 @@ export default function Home() {
     skillsRevision, setSkillsRevision,
     handleSkillEvent,
     showScrollBottom, isAtBottomRef, chatEndRef, handleScroll, scrollToBottom,
+    scrollToBottomImmediate, maintainScrollPosition, getScrollContainer, setScrollContainer,
     tokenCount, setTokenCount, isCountingTokens, countTokens, scheduleTokenCount,
     showMemoryModal, setShowMemoryModal,
     deepThink,
@@ -2428,6 +2431,38 @@ export default function Home() {
     setShowLiveCanvas(false);
   }, [isStreaming, messages, saveCurrentChat, clearChatState]);
 
+  // Visible messages (filtered for display)
+  const visibleMessages = useMemo(
+    () => messages.filter(message => {
+      if (message.kind === 'tool_response') return false;
+      if (message.kind === 'bridge_data') return false;
+      if (
+        message.role === 'user' &&
+        (message.toolResponses?.length || 0) > 0 &&
+        getVisibleMessageText(message.parts).length === 0 &&
+        (message.files?.length || 0) === 0
+      ) {
+        return false;
+      }
+      return true;
+    }),
+    [messages]
+  );
+
+  // Windowed rendering: only render a subset of messages for performance
+  const {
+    renderedMessages,
+    hasMoreAbove,
+    loadMoreAbove,
+    resetWindow: resetMessageWindow,
+    topSentinelRef,
+    isAutoLoading,
+  } = useWindowedMessages({
+    messages: visibleMessages,
+    initialWindowSize: 50,
+    loadMoreCount: 30,
+  });
+
   const handleLoadChat = useCallback((chat: SavedChat) => {
     if (isStreaming) return;
     if (messages.length > 0 && unsaved) {
@@ -2453,7 +2488,12 @@ export default function Home() {
     setActiveChatId(chat.id);
     setUnsaved(false);
     setError('');
-  }, [isStreaming, messages, unsaved, saveCurrentChat, allModels]);
+    // Reset windowed messages and scroll to bottom immediately
+    resetMessageWindow();
+    requestAnimationFrame(() => {
+      scrollToBottomImmediate();
+    });
+  }, [isStreaming, messages, unsaved, saveCurrentChat, allModels, resetMessageWindow, scrollToBottomImmediate]);
 
   const handleOpenAgent = useCallback((agentId: string, parentChatId?: string) => {
     if (isStreaming) return;
@@ -2583,22 +2623,7 @@ export default function Home() {
   const hasApiAndModel = hasKeys && !!model;
   const lastMessage = messages[messages.length - 1];
   const lastIsModel = lastMessage?.role === 'model';
-  const visibleMessages = useMemo(
-    () => messages.filter(message => {
-      if (message.kind === 'tool_response') return false;
-      if (message.kind === 'bridge_data') return false; // скрыть feedback-хинты
-      if (
-        message.role === 'user' &&
-        (message.toolResponses?.length || 0) > 0 &&
-        getVisibleMessageText(message.parts).length === 0 &&
-        (message.files?.length || 0) === 0
-      ) {
-        return false;
-      }
-      return true;
-    }),
-    [messages]
-  );
+
   const canContinue = lastIsModel && !isStreaming && (
     getVisibleMessageText(lastMessage?.parts || []).length > 0 ||
     !!lastMessage?.deepThinkAnalysis
@@ -2666,6 +2691,19 @@ export default function Home() {
     }),
     [displayMessages]
   );
+
+  // Windowed rendering for arena mode
+  const {
+    renderedMessages: arenaRenderedMessages,
+    hasMoreAbove: arenaHasMoreAbove,
+    loadMoreAbove: arenaLoadMoreAbove,
+    topSentinelRef: arenaTopSentinelRef,
+    isAutoLoading: arenaIsAutoLoading,
+  } = useWindowedMessages({
+    messages: arenaVisibleMessages,
+    initialWindowSize: 50,
+    loadMoreCount: 30,
+  });
 
   return (
     <div className="fixed inset-0 flex overflow-hidden bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06),transparent_24%),var(--surface-0)]">
@@ -2935,6 +2973,7 @@ export default function Home() {
 
         {/* Messages */}
         <div 
+          ref={setScrollContainer}
           className="flex-1 overflow-y-auto chat-messages-area px-6 py-8 relative"
           onScroll={handleScroll}
         >
@@ -2982,8 +3021,52 @@ export default function Home() {
             )
           ) : (
             <div className="max-w-3xl mx-auto space-y-6">
-              {(appMode === 'arena' ? arenaVisibleMessages : visibleMessages).map((message, idx) => {
-                const msgList = appMode === 'arena' ? arenaVisibleMessages : visibleMessages;
+              {/* Load more indicator for chat mode */}
+              {appMode === 'chat' && hasMoreAbove && (
+                <div ref={topSentinelRef as any} className="flex justify-center py-3">
+                  <button
+                    onClick={loadMoreAbove}
+                    disabled={isAutoLoading}
+                    className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] border border-[var(--border)] rounded-lg transition-all disabled:opacity-50"
+                  >
+                    {isAutoLoading ? (
+                      <>
+                        <Loader2 size={12} className="animate-spin" />
+                        Загрузка...
+                      </>
+                    ) : (
+                      <>
+                        <ChevronUp size={12} />
+                        ЗагрузитьEarlier сообщения
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+              {/* Load more indicator for arena mode */}
+              {appMode === 'arena' && arenaHasMoreAbove && (
+                <div ref={arenaTopSentinelRef as any} className="flex justify-center py-3">
+                  <button
+                    onClick={arenaLoadMoreAbove}
+                    disabled={arenaIsAutoLoading}
+                    className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] border border-[var(--border)] rounded-lg transition-all disabled:opacity-50"
+                  >
+                    {arenaIsAutoLoading ? (
+                      <>
+                        <Loader2 size={12} className="animate-spin" />
+                        Загрузка...
+                      </>
+                    ) : (
+                      <>
+                        <ChevronUp size={12} />
+                        ЗагрузитьEarlier сообщения
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+              {(appMode === 'arena' ? arenaRenderedMessages : renderedMessages).map((message, idx) => {
+                const msgList = appMode === 'arena' ? arenaRenderedMessages : renderedMessages;
                 const isLastMessage = idx === msgList.length - 1;
                 return (
                   <div key={message.id} className={isLastMessage ? 'animate-message-appear' : ''}>

@@ -181,6 +181,10 @@ export interface UseAppStateReturn {
   chatEndRef: React.MutableRefObject<HTMLDivElement | null>;
   handleScroll: (e: React.UIEvent<HTMLDivElement>) => void;
   scrollToBottom: () => void;
+  scrollToBottomImmediate: () => void;
+  maintainScrollPosition: (prevScrollHeight: number) => void;
+  getScrollContainer: () => HTMLDivElement | null;
+  setScrollContainer: (el: HTMLDivElement | null) => void;
 
   // Token Counter
   tokenCount: number;
@@ -306,7 +310,7 @@ export function useAppState(): UseAppStateReturn {
   // ═══════════════════════════════════════════
   // HOOKS
   // ═══════════════════════════════════════════
-  const { showScrollBottom, isAtBottomRef, chatEndRef, handleScroll, scrollToBottom } = useScroll();
+  const { showScrollBottom, isAtBottomRef, chatEndRef, handleScroll, scrollToBottom, scrollToBottomImmediate, maintainScrollPosition, getScrollContainer, setScrollContainer } = useScroll();
   const { tokenCount, setTokenCount, isCountingTokens, countTokens, scheduleTokenCount } = useTokenCounter();
   const { showMemoryModal, setShowMemoryModal } = useMemory();
   const {
@@ -588,6 +592,7 @@ export function useAppState(): UseAppStateReturn {
 
     // Scroll
     showScrollBottom, isAtBottomRef, chatEndRef, handleScroll, scrollToBottom,
+    scrollToBottomImmediate, maintainScrollPosition, getScrollContainer, setScrollContainer,
 
     // Token Counter
     tokenCount, setTokenCount, isCountingTokens, countTokens, scheduleTokenCount,
