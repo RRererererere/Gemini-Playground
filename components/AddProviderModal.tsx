@@ -15,11 +15,16 @@ interface ProviderModalProps {
   onSave: (provider: Provider) => void;
 }
 
+type ApiFormat = 'openai' | 'anthropic';
+
 export function ProviderModal({ existingProvider, onClose, onSave }: ProviderModalProps) {
   const isEdit = !!existingProvider;
 
   const [name, setName] = useState(existingProvider?.name ?? '');
   const [baseUrl, setBaseUrl] = useState(existingProvider?.baseUrl ?? '');
+  const [apiFormat, setApiFormat] = useState<ApiFormat>(
+    existingProvider?.type === 'anthropic' ? 'anthropic' : 'openai'
+  );
   const [error, setError] = useState('');
 
   const handleSave = () => {
@@ -49,7 +54,7 @@ export function ProviderModal({ existingProvider, onClose, onSave }: ProviderMod
     const provider: Provider = {
       id: existingProvider?.id ?? crypto.randomUUID(),
       name: name.trim(),
-      type: 'openai',
+      type: apiFormat,
       baseUrl: baseUrl.trim().replace(/\/+$/, ''), // remove trailing slashes
       isBuiltin: false,
       createdAt: existingProvider?.createdAt ?? Date.now(),
@@ -73,8 +78,8 @@ export function ProviderModal({ existingProvider, onClose, onSave }: ProviderMod
         </h2>
         <p className="mb-6 text-sm text-[var(--text-muted)]">
           {isEdit
-            ? 'Измените название или Base URL провайдера.'
-            : <>Добавьте OpenAI-совместимый эндпоинт (OpenRouter, Ollama, etc.).<br /></>
+            ? 'Измените название, Base URL или формат API.'
+            : <>Добавьте кастомный эндпоинт (OpenRouter, Ollama, локальный Claude и т.д.).<br /></>
           }
           {!isEdit && (
             <span className="text-[12px] text-emerald-400">
@@ -104,11 +109,46 @@ export function ProviderModal({ existingProvider, onClose, onSave }: ProviderMod
               value={baseUrl}
               onChange={e => setBaseUrl(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSave()}
-              placeholder="https://openrouter.ai/api"
+              placeholder={apiFormat === 'anthropic' ? 'https://api.anthropic.com' : 'https://openrouter.ai/api'}
               className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 font-mono text-sm text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
             />
             <p className="mt-1.5 text-xs text-[var(--text-muted)]">
-              С /v1 или без — мы нормализуем автоматически
+              {apiFormat === 'anthropic'
+                ? 'Anthropic format: /v1/messages будет добавлен автоматически'
+                : 'С /v1 или без — мы нормализуем автоматически'}
+            </p>
+          </div>
+
+          <div>
+            <label className="mb-2 block text-xs font-medium text-[var(--text-dim)]">Формат API</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setApiFormat('openai')}
+                className={`rounded-xl border px-3 py-2.5 text-sm font-medium transition-colors ${
+                  apiFormat === 'openai'
+                    ? 'border-white/30 bg-white/10 text-[var(--text-primary)]'
+                    : 'border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                OpenAI-compatible
+              </button>
+              <button
+                type="button"
+                onClick={() => setApiFormat('anthropic')}
+                className={`rounded-xl border px-3 py-2.5 text-sm font-medium transition-colors ${
+                  apiFormat === 'anthropic'
+                    ? 'border-white/30 bg-white/10 text-[var(--text-primary)]'
+                    : 'border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                Anthropic format
+              </button>
+            </div>
+            <p className="mt-1.5 text-xs text-[var(--text-muted)]">
+              {apiFormat === 'anthropic'
+                ? 'Для эндпоинтов с /v1/messages (Claude API, локальный прокси)'
+                : 'Для OpenRouter, Ollama, LM Studio и других OpenAI-совместимых API'}
             </p>
           </div>
 

@@ -51,6 +51,7 @@ import {
   importAllSettings,
   importChatsFromFile,
   importFromGoogleStudio,
+  importFromSimpleFormat,
   loadDeepThinkSystemPrompt,
   loadSystemPrompts,
   saveDeepThinkSystemPrompt,
@@ -988,6 +989,7 @@ export function SettingsSidebar({
 
   const importRef = useRef<HTMLInputElement>(null);
   const importGsRef = useRef<HTMLInputElement>(null);
+  const importSimpleRef = useRef<HTMLInputElement>(null);
   const importBackupRef = useRef<HTMLInputElement>(null);
   const [importError, setImportError] = useState('');
 
@@ -1171,6 +1173,32 @@ export function SettingsSidebar({
 
     try {
       const result = await importFromGoogleStudio(file);
+      const chat: SavedChat = {
+        id: result.id!,
+        title: result.title!,
+        messages: result.messages!,
+        model: result.model || activeModel?.modelId || '',
+        systemPrompt: result.systemPrompt || '',
+        tools: [],
+        temperature: result.temperature ?? temperature,
+        createdAt: result.createdAt!,
+        updatedAt: result.updatedAt!,
+      };
+
+      const merged = [chat, ...savedChats];
+      onSavedChatsChange(merged);
+      onLoadChat(chat);
+      onClose?.();
+    } catch (error: any) {
+      setImportError(error.message);
+    }
+  };
+
+  const handleImportSimpleFormat = async (file: File) => {
+    setImportError('');
+
+    try {
+      const result = await importFromSimpleFormat(file);
       const chat: SavedChat = {
         id: result.id!,
         title: result.title!,
@@ -2070,6 +2098,11 @@ export function SettingsSidebar({
                       Импорт AI Studio
                     </button>
 
+                    <button onClick={() => importSimpleRef.current?.click()} className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3 text-xs text-[var(--gem-green)] transition-colors hover:bg-white/[0.04]">
+                      <Upload size={12} />
+                      Импорт user/assistant
+                    </button>
+
                     {savedChats.length > 0 && (
                       <div className="space-y-2 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
                         <div className="flex items-center justify-between">
@@ -2112,6 +2145,18 @@ export function SettingsSidebar({
                     onChange={event => {
                       if (event.target.files?.[0]) {
                         handleImportGoogleStudio(event.target.files[0]);
+                        event.target.value = '';
+                      }
+                    }}
+                  />
+                  <input
+                    ref={importSimpleRef}
+                    type="file"
+                    accept=".json"
+                    className="hidden"
+                    onChange={event => {
+                      if (event.target.files?.[0]) {
+                        handleImportSimpleFormat(event.target.files[0]);
                         event.target.value = '';
                       }
                     }}

@@ -411,7 +411,75 @@ export async function importChatsFromFile(file: File): Promise<SavedChat[]> {
   });
 }
 
-// ====================== ИМПОРТ GOOGLE AI STUDIO ======================
+// ====================== ИМПОРТ ПРОСТОГО ФОРМАТА ======================
+// Поддерживает: {"role": "user"/"assistant", "message": "..."} или "content"
+
+export function importFromSimpleFormat(file: File): Promise<Partial<SavedChat>> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const raw = JSON.parse(e.target?.result as string);
+
+        // Normalize to array
+        const items: any[] = Array.isArray(raw) ? raw : raw.messages ?? raw.conversation ?? raw.history ?? null;
+        if (!Array.isArray(items)) {
+          reject(new Error('Ожидается массив сообщений или объект с полем messages/conversation/history'));
+          return;
+        }
+
+        const messages: import('@/types').Message[] = [];
+        let _counter = 0;
+        const uid = () => `simple_${Date.now()}_${++_counter}`;
+
+        for (const item of items) {
+          if (!item || typeof item !== 'object') continue;
+
+          const rawRole = (item.role ?? item.from ?? '').toLowerCase();
+          const role: 'user' | 'model' =
+            rawRole === 'user' ? 'user' :
+            rawRole === 'assistant' || rawRole === 'model' ? 'model' :
+            null as any;
+
+          if (!role) continue;
+
+          // Support "message", "content", or "text" as the message body
+          const text: string = item.message ?? item.content ?? item.text ?? '';
+          if (typeof text !== 'string') continue;
+
+          messages.push({
+            id: uid(),
+            role,
+            parts: [{ text }],
+          });
+        }
+
+        if (messages.length === 0) {
+          reject(new Error('Не найдено ни одного подходящего сообщения'));
+          return;
+        }
+
+        resolve({
+          id: `simple_${Date.now()}`,
+          title: file.name.replace(/\.[^/.]+$/, '') || 'Импортированный чат',
+          messages,
+          model: '',
+          systemPrompt: '',
+          tools: [],
+          temperature: 1.0,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      } catch (err: any) {
+        reject(new Error('Не удалось разобрать JSON: ' + (err.message || 'неверный формат')));
+      }
+    };
+    reader.onerror = () => reject(new Error('Ошибка чтения файла'));
+    reader.readAsText(file, 'utf-8');
+  });
+}
+
+
 
 interface GeminiStudioChunk {
   text?: string;

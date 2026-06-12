@@ -528,7 +528,7 @@ export default function Home() {
         0,
         sceneStateConfig,
         dtProvider?.baseUrl || 'https://generativelanguage.googleapis.com/v1beta',
-        dtProvider?.type || 'gemini'
+        dtProvider?.type === 'gemini' ? 'gemini' : dtProvider?.type === 'openai' ? 'openai' : 'gemini'
       );
 
       effectiveSystemPrompt = dtResult.enhancedPrompt;
@@ -622,7 +622,7 @@ export default function Home() {
 
       // ── Ghost Nudge Protocol ──
       const activeProviderInfo = providers.find(p => p.id === (activeModel?.providerId || ''));
-      const gnpEnabled = ghostNudgeEnabled && activeProviderInfo?.type !== 'openai';
+      const gnpEnabled = ghostNudgeEnabled && activeProviderInfo?.type !== 'openai' && activeProviderInfo?.type !== 'anthropic';
       const MAX_GHOST_RETRIES = ghostNudgeMaxRetries;
       let ghostRetryCount = 0;
       let ghostNudgePending = false;
@@ -707,7 +707,11 @@ export default function Home() {
         const effectiveSystemPromptWithImages = loopBuilt.text;
         
         // Определяем endpoint и параметры в зависимости от типа провайдера
-        const endpoint = activeProvider?.type === 'openai' ? '/api/openai-chat' : '/api/chat';
+        const endpoint = activeProvider?.type === 'openai'
+          ? '/api/openai-chat'
+          : activeProvider?.type === 'anthropic'
+          ? '/api/anthropic-chat'
+          : '/api/chat';
         const requestBody: any = {
           messages: contentsForRequest,
           model: activeModel?.modelId || model,
@@ -724,11 +728,9 @@ export default function Home() {
           includeThoughts: deepThinkState.enabled === true,
         };
         
-        // Для OpenAI-провайдеров добавляем baseUrl
-        if (activeProvider?.type === 'openai') {
+        // Для OpenAI/Anthropic-провайдеров добавляем baseUrl
+        if (activeProvider?.type === 'openai' || activeProvider?.type === 'anthropic') {
           requestBody.baseUrl = activeProvider.baseUrl;
-          // Tools поддерживаются для OpenAI провайдеров
-          // memoryTools и skills работают через тот же механизм
           requestBody.includeThoughts = false;
         } else {
           // Только для Gemini

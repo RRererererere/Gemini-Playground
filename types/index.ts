@@ -300,11 +300,11 @@ export interface SavedSystemPrompt {
 // Multi-Provider Support Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Провайдер — Google AI или любой OpenAI-compatible эндпоинт
+// Провайдер — Google AI или любой OpenAI-compatible / Anthropic-compatible эндпоинт
 export interface Provider {
   id: string;            // 'google' (builtin) | crypto.randomUUID() (custom)
   name: string;          // 'Google AI' | 'OpenRouter' | 'Ollama'
-  type: 'gemini' | 'openai';
+  type: 'gemini' | 'openai' | 'anthropic';
   baseUrl: string;       // для openai: 'https://openrouter.ai/api/v1'
   isBuiltin: boolean;    // true только для Google AI
   createdAt: number;
