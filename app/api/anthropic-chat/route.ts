@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { normalizeApiBaseUrl } from '@/lib/api-base-url';
 import type { ChatTool, Message, Part, ToolSchemaField } from '@/types';
 
 export const maxDuration = 60;
@@ -180,10 +181,7 @@ export async function POST(request: NextRequest) {
       return errorStream('Missing required parameters: apiKey, baseUrl, and model are required');
     }
 
-    let normalizedBase = baseUrl.replace(/\/+$/, '');
-    if (!normalizedBase.endsWith('/v1')) {
-      normalizedBase = normalizedBase + '/v1';
-    }
+    const normalizedBase = normalizeApiBaseUrl(baseUrl);
 
     const anthropicMessages = convertGeminiToAnthropic(messages);
 

@@ -115,7 +115,7 @@ export function ProviderModal({ existingProvider, onClose, onSave }: ProviderMod
             <p className="mt-1.5 text-xs text-[var(--text-muted)]">
               {apiFormat === 'anthropic'
                 ? 'Anthropic format: /v1/messages будет добавлен автоматически'
-                : 'С /v1 или без — мы нормализуем автоматически'}
+                : 'Указывайте URL до версии (/v1, /v4) или без неё — нормализуем автоматически. /v4 НЕ превратится в /v4/v1.'}
             </p>
           </div>
 

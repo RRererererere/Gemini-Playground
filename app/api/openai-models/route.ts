@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { stripTrailingVersion } from '@/lib/api-base-url';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -13,8 +14,10 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Нормализуем baseUrl: убираем trailing slash и trailing /v1
-    const normalizedBaseUrl = baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
+    // Нормализуем baseUrl: убираем trailing slash и суффикс версии (любой /vN)
+    // чтобы безопасно получить '/v1/models'. Для провайдеров с /v4 это тоже
+    // даёт корректный результат — здесь список моделей всегда под /v1/models.
+    const normalizedBaseUrl = stripTrailingVersion(baseUrl);
     const response = await fetch(`${normalizedBaseUrl}/v1/models`, {
       headers: {
         'Authorization': `Bearer ${apiKey}`,

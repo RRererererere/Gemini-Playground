@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { convertGeminiToOpenAI, convertToolsToOpenAI } from '@/lib/message-converter';
+import { normalizeApiBaseUrl } from '@/lib/api-base-url';
 import type { ChatTool } from '@/types';
 
 export const maxDuration = 60;
@@ -39,12 +40,9 @@ export async function POST(request: NextRequest) {
     // The SDK automatically detects Claude/Anthropic endpoints and switches to their
     // protocol, but we want pure OpenAI-compatible protocol for all providers.
     
-    let normalizedBase = baseUrl.replace(/\/+$/, ''); // Remove trailing slashes
-    
-    // Ensure URL ends with /v1 for OpenAI-compatible endpoints
-    if (!normalizedBase.endsWith('/v1')) {
-      normalizedBase = normalizedBase + '/v1';
-    }
+    // Нормализуем base URL: гарантируем версию в конце пути, но не ломаем
+    // провайдеров с другой версией (например /v4 — не должно стать /v4/v1).
+    const normalizedBase = normalizeApiBaseUrl(baseUrl);
 
     console.log('[OpenAI Route] Base URL:', {
       original: baseUrl,

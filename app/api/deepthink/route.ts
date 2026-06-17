@@ -3,6 +3,7 @@ import { DEEPTHINK_MEMORY_MARKER } from '@/lib/gemini';
 import { classifyGeminiError, extractRetryAfterSeconds } from '@/lib/gemini-errors';
 import { getEnabledCategoryIdsForPrompt } from '@/lib/scene-state-storage';
 import { convertGeminiToOpenAI } from '@/lib/message-converter';
+import { normalizeApiBaseUrl } from '@/lib/api-base-url';
 
 export const maxDuration = 30;
 export const dynamic = 'force-dynamic';
@@ -158,8 +159,7 @@ export async function POST(request: NextRequest) {
       const oaiMessages = convertGeminiToOpenAI(messages, systemInstruction);
       const limitedOaiHistory = oaiMessages.slice(-MAX_HISTORY_MESSAGES);
       
-      let normalizedBase = (baseUrl || '').replace(/\/+$/, '');
-      if (!normalizedBase.endsWith('/v1')) normalizedBase += '/v1';
+      const normalizedBase = normalizeApiBaseUrl(baseUrl || '');
       const endpoint = normalizedBase + '/chat/completions';
 
       const oaiRequestBody = {
