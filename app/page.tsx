@@ -61,7 +61,7 @@ import {
   loadGhostNudgeMaxRetries, saveGhostNudgeMaxRetries,
   checkAndRepairStorage,
 } from '@/lib/storage';
-import { addLog } from '@/lib/logStore';
+import { addLogEntry, serializeMessage } from '@/lib/logStore';
 import {
   DEFAULT_DEEPTHINK_SYSTEM_PROMPT,
   DEEPTHINK_MEMORY_MARKER,
@@ -758,7 +758,7 @@ export default function Home() {
         }
 
         if (!response.ok) {
-          addLog({ ts: _logTs, provider: _logProvider, model: _logModel, status: 'error', statusCode: response.status, durationMs: Date.now() - _logTs, error: `HTTP ${response.status}`, chatId: currentChatId || undefined });
+          addLogEntry({ type: 'stream_error', source: 'chat', provider: _logProvider, model: _logModel, status: 'error', statusCode: response.status, durationMs: Date.now() - _logTs, error: `HTTP ${response.status}`, chatId: currentChatId || undefined, messageId: targetMessageId });
           setError(`API error: ${response.status}`);
           return;
         }
@@ -1577,7 +1577,7 @@ export default function Home() {
 
         // Flush any buffered chunks before finishing.
         flush();
-        addLog({ ts: _logTs, provider: _logProvider, model: _logModel, status: 'ok', statusCode: 200, durationMs: Date.now() - _logTs, chatId: currentChatId || undefined });
+        addLogEntry({ type: 'stream_done', source: 'chat', provider: _logProvider, model: _logModel, status: 'ok', statusCode: 200, durationMs: Date.now() - _logTs, chatId: currentChatId || undefined, messageId: targetMessageId });
 
         // GNP: отмечаем если были tool calls
         if (roundToolCalls.length > 0) {
@@ -1649,9 +1649,9 @@ export default function Home() {
 
     } catch (e: any) {
       if (e.name === 'AbortError') {
-        addLog({ ts: Date.now(), provider: (activeProvider?.type === 'openai' ? 'openai' : activeProvider?.type === 'anthropic' ? 'anthropic' : 'gemini'), model: activeModel?.modelId || model, status: 'aborted', durationMs: 0, chatId: currentChatId || undefined });
+        addLogEntry({ type: 'stream_aborted', source: 'chat', provider: (activeProvider?.type === 'openai' ? 'openai' : activeProvider?.type === 'anthropic' ? 'anthropic' : 'gemini'), model: activeModel?.modelId || model, status: 'aborted', durationMs: 0, chatId: currentChatId || undefined, messageId: targetMessageId });
       } else {
-        addLog({ ts: Date.now(), provider: (activeProvider?.type === 'openai' ? 'openai' : activeProvider?.type === 'anthropic' ? 'anthropic' : 'gemini'), model: activeModel?.modelId || model, status: 'error', durationMs: 0, error: e.message || 'Ошибка стриминга', chatId: currentChatId || undefined });
+        addLogEntry({ type: 'stream_error', source: 'chat', provider: (activeProvider?.type === 'openai' ? 'openai' : activeProvider?.type === 'anthropic' ? 'anthropic' : 'gemini'), model: activeModel?.modelId || model, status: 'error', durationMs: 0, error: e.message || 'Ошибка стриминга', chatId: currentChatId || undefined, messageId: targetMessageId });
         setError(e.message || 'Ошибка стриминга');
       }
     } finally {
@@ -1737,13 +1737,24 @@ export default function Home() {
     const newMessages = [...messages, userMsg, assistantMsg];
     setMessages(newMessages);
 
+    addLogEntry({
+      type: 'send', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId: userMsg.id, after: serializeMessage(userMsg),
+    });
+    addLogEntry({
+      type: 'stream_start', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId: assistantMsgId, after: serializeMessage(assistantMsg),
+    });
+
     const historyToSend = [...messages, userMsg];
     await streamGeneration(historyToSend, assistantMsgId, false);
-  }, [selectedApiKey, model, isStreaming, messages, streamGeneration, selectedApiKeySuffix, activeModel]);
+  }, [selectedApiKey, model, isStreaming, messages, streamGeneration, selectedApiKeySuffix, activeModel, currentChatId]);
 
   const handleRegenerate = useCallback(async () => {
     if (isStreaming || messages.length === 0) return;
-    
+
     const lastMsg = messages[messages.length - 1];
 
     // Если последнее сообщение от пользователя — генерируем ответ на него
@@ -1758,6 +1769,11 @@ export default function Home() {
         apiKeySuffix: selectedApiKeySuffix || undefined,
       };
       setMessages([...messages, assistantMsg]);
+      addLogEntry({
+        type: 'regenerate', source: 'chat',
+        chatId: currentChatId || undefined,
+        messageId: newMsgId, after: serializeMessage(assistantMsg),
+      });
       await streamGeneration(messages, newMsgId, false);
       return;
     }
@@ -1766,14 +1782,20 @@ export default function Home() {
     const lastModelIdx = [...messages].reverse().findIndex(m => m.role === 'model');
     if (lastModelIdx === -1) return;
     const actualIdx = messages.length - 1 - lastModelIdx;
+    const oldMsg = messages[actualIdx];
     const newMsgId = generateId();
     const newMessages = [
       ...messages.slice(0, actualIdx),
       { id: newMsgId, role: 'model' as const, parts: [{ text: '' }], isStreaming: true, modelName: model, apiKeySuffix: selectedApiKeySuffix || undefined },
     ];
     setMessages(newMessages);
+    addLogEntry({
+      type: 'regenerate', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId: newMsgId, before: serializeMessage(oldMsg),
+    });
     await streamGeneration(messages.slice(0, actualIdx), newMsgId, false);
-  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
+  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix, currentChatId]);
 
   const handleContinue = useCallback(async (chunk?: import('@/types').InterruptedChunk) => {
     if (isStreaming) return;
@@ -1824,9 +1846,9 @@ export default function Home() {
     // 1. Найти сообщение и проверить toggle
     const msg = messages.find(m => m.id === messageId);
     if (!msg) return;
-    
+
     const isToggleOff = msg.feedback?.rating === rating;
-    
+
     // 2. Добавить в RPG Style Profile ДО setMessages (избегаем side effect)
     if (!isToggleOff) {
       const excerpt = getVisibleMessageText(msg.parts).slice(0, 200);
@@ -1837,15 +1859,28 @@ export default function Home() {
         timestamp: Date.now()
       });
     }
-    
-    // 3. Обновить message.feedback в массиве messages
+
+    // 3. Лог: before = текущий feedback, after = новый (или undefined при toggle off)
+    addLogEntry({
+      type: 'feedback', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId,
+      before: serializeMessage(msg),
+      after: serializeMessage(
+        isToggleOff
+          ? { ...msg, feedback: undefined }
+          : { ...msg, feedback: { rating, comment, timestamp: Date.now() } }
+      ),
+    });
+
+    // 4. Обновить message.feedback в массиве messages
     setMessages(prev => prev.map(m =>
       m.id !== messageId ? m :
       isToggleOff
         ? { ...m, feedback: undefined }          // toggle off
         : { ...m, feedback: { rating, comment, timestamp: Date.now() } }
     ));
-  }, [messages]); // добавляем messages в deps т.к. используем его напрямую
+  }, [messages, currentChatId]); // добавляем messages в deps т.к. используем его напрямую
 
   const handleRegenerateWithFeedback = useCallback(async (
     messageId: string,
@@ -1901,9 +1936,17 @@ export default function Home() {
     ];
     setMessages(newMessages);
 
+    addLogEntry({
+      type: 'branch', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId: newMsgId,
+      before: serializeMessage(badMessage),
+      affectedMessageIds: [messageId, newMsgId],
+    });
+
     // 6. Стримить. История для API: всё до плохого + хинт (БЕЗ hiddenBadMessage)
     await streamGeneration([...historyBefore, feedbackHint], newMsgId, false);
-  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
+  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix, currentChatId]);
 
   // ============ DEEPTHINK IMPROVEMENTS ============
   
@@ -1935,6 +1978,13 @@ export default function Home() {
       }
     ));
 
+    addLogEntry({
+      type: 'regenerate', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId,
+      before: serializeMessage(existingMsg),
+    });
+
     // Передать сохранённый enhanced prompt через новый параметр
     await streamGeneration(
       historyBefore,
@@ -1943,7 +1993,7 @@ export default function Home() {
       undefined,                                // customAnalysis
       existingMsg.deepThinkEnhancedPrompt,      // prebuiltSystemPrompt
     );
-  }, [isStreaming, messages, streamGeneration]);
+  }, [isStreaming, messages, streamGeneration, currentChatId]);
 
   // Редактирование DeepThink размышлений
   const extractEnhancedPromptFromThinking = (thinking: string): string => {
@@ -2041,6 +2091,14 @@ export default function Home() {
     setMessages(branchMessages);
     setChatTitle(chatTitle ? `${chatTitle} (Ветка)` : 'Новая ветка');
     setUnsaved(true);
+
+    addLogEntry({
+      type: 'branch', source: 'chat',
+      chatId: newChatId,
+      messageId,
+      affectedMessageIds: branchMessages.map(m => m.id),
+      messageCount: branchMessages.length,
+    });
   }, [isStreaming, appMode, arena, messages, chatTitle, saveCurrentChat]);
 
   const handleSubmitToolResults = useCallback(async (
@@ -2099,13 +2157,29 @@ export default function Home() {
 
     const nextMessages = [...updatedMessages, userToolMessage, assistantMsg];
     setMessages(nextMessages);
+
+    addLogEntry({
+      type: 'send', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId: userToolMessage.id,
+      after: serializeMessage(userToolMessage),
+      affectedMessageIds: [modelMessageId, userToolMessage.id, assistantMsgId],
+    });
+
     await streamGeneration([...updatedMessages, userToolMessage], assistantMsgId, false);
-  }, [isStreaming, messages, model, selectedApiKeySuffix, streamGeneration]);
+  }, [isStreaming, messages, model, selectedApiKeySuffix, streamGeneration, currentChatId]);
 
   const handleEdit = useCallback((id: string, newParts: Part[]) => {
     const msgIdx = messages.findIndex(m => m.id === id);
     if (msgIdx === -1) return;
     const msg = messages[msgIdx];
+    const before = serializeMessage(msg);
+    const after = serializeMessage({ ...msg, parts: newParts });
+    addLogEntry({
+      type: 'edit_message', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId: id, before, after,
+    });
     if (msg.role === 'user') {
       setMessages(prev => prev.map(m =>
         m.id === id ? { ...m, parts: newParts, forceEdit: false } : m
@@ -2115,7 +2189,7 @@ export default function Home() {
         m.id === id ? { ...m, parts: newParts, isBlocked: false, error: undefined, errorType: undefined, errorCode: undefined, errorStatus: undefined } : m
       ));
     }
-  }, [messages]);
+  }, [messages, currentChatId]);
 
   const forceEditPreviousUserMessage = useCallback((modelMessageId: string) => {
     setMessages(prev => {
@@ -2139,6 +2213,14 @@ export default function Home() {
 
   // Удаляет строго одно сообщение по ID — никакого каскада
   const handleDelete = useCallback((id: string) => {
+    const msg = messages.find(m => m.id === id);
+    if (msg) {
+      addLogEntry({
+        type: 'delete_message', source: 'chat',
+        chatId: currentChatId || undefined,
+        messageId: id, before: serializeMessage(msg),
+      });
+    }
     setMessages(prev => {
       const idx = prev.findIndex(m => m.id === id);
       if (idx === -1) return prev;
@@ -2146,7 +2228,7 @@ export default function Home() {
       next.splice(idx, 1);
       return next;
     });
-  }, []);
+  }, [messages, currentChatId]);
 
   // ============ FILE EDITOR HANDLERS ============
   const handleAcceptEdits = useCallback((fileId: string) => {
@@ -2404,6 +2486,13 @@ export default function Home() {
   }, []);
 
   const clearChatState = useCallback(() => {
+    if (messages.length > 0) {
+      addLogEntry({
+        type: 'clear_chat', source: 'chat',
+        chatId: currentChatId || undefined,
+        messageCount: messages.length,
+      });
+    }
     setMessages([]);
     setTokenCount(0);
     setError('');
@@ -2411,7 +2500,7 @@ export default function Home() {
     setChatTitle('');
     setUnsaved(false);
     setActiveChatId(null);
-  }, []);
+  }, [messages, currentChatId]);
 
   const handleClearChat = useCallback(() => {
     if (isStreaming) return;
@@ -2430,6 +2519,7 @@ export default function Home() {
     if (messages.length > 0) {
       saveCurrentChat(messages, undefined, false).catch(console.error);
     }
+    addLogEntry({ type: 'new_chat', source: 'chat', chatId: currentChatId || undefined });
     // Сразу очищаем чат БЕЗ подтверждения (это новый чат, не удаление)
     clearChatState();
     setSystemPrompt('');
@@ -2439,7 +2529,7 @@ export default function Home() {
     setLiveCode('');
     setWebsiteType(null);
     setShowLiveCanvas(false);
-  }, [isStreaming, messages, saveCurrentChat, clearChatState]);
+  }, [isStreaming, messages, saveCurrentChat, clearChatState, currentChatId]);
 
   // Visible messages (filtered for display)
   const visibleMessages = useMemo(
@@ -2498,6 +2588,13 @@ export default function Home() {
     setActiveChatId(chat.id);
     setUnsaved(false);
     setError('');
+
+    addLogEntry({
+      type: 'load_chat', source: 'chat',
+      chatId: chat.id,
+      messageCount: chat.messages.length,
+    });
+
     // Reset windowed messages and scroll to bottom immediately
     resetMessageWindow();
     requestAnimationFrame(() => {

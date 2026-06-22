@@ -2104,7 +2104,10 @@ export function SettingsSidebar({
 
                     <button
                       onClick={async () => {
-                        if (!confirm('Удалить все логи API запросов?')) return;
+                        const msg = logsCount !== null && logsCount > 0
+                          ? `Удалить все логи действий (${logsCount} записей)? Это необратимо — сначала экспортируйте, если нужно сохранить.`
+                          : 'Удалить все логи действий? Это необратимо — сначала экспортируйте, если нужно сохранить.';
+                        if (!confirm(msg)) return;
                         await deleteLogsDatabase();
                         setLogsCount(0);
                       }}

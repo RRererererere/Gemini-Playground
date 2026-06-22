@@ -13,6 +13,7 @@ import {
 } from './arena-storage';
 import { streamArenaAgent } from './arena-stream';
 import { getVisibleMessageText } from './gemini';
+import { addLogEntry, serializeMessage } from './logStore';
 
 function generateId() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -205,6 +206,16 @@ export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers
   // ═══════ Message Edit / Delete (Sandbox) ═══════
 
   const editMessage = useCallback((messageId: string, newParts: Part[]) => {
+    const existing = activeSession?.messages.find(m => m.id === messageId);
+    if (existing) {
+      const before = serializeMessage(existing);
+      const after = serializeMessage({ ...existing, parts: newParts });
+      addLogEntry({
+        type: 'edit_message', source: 'arena',
+        chatId: activeSessionId || undefined,
+        messageId, before, after,
+      });
+    }
     updateSession(s => ({
       ...s,
       messages: s.messages.map(m =>
@@ -212,15 +223,23 @@ export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers
       ),
       updatedAt: Date.now(),
     }));
-  }, [updateSession]);
+  }, [updateSession, activeSession, activeSessionId]);
 
   const deleteMessage = useCallback((messageId: string) => {
+    const existing = activeSession?.messages.find(m => m.id === messageId);
+    if (existing) {
+      addLogEntry({
+        type: 'delete_message', source: 'arena',
+        chatId: activeSessionId || undefined,
+        messageId, before: serializeMessage(existing),
+      });
+    }
     updateSession(s => ({
       ...s,
       messages: s.messages.filter(m => m.id !== messageId),
       updatedAt: Date.now(),
     }));
-  }, [updateSession]);
+  }, [updateSession, activeSession, activeSessionId]);
 
   // ═══════ Response Mode ═══════
 
@@ -388,12 +407,31 @@ export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers
           const finalSession = { ...updatedSession, messages: currentMessages };
           onUpdate(finalSession);
           saveArenaSession(finalSession);
+
+          const doneMsg = currentMessages.find(m => m.id === targetMessageId);
+          if (doneMsg) {
+            addLogEntry({
+              type: 'stream_done', source: 'arena',
+              chatId: session.id,
+              messageId: targetMessageId,
+              model: agent.model,
+              after: serializeMessage(doneMsg),
+            });
+          }
         },
         onError: (error) => {
           currentMessages = currentMessages.map(m =>
             m.id === targetMessageId ? { ...m, error, isStreaming: false } : m
           );
           onUpdate({ ...updatedSession, messages: currentMessages });
+
+          addLogEntry({
+            type: 'stream_error', source: 'arena',
+            chatId: session.id,
+            messageId: targetMessageId,
+            model: agent.model,
+            status: 'error', error,
+          });
         },
         signal: abort.signal,
         // GNP
@@ -448,6 +486,12 @@ export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers
     };
     updateUI(session);
     saveArenaSession(session);
+
+    addLogEntry({
+      type: 'send', source: 'arena',
+      chatId: session.id,
+      messageId: userMsg.id, after: serializeMessage(userMsg),
+    });
 
     // В auto-режиме запускаем всех активных агентов последовательно
     if (session.responseMode === 'auto') {
@@ -518,6 +562,14 @@ export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers
     updateUI(sessionForRegen);
     saveArenaSession(sessionForRegen);
 
+    addLogEntry({
+      type: 'regenerate', source: 'arena',
+      chatId: activeSession.id,
+      messageId,
+      before: serializeMessage(msg),
+      affectedMessageIds: [messageId],
+    });
+
     // Перестримливаем этого агента
     const finalMessages = await runAgentStream(
       sessionForRegen,
@@ -560,6 +612,15 @@ export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers
     };
 
     updateUI(session);
+
+    const removedMessages = activeSession.messages.slice(msgIdx).filter(m => m.role === 'model');
+    addLogEntry({
+      type: 'regenerate', source: 'arena',
+      chatId: activeSession.id,
+      messageId: fromMessageId,
+      affectedMessageIds: removedMessages.map(m => m.id),
+      messageCount: removedMessages.length,
+    });
 
     // Перезапускаем всех активных агентов
     const activeAgents = session.agents.filter(a => a.isActive);
