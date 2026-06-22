@@ -62,6 +62,7 @@ import {
   sizeMBToSliderValue,
   sliderValueToSizeMB,
 } from '@/lib/storage';
+import { exportLogs, deleteLogsDatabase, getLogsCount } from '@/lib/logStore';
 import { DEFAULT_DEEPTHINK_SYSTEM_PROMPT, formatToolPayload } from '@/lib/gemini';
 import { ToolBuilderModal } from '@/components/ToolBuilder';
 import { getInstalledSkills, setSkillEnabled, getSkillById } from '@/lib/skills';
@@ -992,6 +993,11 @@ export function SettingsSidebar({
   const importSimpleRef = useRef<HTMLInputElement>(null);
   const importBackupRef = useRef<HTMLInputElement>(null);
   const [importError, setImportError] = useState('');
+  const [logsCount, setLogsCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    getLogsCount().then(setLogsCount).catch(() => setLogsCount(0));
+  }, []);
 
   const loadModels = useCallback(async (providerId: string, key: string) => {
     if (!key.trim()) return;
@@ -2087,6 +2093,26 @@ export function SettingsSidebar({
                         Экспорт чатов
                       </button>
                     )}
+
+                    <button
+                      onClick={async () => { await exportLogs(); setLogsCount(await getLogsCount()); }}
+                      className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+                    >
+                      <Download size={12} />
+                      Экспорт логов{logsCount !== null ? ` (${logsCount})` : ''}
+                    </button>
+
+                    <button
+                      onClick={async () => {
+                        if (!confirm('Удалить все логи API запросов?')) return;
+                        await deleteLogsDatabase();
+                        setLogsCount(0);
+                      }}
+                      className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3 text-xs text-red-400 transition-colors hover:text-red-300"
+                    >
+                      <Trash2 size={12} />
+                      Удалить логи
+                    </button>
 
                     <button onClick={() => importRef.current?.click()} className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]">
                       <Upload size={12} />

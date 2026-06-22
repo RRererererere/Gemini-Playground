@@ -61,6 +61,7 @@ import {
   loadGhostNudgeMaxRetries, saveGhostNudgeMaxRetries,
   checkAndRepairStorage,
 } from '@/lib/storage';
+import { addLog } from '@/lib/logStore';
 import {
   DEFAULT_DEEPTHINK_SYSTEM_PROMPT,
   DEEPTHINK_MEMORY_MARKER,
@@ -740,19 +741,24 @@ export default function Home() {
           requestBody.thinkingBudget = thinkingBudget;
         }
         
+        const _logTs = Date.now();
+        const _logProvider = activeProvider?.type === 'openai' ? 'openai' : activeProvider?.type === 'anthropic' ? 'anthropic' : 'gemini';
+        const _logModel = activeModel?.modelId || model;
+
         const response = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: abortControllerRef.current!.signal,
           body: JSON.stringify(requestBody),
         });
-        
+
         // Debug: проверяем что IMAGE_MEMORY_TOOLS отправляются
         if (memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS_LOCAL) {
           console.log('[DEBUG] Sending IMAGE_MEMORY_TOOLS:', IMAGE_MEMORY_TOOLS.map(t => t.name));
         }
 
         if (!response.ok) {
+          addLog({ ts: _logTs, provider: _logProvider, model: _logModel, status: 'error', statusCode: response.status, durationMs: Date.now() - _logTs, error: `HTTP ${response.status}`, chatId: currentChatId || undefined });
           setError(`API error: ${response.status}`);
           return;
         }
@@ -1571,6 +1577,7 @@ export default function Home() {
 
         // Flush any buffered chunks before finishing.
         flush();
+        addLog({ ts: _logTs, provider: _logProvider, model: _logModel, status: 'ok', statusCode: 200, durationMs: Date.now() - _logTs, chatId: currentChatId || undefined });
 
         // GNP: отмечаем если были tool calls
         if (roundToolCalls.length > 0) {
@@ -1641,7 +1648,10 @@ export default function Home() {
     } // конец try
 
     } catch (e: any) {
-      if (e.name !== 'AbortError') {
+      if (e.name === 'AbortError') {
+        addLog({ ts: Date.now(), provider: (activeProvider?.type === 'openai' ? 'openai' : activeProvider?.type === 'anthropic' ? 'anthropic' : 'gemini'), model: activeModel?.modelId || model, status: 'aborted', durationMs: 0, chatId: currentChatId || undefined });
+      } else {
+        addLog({ ts: Date.now(), provider: (activeProvider?.type === 'openai' ? 'openai' : activeProvider?.type === 'anthropic' ? 'anthropic' : 'gemini'), model: activeModel?.modelId || model, status: 'error', durationMs: 0, error: e.message || 'Ошибка стриминга', chatId: currentChatId || undefined });
         setError(e.message || 'Ошибка стриминга');
       }
     } finally {
