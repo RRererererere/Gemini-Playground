@@ -1829,9 +1829,9 @@ export default function ChatMessage({
           />
         )}
         {isStreaming && isLast && !isUser && (
-          <span className="text-[10px] text-[var(--gem-green)] flex items-center gap-1">
-            <span className="inline-block w-1 h-1 rounded-full bg-[var(--gem-green)] animate-pulse" />
-            Генерация
+          <span className="text-[10px] flex items-center gap-1" style={{ color: message.ghostNudgeActive ? 'var(--gem-purple, #a78bfa)' : 'var(--gem-green)' }}>
+            <span className={`inline-block w-1 h-1 rounded-full animate-pulse`} style={{ background: message.ghostNudgeActive ? 'var(--gem-purple, #a78bfa)' : 'var(--gem-green)' }} />
+            {message.ghostNudgeActive ? '\u{1F47B} Ghost Protocol' : 'Генерация'}
           </span>
         )}
       </div>

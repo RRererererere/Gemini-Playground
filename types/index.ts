@@ -159,6 +159,7 @@ export interface Message {
   ghostRetryAttempt?: number;    // текущая попытка (1, 2, 3...)
   ghostRetryMax?: number;        // максимум попыток из настроек
   ghostRetryFailed?: boolean;    // все попытки исчерпаны
+  ghostNudgeActive?: boolean;    // GNP умное продолжение активно (показываем "Ghost Protocol")
   // Continue Generation
   isPartial?: boolean;
   interruptedChunk?: InterruptedChunk;

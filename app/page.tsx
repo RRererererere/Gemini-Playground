@@ -433,6 +433,41 @@ export default function Home() {
     return chatObj;
   }, [currentChatId, chatTitle, model, systemPrompt, deepThinkSystemPrompt, tools, temperature, savedChats]);
 
+  // ============ GNP HELPERS ============
+  // Ghost Nudge Protocol v2: вспомогательные функции
+
+  // Взять последние N слов из текста (для хвоста инъекции)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const gnpGetTailWords = useCallback((text: string, wordCount: number = 3): string => {
+    const words = text.trim().split(/\s+/);
+    return words.slice(-wordCount).join(' ');
+  }, []);
+
+  // Срезать хвост (tailWords) из начала continuation текста
+  // Нейронка продолжает с tailWords, поэтому они будут в начале continuation
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const gnpTrimContinuation = useCallback((continuation: string, tail: string): string => {
+    if (!tail.trim()) return continuation;
+
+    // Нормализуем tail: убираем лишние пробелы
+    const normalizedTail = tail.trim();
+
+    // Ищем tail в начале continuation (возможно с ведущим пробелом)
+    const trimmed = continuation.trimStart();
+    if (trimmed.toLowerCase().startsWith(normalizedTail.toLowerCase())) {
+      return trimmed.slice(normalizedTail.length);
+    }
+
+    // Фаллбэк: попробуем по словам — ищем первое совпадение tail в тексте
+    const idx = continuation.toLowerCase().indexOf(normalizedTail.toLowerCase());
+    if (idx !== -1 && idx < 30) { // хвост должен быть в начале (первые 30 символов)
+      return continuation.slice(idx + normalizedTail.length);
+    }
+
+    // Если не нашли — возвращаем как есть (без потерь)
+    return continuation;
+  }, []);
+
   // ============ STREAMING ============
   const streamGeneration = useCallback(async (
     history: Message[],
@@ -630,11 +665,17 @@ export default function Home() {
       const MAX_GHOST_RETRIES = ghostNudgeMaxRetries;
       let ghostRetryCount = 0;
       let ghostNudgePending = false;
-      // Локальные флаги для детекции пустого ответа (сбрасываются каждую итерацию)
+      // Флаги умного продолжения GNP v2
+      let gnpSmartMode = false;       // true = это умное продолжение (не просто retry пустого)
+      let gnpOriginalText = '';       // текст до обрыва
+      let gnpTailWords = '';          // 3 последних слова для инъекции
+      let gnpContinuationAcc = '';    // накопленный текст continuation
+      // Локальные флаги для детекции ответа (сбрасываются каждую итерацию)
       let localAccText = '';
       let localHadToolCalls = false;
       let localHadError = false;
       let localWasBlocked = false;
+      let localFinishReason: string | null = null; // последний finishReason из стрима
 
       while (shouldContinueLoop) {
         // ЗАЩИТА: ограничиваем максимальное количество раундов
@@ -652,9 +693,15 @@ export default function Home() {
         localHadToolCalls = false;
         localHadError = false;
         localWasBlocked = false;
+        localFinishReason = null;
+        // Сброс continuation аккумулятора для нового раунда GNP
+        if (gnpSmartMode) gnpContinuationAcc = '';
 
-        // Строим историю с накопленными tool calls/responses от предыдущих раундов
-        const messagesForRequest = buildChatRequestMessages(history, messageFilters);
+        // Строим историю
+        const historyForRequest = gnpSmartMode 
+          ? history.filter(m => m.id !== targetMessageId) 
+          : history;
+        const messagesForRequest = buildChatRequestMessages(historyForRequest, messageFilters);
 
         // Если есть завершённые раунды — добавляем их как отдельные model/user turns
         let contentsForRequest = messagesForRequest;
@@ -690,9 +737,20 @@ export default function Home() {
         // ── Ghost Nudge инъекция (если pending) ──
         if (ghostNudgePending) {
           ghostNudgePending = false;
-          console.log(`👻 [GNP] Retrying request (attempt ${ghostRetryCount}/${MAX_GHOST_RETRIES})`);
-          // Не модифицируем contentsForRequest — просто повторяем запрос
-          // Можно добавить seed для детерминированности, но это опционально
+          if (gnpSmartMode && gnpTailWords) {
+            // ✨ Умное продолжение: инъекция ghost turns
+            console.log(`👻 [GNP] Smart continuation (attempt ${ghostRetryCount}/${MAX_GHOST_RETRIES}), tail: "${gnpTailWords}"`);
+            
+            // Сначала добавляем саму неоконченную реплику ассистента как model turn
+            contentsForRequest.push({ role: 'model', parts: [{ text: gnpOriginalText }] });
+            
+            // Добавляем ghost user turn (нудж) и ghost model turn (хвост)
+            contentsForRequest.push({ role: 'user', parts: [{ text: '.' }] });
+            contentsForRequest.push({ role: 'model', parts: [{ text: gnpTailWords }] });
+          } else {
+            // Простой retry (пустой ответ)
+            console.log(`👻 [GNP] Retrying empty response (attempt ${ghostRetryCount}/${MAX_GHOST_RETRIES})`);
+          }
         }
 
         // Собираем skill tools
@@ -887,6 +945,27 @@ export default function Home() {
           requestAnimationFrame(flush);
         };
 
+        // GNP: особый flush — заменяет ВЕСЬ текст сообщения (для сшивки continuation)
+        const gnpFlushFull = () => {
+          if (!pendingText) return;
+          const fullText = pendingText;
+          pendingText = '';
+          setMessages(prev => prev.map(m => {
+            if (m.id !== targetMessageId) return m;
+            const hasTextPart = m.parts.some(p => 'text' in p && !('thought' in p));
+            if (hasTextPart) {
+              return {
+                ...m,
+                parts: m.parts.map(p =>
+                  'text' in p && !('thought' in p) ? { text: fullText } : p
+                ),
+                isStreaming: true,
+              };
+            }
+            return { ...m, parts: [...m.parts, { text: fullText }], isStreaming: true };
+          }));
+        };
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -971,6 +1050,11 @@ export default function Home() {
                   }
                 }
               ));
+            }
+
+            // GNP: трекаем finishReason для детекции обрыва
+            if (parsed.finishReason) {
+              localFinishReason = parsed.finishReason;
             }
 
             // Размышления
@@ -1569,8 +1653,19 @@ export default function Home() {
             // Текст ответа
             if (parsed.text) {
               localAccText += parsed.text;  // GNP: трекаем для детекции пустого ответа
-              pendingText += parsed.text;
-              scheduleFlush();
+              if (gnpSmartMode) {
+                // GNP умное продолжение: накапливаем continuation отдельно
+                gnpContinuationAcc += parsed.text;
+                // Показываем юзеру сшитый текст в реальном времени
+                const trimmedSoFar = gnpTrimContinuation(gnpContinuationAcc, gnpTailWords);
+                const stitchedSoFar = gnpOriginalText + trimmedSoFar;
+                pendingText = stitchedSoFar; // перезаписываем, не накапливаем
+                // Особый flush: заменяем весь текст, а не накапливаем
+                gnpFlushFull();
+              } else {
+                pendingText += parsed.text;
+                scheduleFlush();
+              }
             }
           } catch {}
         }
@@ -1604,19 +1699,23 @@ export default function Home() {
           }));
         }
 
-        // ── Ghost Nudge Protocol: проверка пустого ответа ──
+        // ── Ghost Nudge Protocol v2 ──
+
+        // Случай 1: Пустой ответ — простой retry
         if (
           gnpEnabled &&
           !localAccText.trim() &&
           !localHadToolCalls &&
           !localHadError &&
           !localWasBlocked &&
-          !shouldContinueLoop  // цикл не продолжится по tool calls
+          !gnpSmartMode && // не повторяем retry если уже в smart mode
+          !shouldContinueLoop
         ) {
           if (ghostRetryCount < MAX_GHOST_RETRIES) {
             ghostRetryCount++;
             console.log(`👻 [GNP] Empty response — retry ${ghostRetryCount}/${MAX_GHOST_RETRIES}`);
             ghostNudgePending = true;
+            gnpSmartMode = false;
             shouldContinueLoop = true;
 
             // Показываем индикатор перегенерации
@@ -1631,7 +1730,6 @@ export default function Home() {
             ));
           } else {
             console.warn(`👻 [GNP] All ${MAX_GHOST_RETRIES} retries exhausted`);
-            // Все попытки исчерпаны
             setMessages(prev => prev.map(m =>
               m.id === targetMessageId ? {
                 ...m,
@@ -1643,6 +1741,89 @@ export default function Home() {
               } : m
             ));
           }
+        }
+
+        // Случай 2: Умное продолжение — обрыв генерации (есть текст, но finishReason ≠ STOP)
+        else if (
+          gnpEnabled &&
+          localAccText.trim() &&
+          !localHadToolCalls &&
+          !localHadError &&
+          !localWasBlocked &&
+          !shouldContinueLoop &&
+          localFinishReason !== null &&
+          localFinishReason !== 'STOP'
+        ) {
+          if (ghostRetryCount < MAX_GHOST_RETRIES) {
+            ghostRetryCount++;
+            gnpSmartMode = true;
+
+            // Если уже был smart mode — сшиваем предыдущий результат в gnpOriginalText
+            if (gnpOriginalText) {
+              const trimmedPrev = gnpTrimContinuation(localAccText, gnpTailWords);
+              gnpOriginalText = gnpOriginalText + trimmedPrev;
+            } else {
+              // Первый раз: сохраняем весь текст до обрыва
+              gnpOriginalText = localAccText;
+            }
+
+            // Берём последние 3 слова как хвост для инъекции
+            gnpTailWords = gnpGetTailWords(gnpOriginalText, 3);
+
+            console.log(`👻 [GNP] Smart continuation — truncated at ${localFinishReason}, attempt ${ghostRetryCount}/${MAX_GHOST_RETRIES}`);
+            console.log(`👻 [GNP] Original tail: "${gnpTailWords}"`);
+
+            ghostNudgePending = true;
+            shouldContinueLoop = true;
+
+            // Показываем юзеру спец. индикатор Ghost Protocol (не обычный retry)
+            setMessages(prev => prev.map(m =>
+              m.id === targetMessageId ? {
+                ...m,
+                isStreaming: true,
+                ghostNudgeActive: true,
+                ghostRetrying: false,
+                // Сбрасываем isPartial — GNP возьмёт на себя продолжение
+                isPartial: false,
+                interruptedChunk: undefined,
+              } : m
+            ));
+          } else {
+            console.warn(`👻 [GNP] Smart continuation exhausted all ${MAX_GHOST_RETRIES} retries`);
+            // Оставляем что есть — финальный сшитый текст уже показан
+            setMessages(prev => prev.map(m =>
+              m.id === targetMessageId ? {
+                ...m,
+                ghostNudgeActive: false,
+                ghostRetrying: false,
+                isStreaming: false,
+              } : m
+            ));
+          }
+        }
+
+        // Случай 3: Умное продолжение завершилось корректно (STOP)
+        else if (gnpSmartMode && localFinishReason === 'STOP') {
+          // Финальная сшивка
+          const trimmedFinal = gnpTrimContinuation(localAccText, gnpTailWords);
+          const stitchedFinal = gnpOriginalText + trimmedFinal;
+          console.log(`👻 [GNP] Smart continuation complete. Stitched ${gnpOriginalText.length} + ${trimmedFinal.length} chars`);
+
+          // Устанавливаем финальный сшитый текст
+          setMessages(prev => prev.map(m => {
+            if (m.id !== targetMessageId) return m;
+            return {
+              ...m,
+              parts: m.parts.map(p =>
+                'text' in p && !('thought' in p)
+                  ? { text: stitchedFinal }
+                  : p
+              ),
+              ghostNudgeActive: false,
+              isStreaming: true, // will be set to false in finally
+            };
+          }));
+          gnpSmartMode = false;
         }
       } // конец while (shouldContinueLoop)
     } // конец try
@@ -1664,7 +1845,7 @@ export default function Home() {
       
       // Помечаем сообщение завершённым
       setMessages(prev => prev.map(m =>
-        m.id === targetMessageId ? { ...m, isStreaming: false, ghostRetrying: false } : m
+        m.id === targetMessageId ? { ...m, isStreaming: false, ghostRetrying: false, ghostNudgeActive: false } : m
       ));
       
       // Небольшая задержка чтобы дать React время обновить messagesRef
@@ -1692,7 +1873,7 @@ export default function Home() {
         }
       }, 100); // 100ms достаточно для React batching
     }
-  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, memoryEnabled, activeProvider, maxOutputTokens, handleSkillEvent, maxToolRounds, maxMemoryCalls]);
+  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, memoryEnabled, activeProvider, maxOutputTokens, handleSkillEvent, maxToolRounds, maxMemoryCalls, gnpGetTailWords, gnpTrimContinuation]);
 
   // Auto-open sheet for ai_interactive sites when streaming ends
   useEffect(() => {
