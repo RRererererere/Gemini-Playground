@@ -170,7 +170,7 @@ export interface Message {
 // Артефакт скилла (импортируется из lib/skills/types.ts в рантайме)
 export interface SkillArtifact {
   id: string;
-  type: 'image' | 'video' | 'audio' | 'document' | 'code' | 'table' | 'chart' | 'text' | 'custom' | 'annotated_image' | 'agent_card';
+  type: 'image' | 'video' | 'audio' | 'document' | 'code' | 'table' | 'chart' | 'text' | 'custom' | 'annotated_image' | 'agent_card' | 'file_edit';
   label?: string;
   data: 
     | { kind: 'base64'; mimeType: string; base64: string }
@@ -180,7 +180,18 @@ export interface SkillArtifact {
     | { kind: 'blob'; blob: Blob; mimeType: string }
     | { kind: 'stored'; stored: 'idb' } // большой артефакт в IndexedDB
     | { kind: 'annotations'; sourceImageId: string; annotations: AnnotationItem[] } // аннотированное изображение
-    | { kind: 'agent'; agentId: string; name: string; description: string; avatarEmoji: string; model: string; enabledSkillIds: string[] }; // карточка агента
+    | { kind: 'agent'; agentId: string; name: string; description: string; avatarEmoji: string; model: string; enabledSkillIds: string[] } // карточка агента
+    | {
+        kind: 'file_edit';
+        fileId: string;
+        fileName: string;
+        language?: string;
+        applied: number;
+        failed: number;
+        description?: string;
+        /** short preview of result (not full file) */
+        preview?: string;
+      };
   sendToGemini?: boolean;
   downloadable?: boolean;
   filename?: string;
@@ -393,12 +404,20 @@ export interface FileHistoryEntry {
   description: string; // "Added logging to handleClick"
 }
 
-export interface FileDiffOp {
-  type: 'search_replace';
-  search: string;       // что ищем (может быть неточным — fuzzy)
-  replace: string;      // на что меняем
-  description?: string; // что это за правка
-}
+export type FileDiffOp =
+  | {
+      type: 'search_replace';
+      search: string; // exact / fuzzy text to find
+      replace: string;
+      description?: string;
+    }
+  | {
+      type: 'replace_lines';
+      startLine: number; // 1-based inclusive
+      endLine: number;   // 1-based inclusive
+      newContent: string;
+      description?: string;
+    };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Agent Creator Types

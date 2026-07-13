@@ -175,6 +175,8 @@ export async function POST(request: NextRequest) {
       maxOutputTokens,
       tools,
       memoryTools,
+      /** Anthropic tool_choice, e.g. { type: 'any' } to force tool use */
+      toolChoice,
     } = body;
 
     if (!apiKey || !baseUrl || !model) {
@@ -212,6 +214,9 @@ export async function POST(request: NextRequest) {
 
     if (anthropicTools.length > 0) {
       requestBody.tools = anthropicTools;
+      if (toolChoice) {
+        requestBody.tool_choice = toolChoice;
+      }
     }
 
     const endpoint = normalizedBase + '/messages';

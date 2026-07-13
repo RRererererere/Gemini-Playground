@@ -131,7 +131,13 @@ export interface UseAppStateReturn {
   setShowFileEditor: React.Dispatch<React.SetStateAction<boolean>>;
   pendingEdits: Map<string, FileDiffOp[]>;
   setPendingEdits: React.Dispatch<React.SetStateAction<Map<string, FileDiffOp[]>>>;
-  checkFilesForEditor: (files: any[]) => void;
+  checkFilesForEditor: (files: any[]) => void | Promise<void>;
+  acceptFileEditorEdits: (fileId: string) => void;
+  rejectFileEditorEdits: (fileId: string) => void;
+  manualFileEditorEdit: (fileId: string, content: string) => void;
+  closeFileEditorFile: (fileId: string) => void;
+  revertFileEditorFile: (fileId: string) => void;
+  fileEditorChatKey: string;
 
   // Mobile Canvas
   mobileCanvasState: 'hidden' | 'sheet' | 'fullscreen';
@@ -319,16 +325,21 @@ export function useAppState(): UseAppStateReturn {
     showFileEditor: feShowFileEditor, setShowFileEditor: feSetShowFileEditor,
     pendingEdits: fePendingEdits, setPendingEdits: feSetPendingEdits,
     checkFilesForEditor,
+    acceptEdits: feAcceptEdits,
+    rejectEdits: feRejectEdits,
+    manualEdit: feManualEdit,
+    closeFile: feCloseFile,
+    revertFile: feRevertFile,
+    chatKey: fileEditorChatKey,
   } = useFileEditor(currentChatId);
 
-  // Sync file editor state from hook
+  // Sync file editor state from bridge-backed hook (single source of truth)
   useEffect(() => {
-    if (feOpenFiles.length !== openFiles.length || JSON.stringify(feOpenFiles) !== JSON.stringify(openFiles)) {
-      setOpenFiles(feOpenFiles);
-    }
+    setOpenFiles(feOpenFiles);
+    setPendingEdits(fePendingEdits);
     if (feActiveFileId !== activeFileId) setActiveFileId(feActiveFileId);
     if (feShowFileEditor !== showFileEditor) setShowFileEditor(feShowFileEditor);
-  }, [feOpenFiles, feActiveFileId, feShowFileEditor]);
+  }, [feOpenFiles, fePendingEdits, feActiveFileId, feShowFileEditor]);
 
   const rpgProfile = useRPGProfile(model, selectedApiKey);
 
@@ -571,6 +582,12 @@ export function useAppState(): UseAppStateReturn {
     openFiles, setOpenFiles, activeFileId, setActiveFileId,
     showFileEditor, setShowFileEditor, pendingEdits, setPendingEdits,
     checkFilesForEditor,
+    acceptFileEditorEdits: feAcceptEdits,
+    rejectFileEditorEdits: feRejectEdits,
+    manualFileEditorEdit: feManualEdit,
+    closeFileEditorFile: feCloseFile,
+    revertFileEditorFile: feRevertFile,
+    fileEditorChatKey,
 
     // Mobile Canvas
     mobileCanvasState, setMobileCanvasState, pendingCanvasElement, setPendingCanvasElement,

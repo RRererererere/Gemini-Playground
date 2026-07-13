@@ -45,6 +45,9 @@ interface ChatMessageProps {
   onOpenAgentChat?: (agentId: string) => void;
   onFeedback?: (messageId: string, rating: 'like' | 'dislike', comment?: string) => void;
   onRegenerateWithFeedback?: (messageId: string, comment: string) => void;
+  onRememberStyle?: (messageId: string) => void;
+  onShorter?: (messageId: string) => void;
+  onContinueFromCursor?: (messageId: string) => void;
   onRegenerateTextOnly?: (messageId: string) => void;
   onDismissBlocked?: (messageId: string) => void;
   onEditDeepThinking?: (messageId: string, newThinking: string) => void;
@@ -1673,7 +1676,7 @@ function BridgeDataBlock({ bridgeData }: { bridgeData: BridgePayload }) {
 
 export default function ChatMessage({
   message, index, isLast, isStreaming,
-  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat, onFeedback, onRegenerateWithFeedback, onRegenerateTextOnly, onDismissBlocked, onEditDeepThinking, onContinueDeepThink, onSkipDeepThink,
+  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat, onFeedback, onRegenerateWithFeedback, onRememberStyle, onShorter, onContinueFromCursor, onRegenerateTextOnly, onDismissBlocked, onEditDeepThinking, onContinueDeepThink, onSkipDeepThink,
   onSceneStateSettingsOpen, isSceneStatePinned, onToggleSceneStatePin, onRequestSceneCategory, hideActions = false
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
@@ -2230,6 +2233,9 @@ export default function ChatMessage({
               isLast={isLast}
               onFeedback={onFeedback}
               onRegenerateWithFeedback={onRegenerateWithFeedback}
+              onRememberStyle={onRememberStyle}
+              onShorter={onShorter}
+              onContinueFromCursor={onContinueFromCursor}
             />
           )}
 

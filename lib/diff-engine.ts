@@ -1,134 +1,191 @@
 import type { FileDiffOp } from '@/types';
 
+function normalizeNewlines(text: string): string {
+  return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
 /**
- * Применяет серию правок к содержимому файла с fuzzy matching
- * 
+ * Применяет серию SEARCH/REPLACE правок с fuzzy matching.
+ *
  * Уровни поиска:
  * 1. Точное совпадение
- * 2. Без trailing whitespace
- * 3. Нормализация отступов
+ * 2. Без trailing whitespace построчно
+ * 3. Нормализация whitespace
+ * 4. Case-insensitive exact (last resort for short keys)
  */
-export function applyEdits(content: string, edits: FileDiffOp[]): {
+export function applyEdits(
+  content: string,
+  edits: Array<Extract<FileDiffOp, { type: 'search_replace' }> | { search: string; replace: string; description?: string }>
+): {
   result: string;
   applied: number;
   failed: FileDiffOp[];
 } {
-  let result = content;
+  let result = normalizeNewlines(content);
   let applied = 0;
   const failed: FileDiffOp[] = [];
 
   for (const edit of edits) {
-    // Защита от пустого search
-    if (!edit.search || edit.search.trim() === '') {
-      console.error('Empty search string in edit:', edit);
-      failed.push(edit);
+    const search = normalizeNewlines(edit.search ?? '');
+    const replace = normalizeNewlines(edit.replace ?? '');
+    const asOp: FileDiffOp = {
+      type: 'search_replace',
+      search,
+      replace,
+      description: edit.description,
+    };
+
+    if (!search || search.trim() === '') {
+      failed.push(asOp);
       continue;
     }
 
-    // Уровень 1: точное совпадение
-    if (result.includes(edit.search)) {
-      // Проверяем что search встречается только один раз
-      const occurrences = countOccurrences(result, edit.search);
-      if (occurrences > 1) {
-        console.warn(`Search string appears ${occurrences} times, replacing first occurrence:`, edit.search.slice(0, 50));
-      }
-      
-      // Заменяем только первое вхождение
-      const index = result.indexOf(edit.search);
-      result = result.slice(0, index) + edit.replace + result.slice(index + edit.search.length);
+    // Level 1: exact
+    if (result.includes(search)) {
+      const index = result.indexOf(search);
+      result = result.slice(0, index) + replace + result.slice(index + search.length);
       applied++;
       continue;
     }
 
-    // Уровень 2: без trailing whitespace
-    const searchStripped = edit.search.replace(/\s+$/gm, '');
+    // Level 2: strip trailing whitespace per line
+    const searchStripped = search.replace(/[ \t]+$/gm, '');
     const resultLines = result.split('\n');
+    const windowSize = search.split('\n').length;
     let foundStripped = false;
-    
-    for (let i = 0; i < resultLines.length; i++) {
-      const windowSize = edit.search.split('\n').length;
+
+    for (let i = 0; i <= resultLines.length - windowSize; i++) {
       const window = resultLines.slice(i, i + windowSize).join('\n');
-      const windowStripped = window.replace(/\s+$/gm, '');
-      
+      const windowStripped = window.replace(/[ \t]+$/gm, '');
+
       if (windowStripped === searchStripped) {
-        // Нашли совпадение без trailing whitespace
         const before = resultLines.slice(0, i).join('\n');
         const after = resultLines.slice(i + windowSize).join('\n');
-        result = before + (before ? '\n' : '') + edit.replace + (after ? '\n' + after : '');
+        result = before + (before ? '\n' : '') + replace + (after ? '\n' + after : '');
         applied++;
         foundStripped = true;
         break;
       }
     }
-    
     if (foundStripped) continue;
 
-    // Уровень 3: нормализация отступов (заменяем все whitespace на один пробел)
-    const searchNormalized = normalizeWhitespace(edit.search);
-    const resultNormalized = normalizeWhitespace(result);
-    
-    if (resultNormalized.includes(searchNormalized)) {
-      // Находим позицию в нормализованной строке
-      const normalizedIndex = resultNormalized.indexOf(searchNormalized);
-      
-      // Восстанавливаем позицию в оригинальной строке (приблизительно)
-      let charCount = 0;
-      let originalIndex = 0;
-      
-      for (let i = 0; i < result.length; i++) {
-        if (charCount >= normalizedIndex) {
-          originalIndex = i;
-          break;
-        }
-        if (!/\s/.test(result[i])) {
-          charCount++;
-        }
+    // Level 3: normalize all whitespace runs
+    const searchNorm = normalizeWhitespace(search);
+    const resultNorm = normalizeWhitespace(result);
+
+    if (searchNorm && resultNorm.includes(searchNorm)) {
+      const mapped = mapNormalizedRange(result, resultNorm, searchNorm);
+      if (mapped) {
+        result = result.slice(0, mapped.start) + replace + result.slice(mapped.end);
+        applied++;
+        continue;
       }
-      
-      // Находим конец совпадения
-      let endCharCount = charCount + searchNormalized.replace(/\s/g, '').length;
-      let originalEndIndex = originalIndex;
-      
-      for (let i = originalIndex; i < result.length; i++) {
-        if (charCount >= endCharCount) {
-          originalEndIndex = i;
-          break;
-        }
-        if (!/\s/.test(result[i])) {
-          charCount++;
-        }
-      }
-      
-      result = result.slice(0, originalIndex) + edit.replace + result.slice(originalEndIndex);
-      applied++;
-      continue;
     }
 
-    // Не удалось найти совпадение
-    failed.push(edit);
+    // Level 4: case-insensitive for short single-line keys (config files)
+    if (!search.includes('\n') && search.length <= 80) {
+      const lowerResult = result.toLowerCase();
+      const lowerSearch = search.toLowerCase();
+      const idx = lowerResult.indexOf(lowerSearch);
+      if (idx !== -1) {
+        result = result.slice(0, idx) + replace + result.slice(idx + search.length);
+        applied++;
+        continue;
+      }
+    }
+
+    failed.push(asOp);
   }
 
   return { result, applied, failed };
 }
 
 /**
- * Подсчитывает количество вхождений подстроки
+ * Replace lines [startLine, endLine] inclusive, 1-based.
  */
-function countOccurrences(text: string, search: string): number {
-  let count = 0;
-  let pos = 0;
-  
-  while ((pos = text.indexOf(search, pos)) !== -1) {
-    count++;
-    pos += search.length;
+export function applyLineReplace(
+  content: string,
+  startLine: number,
+  endLine: number,
+  newContent: string
+): { ok: true; result: string } | { ok: false; error: string } {
+  const lines = normalizeNewlines(content).split('\n');
+  const start = Math.floor(startLine);
+  const end = Math.floor(endLine);
+
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1) {
+    return { ok: false, error: `Invalid line range: ${startLine}-${endLine}` };
   }
-  
-  return count;
+  if (start > lines.length) {
+    return {
+      ok: false,
+      error: `startLine ${start} is beyond file length (${lines.length} lines)`,
+    };
+  }
+  if (end < start) {
+    return { ok: false, error: `endLine (${end}) < startLine (${start})` };
+  }
+
+  const safeEnd = Math.min(end, lines.length);
+  const newLines = normalizeNewlines(newContent).split('\n');
+  // If newContent is empty string, replace with zero lines
+  const replacement = newContent === '' ? [] : newLines;
+
+  const resultLines = [
+    ...lines.slice(0, start - 1),
+    ...replacement,
+    ...lines.slice(safeEnd),
+  ];
+
+  return { ok: true, result: resultLines.join('\n') };
 }
 
-/**
- * Нормализует whitespace для fuzzy matching
- */
+function mapNormalizedRange(
+  original: string,
+  normalized: string,
+  searchNormalized: string
+): { start: number; end: number } | null {
+  const normIndex = normalized.indexOf(searchNormalized);
+  if (normIndex < 0) return null;
+
+  // Map normalized char index → original index by walking non-ws vs original
+  // normalizeWhitespace collapses \s+ to single space and trims — mapping is approximate.
+  // Better approach: walk original building normalized on the fly.
+  let ni = 0;
+  let start = -1;
+  let end = -1;
+  let i = 0;
+
+  // Skip leading whitespace in original the same way trim() did
+  while (i < original.length && /\s/.test(original[i])) i++;
+
+  const targetStart = normIndex;
+  const targetEnd = normIndex + searchNormalized.length;
+
+  while (i < original.length && ni <= targetEnd) {
+    if (/\s/.test(original[i])) {
+      // collapse whitespace run to one space in normalized
+      while (i < original.length && /\s/.test(original[i])) i++;
+      if (ni < normalized.length && normalized[ni] === ' ') {
+        if (ni === targetStart) start = i; // space itself rare as start
+        ni++;
+      }
+      continue;
+    }
+
+    if (ni === targetStart) start = i;
+    ni++;
+    i++;
+    if (ni === targetEnd) {
+      end = i;
+      break;
+    }
+  }
+
+  if (start < 0 || end < 0) return null;
+  return { start, end };
+}
+
 function normalizeWhitespace(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
@@ -141,22 +198,21 @@ export function generateUnifiedDiff(
   modified: string,
   filename: string
 ): string {
-  const originalLines = original.split('\n');
-  const modifiedLines = modified.split('\n');
-  
+  const originalLines = normalizeNewlines(original).split('\n');
+  const modifiedLines = normalizeNewlines(modified).split('\n');
+
   const diff: string[] = [];
   diff.push(`--- a/${filename}`);
   diff.push(`+++ b/${filename}`);
-  
-  // Простой line-by-line diff (можно улучшить с Myers algorithm)
+
   const maxLen = Math.max(originalLines.length, modifiedLines.length);
   let hunkStart = -1;
   let hunkLines: string[] = [];
-  
+
   for (let i = 0; i < maxLen; i++) {
     const origLine = originalLines[i];
     const modLine = modifiedLines[i];
-    
+
     if (origLine === modLine) {
       if (hunkStart !== -1) {
         hunkLines.push(` ${origLine || ''}`);
@@ -165,7 +221,7 @@ export function generateUnifiedDiff(
       if (hunkStart === -1) {
         hunkStart = i;
       }
-      
+
       if (origLine !== undefined) {
         hunkLines.push(`-${origLine}`);
       }
@@ -173,8 +229,7 @@ export function generateUnifiedDiff(
         hunkLines.push(`+${modLine}`);
       }
     }
-    
-    // Закрываем hunk если нашли 3 одинаковые строки подряд
+
     if (origLine === modLine && hunkLines.length > 0) {
       const lastThree = hunkLines.slice(-3);
       if (lastThree.every(l => l.startsWith(' '))) {
@@ -185,37 +240,39 @@ export function generateUnifiedDiff(
       }
     }
   }
-  
-  // Закрываем последний hunk
+
   if (hunkLines.length > 0) {
     diff.push(`@@ -${hunkStart + 1},${maxLen - hunkStart} +${hunkStart + 1},${maxLen - hunkStart} @@`);
     diff.push(...hunkLines);
   }
-  
+
   return diff.join('\n');
 }
 
 /**
  * Вычисляет статистику изменений
  */
-export function getDiffStats(original: string, modified: string): {
+export function getDiffStats(
+  original: string,
+  modified: string
+): {
   added: number;
   removed: number;
   changed: number;
 } {
-  const originalLines = original.split('\n');
-  const modifiedLines = modified.split('\n');
-  
+  const originalLines = normalizeNewlines(original).split('\n');
+  const modifiedLines = normalizeNewlines(modified).split('\n');
+
   let added = 0;
   let removed = 0;
   let changed = 0;
-  
+
   const maxLen = Math.max(originalLines.length, modifiedLines.length);
-  
+
   for (let i = 0; i < maxLen; i++) {
     const origLine = originalLines[i];
     const modLine = modifiedLines[i];
-    
+
     if (origLine === undefined) {
       added++;
     } else if (modLine === undefined) {
@@ -224,6 +281,6 @@ export function getDiffStats(original: string, modified: string): {
       changed++;
     }
   }
-  
+
   return { added, removed, changed };
 }

@@ -7,6 +7,7 @@ import {
 import { buildSkillsSystemPrompt } from '@/lib/skills';
 import { buildImageContext } from '@/lib/image-context';
 import { loadRPGProfile, getStyleInjection } from '@/lib/rpg-style-profile';
+import { buildFLoveInjection, loadFLoveProfile } from '@/lib/f-love-profile';
 import {
   type ContextLayerId,
   type ContextLayersConfig,
@@ -117,7 +118,7 @@ export function buildSystemPromptLayers(params: BuildSystemPromptParams): BuiltS
   layers.push(layerPreview('skills', skillsContent, skillsEnabled, config));
   if (skillsEnabled && skillsContent.trim()) stackParts.push(skillsContent.trim());
 
-  // RPG style
+  // RPG style + F-Love (personal form preferences)
   const rpgEnabled = config.layers.rpg_style.enabled;
   let rpgContent = '';
   if (rpgEnabled) {
@@ -126,7 +127,10 @@ export function buildSystemPromptLayers(params: BuildSystemPromptParams): BuiltS
     } else if (config.layers.rpg_style.customText !== null) {
       rpgContent = config.layers.rpg_style.customText;
     } else {
-      rpgContent = getStyleInjection(loadRPGProfile()) || '';
+      const rpg = getStyleInjection(loadRPGProfile()) || '';
+      // Always merge F-Love style profile (learns from edits/likes/stop)
+      const flove = buildFLoveInjection(loadFLoveProfile());
+      rpgContent = [rpg, flove].filter(Boolean).join('\n\n');
     }
   }
   layers.push(layerPreview('rpg_style', rpgContent, rpgEnabled, config));

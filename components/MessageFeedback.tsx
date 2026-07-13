@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ThumbsUp, ThumbsDown, X } from 'lucide-react';
+import { ThumbsUp, ThumbsDown, X, Sparkles, RefreshCw } from 'lucide-react';
 import type { Message } from '@/types';
 
 interface MessageFeedbackProps {
@@ -16,6 +16,12 @@ interface MessageFeedbackProps {
     messageId: string,
     dislikeComment: string
   ) => void;
+  /** Запомнить текущий текст как «эталон стиля» (после правок) */
+  onRememberStyle?: (messageId: string) => void;
+  /** Перегенерировать короче */
+  onShorter?: (messageId: string) => void;
+  /** Продолжить с конца текущего текста */
+  onContinueFromCursor?: (messageId: string) => void;
 }
 
 export default function MessageFeedback({
@@ -23,71 +29,67 @@ export default function MessageFeedback({
   isLast,
   onFeedback,
   onRegenerateWithFeedback,
+  onRememberStyle,
+  onShorter,
+  onContinueFromCursor,
 }: MessageFeedbackProps) {
   const [showPopup, setShowPopup] = useState<'like' | 'dislike' | null>(null);
   const [commentText, setCommentText] = useState('');
+  const [remembered, setRemembered] = useState(false);
 
   const currentRating = message.feedback?.rating;
 
-  // Закрыть попап при Escape
   useEffect(() => {
     if (!showPopup) return;
-
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setShowPopup(null);
         setCommentText('');
       }
     };
-
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
   }, [showPopup]);
 
-  // Блокировка скролла body когда попап открыт
   useEffect(() => {
-    if (showPopup) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-    }
+    if (showPopup) document.body.style.overflow = 'hidden';
+    else document.body.style.overflow = '';
     return () => {
       document.body.style.overflow = '';
     };
   }, [showPopup]);
 
-  const handleLikeClick = () => {
-    // Toggle off если уже стоит лайк
+  // One-click like (no modal). Long-press / shift+click → comment.
+  const handleLikeClick = (e: React.MouseEvent) => {
     if (currentRating === 'like') {
-      onFeedback(message.id, 'like'); // toggle
+      onFeedback(message.id, 'like');
       return;
     }
-    
-    // Показать попап для комментария
-    setShowPopup('like');
-    setCommentText('');
+    if (e.shiftKey) {
+      setShowPopup('like');
+      setCommentText('');
+      return;
+    }
+    onFeedback(message.id, 'like');
   };
 
-  const handleDislikeClick = () => {
-    // Toggle off если уже стоит дизлайк
+  const handleDislikeClick = (e: React.MouseEvent) => {
     if (currentRating === 'dislike') {
-      onFeedback(message.id, 'dislike'); // toggle
+      onFeedback(message.id, 'dislike');
       return;
     }
-    
-    // Показать попап для комментария
-    setShowPopup('dislike');
-    setCommentText('');
+    // Dislike: open popup only if shift; else one-click + optional regen on last
+    if (e.shiftKey) {
+      setShowPopup('dislike');
+      setCommentText('');
+      return;
+    }
+    onFeedback(message.id, 'dislike');
   };
 
   const handleClose = () => {
     setShowPopup(null);
     setCommentText('');
-  };
-
-  const handleLikeSkip = () => {
-    onFeedback(message.id, 'like');
-    handleClose();
   };
 
   const handleLikeSave = () => {
@@ -107,10 +109,15 @@ export default function MessageFeedback({
     handleClose();
   };
 
+  const handleRemember = () => {
+    onRememberStyle?.(message.id);
+    setRemembered(true);
+    setTimeout(() => setRemembered(false), 2000);
+  };
+
   return (
     <>
-      {/* Кнопки лайк/дизлайк */}
-      <div className="flex items-center gap-0.5">
+      <div className="flex items-center gap-0.5 flex-wrap">
         <button
           onClick={handleLikeClick}
           className={`flex items-center gap-1 px-2 py-1 text-[11px] rounded-md transition-all ${
@@ -118,7 +125,7 @@ export default function MessageFeedback({
               ? 'text-[var(--gem-teal)]'
               : 'text-[var(--text-dim)] hover:bg-[var(--surface-3)]'
           }`}
-          title="Понравилось"
+          title="Нравится (Shift+клик — с комментарием)"
         >
           <ThumbsUp size={10} />
         </button>
@@ -130,28 +137,60 @@ export default function MessageFeedback({
               ? 'text-[var(--gem-red)]'
               : 'text-[var(--text-dim)] hover:bg-[var(--surface-3)]'
           }`}
-          title="Не понравилось"
+          title="Не нравится (Shift+клик — комментарий / regen)"
         >
           <ThumbsDown size={10} />
         </button>
+
+        {onRememberStyle && (
+          <button
+            onClick={handleRemember}
+            className={`flex items-center gap-1 px-2 py-1 text-[11px] rounded-md transition-all ${
+              remembered
+                ? 'text-purple-400'
+                : 'text-[var(--text-dim)] hover:bg-[var(--surface-3)] hover:text-purple-300'
+            }`}
+            title="F-Love: запомнить этот стиль ответа"
+          >
+            <Sparkles size={10} />
+            <span className="hidden sm:inline">{remembered ? 'Ок' : 'Стиль'}</span>
+          </button>
+        )}
+
+        {onShorter && isLast && (
+          <button
+            onClick={() => onShorter(message.id)}
+            className="flex items-center gap-1 px-2 py-1 text-[11px] rounded-md text-[var(--text-dim)] hover:bg-[var(--surface-3)] hover:text-amber-300 transition-all"
+            title="Перегенерировать короче"
+          >
+            <RefreshCw size={10} />
+            <span className="hidden sm:inline">Короче</span>
+          </button>
+        )}
+
+        {onContinueFromCursor && isLast && (
+          <button
+            onClick={() => onContinueFromCursor(message.id)}
+            className="flex items-center gap-1 px-2 py-1 text-[11px] rounded-md text-[var(--text-dim)] hover:bg-[var(--surface-3)] hover:text-[var(--gem-blue)] transition-all"
+            title="Продолжить с конца текущего текста"
+          >
+            <span className="text-[10px]">↪</span>
+            <span className="hidden sm:inline">Далее</span>
+          </button>
+        )}
       </div>
 
-      {/* Модальный попап */}
       {showPopup && (
         <>
-          {/* Backdrop */}
           <div
             className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 animate-in fade-in duration-200"
             onClick={handleClose}
           />
-
-          {/* Modal content - Desktop: центр экрана, Mobile: bottom sheet */}
           <div className="fixed inset-x-0 bottom-0 md:inset-0 z-50 flex items-end md:items-center justify-center p-0 md:p-4 pointer-events-none">
             <div
-              className="bg-[var(--surface-1)] border-t md:border border-[var(--border)] rounded-t-3xl md:rounded-2xl shadow-2xl w-full md:max-w-lg max-h-[85vh] md:max-h-[70vh] overflow-hidden pointer-events-auto animate-in slide-in-from-bottom md:slide-in-from-bottom-4 duration-300"
-              onClick={(e) => e.stopPropagation()}
+              className="bg-[var(--surface-1)] border-t md:border border-[var(--border)] rounded-t-3xl md:rounded-2xl shadow-2xl w-full md:max-w-lg max-h-[85vh] md:max-h-[70vh] overflow-hidden pointer-events-auto"
+              onClick={e => e.stopPropagation()}
             >
-              {/* Header */}
               <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)]">
                 <div className="flex items-center gap-2">
                   {showPopup === 'like' ? (
@@ -178,33 +217,34 @@ export default function MessageFeedback({
                 </button>
               </div>
 
-              {/* Content */}
               <div className="p-5 space-y-4">
                 <textarea
                   value={commentText}
-                  onChange={(e) => setCommentText(e.target.value)}
+                  onChange={e => setCommentText(e.target.value)}
                   placeholder={
                     showPopup === 'like'
-                      ? 'Опишите что вам понравилось в этом ответе (необязательно)'
-                      : 'Опишите что не так — это поможет улучшить следующий ответ'
+                      ? 'Опционально: что именно зашло'
+                      : 'Что исправить в следующем ответе'
                   }
-                  className="w-full text-sm bg-[var(--surface-2)] border border-[var(--border)] rounded-xl px-4 py-3 resize-none text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:outline-none focus:border-[var(--gem-teal)] focus:ring-2 focus:ring-[var(--gem-teal)]/20 min-h-[120px] md:min-h-[100px]"
+                  className="w-full text-sm bg-[var(--surface-2)] border border-[var(--border)] rounded-xl px-4 py-3 resize-none text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:outline-none focus:border-[var(--gem-teal)] min-h-[100px]"
                   autoFocus
                 />
 
-                {/* Buttons */}
                 <div className="flex flex-col-reverse md:flex-row gap-2 md:gap-3 md:justify-end">
                   {showPopup === 'like' ? (
                     <>
                       <button
-                        onClick={handleLikeSkip}
-                        className="w-full md:w-auto px-5 py-3 md:py-2.5 text-sm text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-xl transition-all font-medium"
+                        onClick={() => {
+                          onFeedback(message.id, 'like');
+                          handleClose();
+                        }}
+                        className="w-full md:w-auto px-5 py-2.5 text-sm text-[var(--text-dim)] hover:bg-[var(--surface-3)] rounded-xl"
                       >
-                        Пропустить
+                        Без комментария
                       </button>
                       <button
                         onClick={handleLikeSave}
-                        className="w-full md:w-auto px-5 py-3 md:py-2.5 bg-[var(--gem-teal)] text-black text-sm rounded-xl font-semibold hover:opacity-90 transition-all shadow-lg shadow-[var(--gem-teal)]/20"
+                        className="w-full md:w-auto px-5 py-2.5 bg-[var(--gem-teal)] text-black text-sm rounded-xl font-semibold"
                       >
                         Сохранить
                       </button>
@@ -213,16 +253,16 @@ export default function MessageFeedback({
                     <>
                       <button
                         onClick={handleDislikeMark}
-                        className="w-full md:w-auto px-5 py-3 md:py-2.5 text-sm text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-xl transition-all font-medium"
+                        className="w-full md:w-auto px-5 py-2.5 text-sm text-[var(--text-dim)] hover:bg-[var(--surface-3)] rounded-xl"
                       >
                         Только отметить
                       </button>
                       {isLast && (
                         <button
                           onClick={handleDislikeRegenerate}
-                          className="w-full md:w-auto px-5 py-3 md:py-2.5 bg-[var(--gem-red)] text-white text-sm rounded-xl font-semibold hover:opacity-90 transition-all shadow-lg shadow-[var(--gem-red)]/20"
+                          className="w-full md:w-auto px-5 py-2.5 bg-[var(--gem-red)] text-white text-sm rounded-xl font-semibold"
                         >
-                          Регенерировать ↺
+                          Перегенерировать
                         </button>
                       )}
                     </>

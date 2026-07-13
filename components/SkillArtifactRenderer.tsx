@@ -77,9 +77,73 @@ export function SkillArtifactRenderer({ artifact, onAnnotationClick, onOpenAgent
       return <ArtifactTable artifact={artifact} />;
     case 'document':
       return <ArtifactDocument artifact={artifact} />;
+    case 'file_edit':
+      return <ArtifactFileEdit artifact={artifact} />;
     default:
       return null;
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// File edit card — compact, no full-file dump
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ArtifactFileEdit({ artifact }: Props) {
+  const [expanded, setExpanded] = useState(false);
+  if (artifact.data.kind !== 'file_edit') return null;
+
+  const d = artifact.data;
+  const ok = d.failed === 0 && d.applied > 0;
+
+  return (
+    <div className="my-3 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] overflow-hidden">
+      <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+        <div className="min-w-0 flex items-center gap-2">
+          <span className="text-base">📝</span>
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-[var(--text-primary)] truncate">
+              {d.fileName}
+            </div>
+            <div className="text-[11px] text-[var(--text-dim)]">
+              {ok
+                ? `Применено правок: ${d.applied}`
+                : d.applied > 0
+                  ? `Частично: ${d.applied} ок, ${d.failed} не найдено`
+                  : `Не применено (${d.failed} fail)`}
+              {d.description ? ` · ${d.description}` : ''}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <span
+            className={`text-[10px] px-2 py-0.5 rounded-full border ${
+              ok
+                ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10'
+                : 'border-amber-500/30 text-amber-300 bg-amber-500/10'
+            }`}
+          >
+            editor
+          </span>
+          {d.preview && (
+            <button
+              onClick={() => setExpanded(v => !v)}
+              className="text-[11px] px-2 py-1 rounded-lg bg-[var(--surface-3)] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+            >
+              {expanded ? 'Скрыть' : 'Превью'}
+            </button>
+          )}
+        </div>
+      </div>
+      {expanded && d.preview && (
+        <pre className="px-3 pb-3 text-[11px] font-mono text-[var(--text-primary)]/90 whitespace-pre-wrap border-t border-[var(--border)] pt-2 max-h-64 overflow-auto">
+          {d.preview}
+        </pre>
+      )}
+      <div className="px-3 pb-2 text-[10px] text-[var(--text-dim)]">
+        Полный файл — в правой панели File Editor (Diff / Accept / Download)
+      </div>
+    </div>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

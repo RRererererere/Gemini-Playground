@@ -95,6 +95,14 @@ import {
   buildCondensationPrompt,
 } from '@/lib/rpg-style-profile';
 import {
+  recordStyleEdit,
+  recordStyleFeedback,
+  recordAbortAccepted,
+  addCustomRule,
+  SHORTER_HINT,
+} from '@/lib/f-love-profile';
+import { installSkill, isSkillActive } from '@/lib/skills/registry';
+import {
   loadRPGFeedbackSettings,
   saveRPGFeedbackSettings,
   DEFAULT_RPG_FEEDBACK_SETTINGS,
@@ -244,6 +252,9 @@ export default function Home() {
     livePreviewRef,
     openFiles, setOpenFiles, activeFileId, setActiveFileId,
     showFileEditor, setShowFileEditor, pendingEdits, setPendingEdits,
+    checkFilesForEditor,
+    acceptFileEditorEdits, rejectFileEditorEdits, manualFileEditorEdit,
+    closeFileEditorFile, revertFileEditorFile, fileEditorChatKey,
     mobileCanvasState, setMobileCanvasState, pendingCanvasElement, setPendingCanvasElement,
     appMode, setAppMode, activeAgentId, setActiveAgentId, arena,
     showToolBuilder, setShowToolBuilder, editingTool, setEditingTool,
@@ -263,7 +274,6 @@ export default function Home() {
     deepThink,
     settingsSidebarProps,
     chatSidebarArenaProps,
-    checkFilesForEditor,
   } = app;
 
   // Agent Chat State
@@ -287,6 +297,16 @@ export default function Home() {
       console.warn('[storage] Repair result:', result.warning);
     }
   }, []); // только один раз при маунте
+
+  // F-Love skill always available (style learning)
+  useEffect(() => {
+    try {
+      if (!isSkillActive('f-love')) {
+        installSkill('f-love');
+        setSkillsRevision(r => r + 1);
+      }
+    } catch { /* ignore */ }
+  }, [setSkillsRevision]);
 
   useEffect(() => {
     const handleStatus = (e: Event) => {
@@ -410,6 +430,16 @@ export default function Home() {
     if (existing) chatObj.createdAt = existing.createdAt;
 
     await saveChatToStorage(chatObj);
+
+    // File editor: переносим open files с session-id на реальный chatId
+    if (!currentChatId || currentChatId !== chatId) {
+      try {
+        const { migrateEditorChatId } = await import('@/lib/file-editor-bridge');
+        migrateEditorChatId(fileEditorChatKey || currentChatId, chatId);
+      } catch (e) {
+        console.error('[File Editor] migrate chat id failed:', e);
+      }
+    }
     
     // Оптимизация: обновляем savedChats локально вместо перезагрузки всех чатов
     setSavedChats((prev: SavedChat[]) => {
@@ -431,7 +461,7 @@ export default function Home() {
     
     setUnsaved(false);
     return chatObj;
-  }, [currentChatId, chatTitle, model, systemPrompt, deepThinkSystemPrompt, tools, temperature, savedChats]);
+  }, [currentChatId, chatTitle, model, systemPrompt, deepThinkSystemPrompt, tools, temperature, savedChats, fileEditorChatKey]);
 
   // ============ GNP HELPERS ============
   // Ghost Nudge Protocol v2: вспомогательные функции
@@ -659,6 +689,47 @@ export default function Home() {
       let toolRoundCount = 0;
       let shouldContinueLoop = true;
 
+      // ── File Editor: force tool use so model doesn't paste whole file into chat ──
+      const {
+        resolveEditorChatId,
+        openEditableAttachments,
+        hasOpenEditorFiles,
+        buildFileEditorForceInstruction,
+        FILE_EDITOR_TOOL_NAMES,
+        isEditableFile,
+      } = await import('@/lib/file-editor-bridge');
+      const editorChatId = fileEditorChatKey || resolveEditorChatId(currentChatId);
+
+      // Ensure skill is active + editable attachments are open before first request
+      try {
+        const { isSkillActive, installSkill } = await import('@/lib/skills/registry');
+        if (!isSkillActive('file-editor')) installSkill('file-editor');
+      } catch { /* ignore */ }
+
+      const historyFiles = history
+        .filter(m => m.role === 'user' && m.files?.length)
+        .flatMap(m => m.files || [])
+        .filter(f => isEditableFile(f.mimeType, f.name));
+      if (historyFiles.length > 0) {
+        try {
+          await openEditableAttachments(
+            editorChatId,
+            historyFiles.map(f => ({
+              id: f.id,
+              name: f.name,
+              mimeType: f.mimeType,
+              data: f.data,
+            }))
+          );
+        } catch (e) {
+          console.error('[File Editor] pre-open failed:', e);
+        }
+      }
+
+      // Force tools until at least one successful file-editor mutation this generation
+      let forceFileEditorTools = hasOpenEditorFiles(editorChatId);
+      let fileEditorMutated = false;
+
       // ── Ghost Nudge Protocol ──
       const activeProviderInfo = providers.find(p => p.id === (activeModel?.providerId || ''));
       const gnpEnabled = ghostNudgeEnabled && activeProviderInfo?.type !== 'openai' && activeProviderInfo?.type !== 'anthropic';
@@ -753,20 +824,54 @@ export default function Home() {
           }
         }
 
-        // Собираем skill tools
-        const skillTools = collectSkillTools();
+        // Собираем skill tools (file-editor must be present if files open)
+        let skillTools = collectSkillTools();
+        if (forceFileEditorTools || hasOpenEditorFiles(editorChatId)) {
+          const names = new Set(skillTools.map((t: any) => t.name));
+          if (!FILE_EDITOR_TOOL_NAMES.some(n => names.has(n))) {
+            // Skill tools missing — re-collect after forced install
+            try {
+              const { installSkill } = await import('@/lib/skills/registry');
+              installSkill('file-editor');
+            } catch { /* ignore */ }
+            skillTools = collectSkillTools();
+          }
+        }
         
         // Пересобираем промпт внутри цикла (image context обновляется после zoom)
+        // chatId = editorChatId so OPEN FILES section matches bridge storage
         const loopBuilt = buildSystemPromptLayers({
           messages: history,
           systemPrompt,
-          chatId: currentChatId,
+          chatId: editorChatId,
           memoryEnabled,
           config: contextConfig,
           handleSkillEvent,
           deepThinkEnhancedPrompt: deepThinkEnhancedForRequest,
         });
         const effectiveSystemPromptWithImages = loopBuilt.text;
+
+        // Inject mandatory tool-use block into the ORIGINAL user turn only (not tool-response turns)
+        let messagesForApi = contentsForRequest;
+        const forceInstr =
+          forceFileEditorTools && toolRoundCount === 0
+            ? buildFileEditorForceInstruction(editorChatId)
+            : '';
+        if (forceInstr) {
+          // First user message in this request that still has text/inlineData (not pure functionResponse)
+          let injected = false;
+          messagesForApi = contentsForRequest.map((m: any) => {
+            if (injected || m.role !== 'user') return m;
+            const parts = Array.isArray(m.parts) ? m.parts : [];
+            const isToolResponseTurn = parts.some((p: any) => p && 'functionResponse' in p);
+            if (isToolResponseTurn) return m;
+            injected = true;
+            return {
+              ...m,
+              parts: [{ text: forceInstr + '\n\n' }, ...parts],
+            };
+          });
+        }
         
         // Определяем endpoint и параметры в зависимости от типа провайдера
         const endpoint = activeProvider?.type === 'openai'
@@ -775,7 +880,7 @@ export default function Home() {
           ? '/api/anthropic-chat'
           : '/api/chat';
         const requestBody: any = {
-          messages: contentsForRequest,
+          messages: messagesForApi,
           model: activeModel?.modelId || model,
           systemInstruction: effectiveSystemPromptWithImages,
           tools: tools,
@@ -789,6 +894,22 @@ export default function Home() {
           maxOutputTokens,
           includeThoughts: deepThinkState.enabled === true,
         };
+
+        // Force function calling while file needs editing
+        if (forceFileEditorTools && !fileEditorMutated) {
+          if (activeProvider?.type === 'openai') {
+            requestBody.toolChoice = 'required';
+          } else if (activeProvider?.type === 'anthropic') {
+            requestBody.toolChoice = { type: 'any' };
+          } else {
+            requestBody.toolConfig = {
+              functionCallingConfig: {
+                mode: 'ANY',
+                allowedFunctionNames: [...FILE_EDITOR_TOOL_NAMES],
+              },
+            };
+          }
+        }
         
         // Для OpenAI/Anthropic-провайдеров добавляем baseUrl
         if (activeProvider?.type === 'openai' || activeProvider?.type === 'anthropic') {
@@ -1073,10 +1194,21 @@ export default function Home() {
                 const skillResult = await executeSkillToolCall(
                   name,
                   args as Record<string, unknown>,
-                  currentChatId || '',
+                  editorChatId || fileEditorChatKey || currentChatId || '',
                   history, // Используем history вместо messages — актуальный массив с текущим user сообщением
                   handleSkillEvent
                 );
+
+                // After a successful file mutation, stop forcing tools so model can reply briefly
+                if (
+                  (name === 'edit_file' || name === 'replace_lines' || name === 'create_file') &&
+                  skillResult.functionResponse &&
+                  typeof skillResult.functionResponse === 'object' &&
+                  (skillResult.functionResponse as any).success
+                ) {
+                  fileEditorMutated = true;
+                  forceFileEditorTools = false;
+                }
                 
                 // Добавляем артефакты в сообщение
                 if (skillResult.artifacts.length > 0) {
@@ -1873,7 +2005,7 @@ export default function Home() {
         }
       }, 100); // 100ms достаточно для React batching
     }
-  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, memoryEnabled, activeProvider, maxOutputTokens, handleSkillEvent, maxToolRounds, maxMemoryCalls, gnpGetTailWords, gnpTrimContinuation]);
+  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, fileEditorChatKey, memoryEnabled, activeProvider, maxOutputTokens, handleSkillEvent, maxToolRounds, maxMemoryCalls, gnpGetTailWords, gnpTrimContinuation]);
 
   // Auto-open sheet for ai_interactive sites when streaming ends
   useEffect(() => {
@@ -1918,6 +2050,15 @@ export default function Home() {
     const newMessages = [...messages, userMsg, assistantMsg];
     setMessages(newMessages);
 
+    // File Editor: сразу открываем txt/code в панели (мост skill↔UI)
+    if (files.length > 0) {
+      try {
+        await checkFilesForEditor(files);
+      } catch (e) {
+        console.error('[File Editor] auto-open failed:', e);
+      }
+    }
+
     addLogEntry({
       type: 'send', source: 'chat',
       chatId: currentChatId || undefined,
@@ -1931,7 +2072,7 @@ export default function Home() {
 
     const historyToSend = [...messages, userMsg];
     await streamGeneration(historyToSend, assistantMsgId, false);
-  }, [selectedApiKey, model, isStreaming, messages, streamGeneration, selectedApiKeySuffix, activeModel, currentChatId]);
+  }, [selectedApiKey, model, isStreaming, messages, streamGeneration, selectedApiKeySuffix, activeModel, currentChatId, checkFilesForEditor]);
 
   const handleRegenerate = useCallback(async () => {
     if (isStreaming || messages.length === 0) return;
@@ -2018,19 +2159,17 @@ export default function Home() {
     await streamGeneration(messages, lastMsg.id, true);
   }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
 
-  // ============ RPG FEEDBACK ============
+  // ============ RPG FEEDBACK + F-LOVE ============
   const handleFeedback = useCallback((
     messageId: string,
     rating: 'like' | 'dislike',
     comment?: string
   ) => {
-    // 1. Найти сообщение и проверить toggle
     const msg = messages.find(m => m.id === messageId);
     if (!msg) return;
 
     const isToggleOff = msg.feedback?.rating === rating;
 
-    // 2. Добавить в RPG Style Profile ДО setMessages (избегаем side effect)
     if (!isToggleOff) {
       const excerpt = getVisibleMessageText(msg.parts).slice(0, 200);
       addFeedbackEntry({
@@ -2039,9 +2178,12 @@ export default function Home() {
         excerpt,
         timestamp: Date.now()
       });
+      // F-Love profile (primary style learner)
+      try {
+        recordStyleFeedback({ rating, comment, excerpt, source: 'thumb' });
+      } catch { /* ignore */ }
     }
 
-    // 3. Лог: before = текущий feedback, after = новый (или undefined при toggle off)
     addLogEntry({
       type: 'feedback', source: 'chat',
       chatId: currentChatId || undefined,
@@ -2054,14 +2196,77 @@ export default function Home() {
       ),
     });
 
-    // 4. Обновить message.feedback в массиве messages
     setMessages(prev => prev.map(m =>
       m.id !== messageId ? m :
       isToggleOff
-        ? { ...m, feedback: undefined }          // toggle off
+        ? { ...m, feedback: undefined }
         : { ...m, feedback: { rating, comment, timestamp: Date.now() } }
     ));
-  }, [messages, currentChatId]); // добавляем messages в deps т.к. используем его напрямую
+  }, [messages, currentChatId]);
+
+  const handleRememberStyle = useCallback((messageId: string) => {
+    const msg = messages.find(m => m.id === messageId);
+    if (!msg || msg.role !== 'model') return;
+    const text = getVisibleMessageText(msg.parts);
+    try {
+      recordStyleFeedback({
+        rating: 'like',
+        comment: 'Эталон стиля (кнопка «Стиль»)',
+        excerpt: text.slice(0, 200),
+        source: 'edit',
+      });
+      if (text.length < 400) addCustomRule('Эталонные ответы — короткие (до ~400 символов, если контекст позволяет).');
+      if (!/\*[^*\n]+\*/.test(text)) addCustomRule('Не использовать *действия* в звёздочках (эталон без них).');
+      if (!/\*\*/.test(text)) addCustomRule('Без **markdown** жирного, если не просили.');
+    } catch (e) {
+      console.error('[F-Love] remember style', e);
+    }
+    handleFeedback(messageId, 'like', 'Запомненный стиль');
+  }, [messages, handleFeedback]);
+
+  const handleShorter = useCallback(async (messageId: string) => {
+    if (isStreaming) return;
+    const msgIdx = messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+    const badMessage = messages[msgIdx];
+    const historyBefore = messages.slice(0, msgIdx);
+    recordStyleFeedback({
+      rating: 'dislike',
+      comment: 'Слишком длинно — нужна короче',
+      excerpt: getVisibleMessageText(badMessage.parts).slice(0, 120),
+      source: 'shorter',
+    });
+
+    const hint: Message = {
+      id: generateId(),
+      role: 'user',
+      parts: [{ text: SHORTER_HINT }],
+      kind: 'bridge_data',
+    };
+    const newMsgId = generateId();
+    setMessages([
+      ...historyBefore,
+      { ...badMessage, kind: 'regenerated_hidden' },
+      hint,
+      {
+        id: newMsgId,
+        role: 'model',
+        parts: [{ text: '' }],
+        isStreaming: true,
+        modelName: model,
+        apiKeySuffix: selectedApiKeySuffix || undefined,
+      },
+    ]);
+    await streamGeneration([...historyBefore, hint], newMsgId, false);
+  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
+
+  const handleContinueFromCursor = useCallback(async (messageId: string) => {
+    if (isStreaming) return;
+    const msg = messages.find(m => m.id === messageId);
+    if (!msg || msg.role !== 'model') return;
+    // Append-mode continue from current text (after manual edit / stop)
+    await streamGeneration(messages, messageId, true);
+  }, [isStreaming, messages, streamGeneration]);
 
   const handleRegenerateWithFeedback = useCallback(async (
     messageId: string,
@@ -2361,6 +2566,18 @@ export default function Home() {
       chatId: currentChatId || undefined,
       messageId: id, before, after,
     });
+
+    // F-Love: учимся на правках model-сообщений
+    if (msg.role === 'model') {
+      try {
+        const beforeText = before.text || getVisibleMessageText(msg.parts);
+        const afterText = after.text || getVisibleMessageText(newParts);
+        recordStyleEdit({ messageId: id, before: beforeText, after: afterText });
+      } catch (e) {
+        console.error('[F-Love] record edit failed', e);
+      }
+    }
+
     if (msg.role === 'user') {
       setMessages(prev => prev.map(m =>
         m.id === id ? { ...m, parts: newParts, forceEdit: false } : m
@@ -2411,92 +2628,24 @@ export default function Home() {
     });
   }, [messages, currentChatId]);
 
-  // ============ FILE EDITOR HANDLERS ============
+  // ============ FILE EDITOR HANDLERS (bridge) ============
   const handleAcceptEdits = useCallback((fileId: string) => {
-    if (!currentChatId) return;
-    
-    setOpenFiles(prev => {
-      const updated = prev.map(f => {
-        if (f.id !== fileId) return f;
-        
-        // Принимаем изменения: текущий content становится новым baseline (originalContent)
-        return {
-          ...f,
-          originalContent: f.content, // ← ГЛАВНОЕ: сдвигаем baseline
-          isDirty: false,
-          history: [...f.history, {
-            content: f.originalContent,
-            description: 'AI edit accepted',
-            timestamp: Date.now()
-          }]
-        };
-      });
-      
-      // Синхронизируем с localStorage
-      const storageKey = `skill_data_file-editor_${currentChatId}_file_editor_open_files`;
-      localStorage.setItem(storageKey, JSON.stringify(updated));
-      
-      return updated;
-    });
-    
-    setPendingEdits(prev => {
-      const next = new Map(prev);
-      next.delete(fileId);
-      return next;
-    });
-    
-    // Логируем для отладки
-    console.log('[File Editor] Изменения приняты — originalContent обновлён');
-  }, [currentChatId]);
+    acceptFileEditorEdits(fileId);
+  }, [acceptFileEditorEdits]);
 
   const handleRejectEdits = useCallback((fileId: string) => {
-    if (!currentChatId) return;
-    
-    setOpenFiles(prev => {
-      const updated = prev.map(f => {
-        if (f.id !== fileId) return f;
-        
-        // Reject: откатываем к originalContent (состояние ДО AI-правки)
-        return {
-          ...f,
-          content: f.originalContent,
-          isDirty: false,
-        };
-      });
-      
-      // Синхронизируем с localStorage
-      const storageKey = `skill_data_file-editor_${currentChatId}_file_editor_open_files`;
-      localStorage.setItem(storageKey, JSON.stringify(updated));
-      
-      return updated;
-    });
-    
-    setPendingEdits(prev => {
-      const next = new Map(prev);
-      next.delete(fileId);
-      return next;
-    });
-    
-    // Логируем для отладки
-    console.log('[File Editor] Изменения отклонены');
-  }, [currentChatId]);
+    rejectFileEditorEdits(fileId);
+  }, [rejectFileEditorEdits]);
 
   const handleManualEdit = useCallback((fileId: string, newContent: string) => {
-    setOpenFiles(prev => prev.map(f => {
-      if (f.id !== fileId) return f;
-      return {
-        ...f,
-        content: newContent,
-        isDirty: newContent !== f.originalContent
-      };
-    }));
-  }, []);
+    manualFileEditorEdit(fileId, newContent);
+  }, [manualFileEditorEdit]);
 
   const handleDownloadFile = useCallback((fileId: string) => {
     const file = openFiles.find(f => f.id === fileId);
     if (!file) return;
-    
-    const blob = new Blob([file.content], { type: file.mimeType });
+
+    const blob = new Blob([file.content], { type: file.mimeType || 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -2508,45 +2657,12 @@ export default function Home() {
   }, [openFiles]);
 
   const handleRevertFile = useCallback((fileId: string) => {
-    setOpenFiles(prev => prev.map(f => {
-      if (f.id !== fileId) return f;
-      return {
-        ...f,
-        content: f.originalContent,
-        isDirty: false
-      };
-    }));
-  }, []);
+    revertFileEditorFile(fileId);
+  }, [revertFileEditorFile]);
 
   const handleCloseFile = useCallback((fileId: string) => {
-    if (!currentChatId) return;
-    
-    // Удаляем файл из state
-    setOpenFiles(prev => {
-      const updated = prev.filter(f => f.id !== fileId);
-      
-      // Обновляем localStorage
-      const storageKey = `skill_data_file-editor_${currentChatId}_file_editor_open_files`;
-      if (updated.length > 0) {
-        localStorage.setItem(storageKey, JSON.stringify(updated));
-      } else {
-        localStorage.removeItem(storageKey);
-      }
-      
-      return updated;
-    });
-    
-    // Если закрыли активный файл, переключаемся на другой
-    if (activeFileId === fileId) {
-      const remaining = openFiles.filter(f => f.id !== fileId);
-      if (remaining.length > 0) {
-        setActiveFileId(remaining[0].id);
-      } else {
-        setActiveFileId(null);
-        setShowFileEditor(false);
-      }
-    }
-  }, [currentChatId, activeFileId, openFiles]);
+    closeFileEditorFile(fileId);
+  }, [closeFileEditorFile]);
 
   const handleEditDeepThinkAnalysis = useCallback(async (id: string, analysis: DeepThinkAnalysis) => {
     // Найти сообщение и перегенерировать с новым анализом
@@ -2561,8 +2677,30 @@ export default function Home() {
   }, [messages, streamGeneration]);
 
   const handleStop = useCallback(() => {
+    // Abort-as-accept: partial model text is treated as accepted style signal
+    try {
+      const streaming = messagesRef.current.find(m => m.isStreaming && m.role === 'model');
+      const partial = streaming ? getVisibleMessageText(streaming.parts) : '';
+      if (partial.trim().length > 20) {
+        recordAbortAccepted(partial);
+        if (streaming) {
+          setMessages(prev => prev.map(m =>
+            m.id === streaming.id
+              ? {
+                  ...m,
+                  isPartial: true,
+                  feedback: m.feedback || { rating: 'like' as const, comment: 'Стоп = принять', timestamp: Date.now() },
+                }
+              : m
+          ));
+        }
+      }
+    } catch (e) {
+      console.error('[F-Love] abort-accept', e);
+    }
+
     abortControllerRef.current?.abort();
-    abortDeepThink(); // Отменяем DeepThink если он работает
+    abortDeepThink();
     if (currentExecutor) {
       currentExecutor.cancel();
       setCurrentExecutor(null);
@@ -2661,10 +2799,18 @@ export default function Home() {
     }
   }, [activeAgentId, isStreaming, messages, currentChatId, saveCurrentChat]);
 
-  const handleAddUserMessage = useCallback(() => {
-    const msg: Message = { id: generateId(), role: 'user', parts: [{ text: '' }] };
+  /** Пустой ход модели — для ручного ввода/правки ответа ассистента (не user). */
+  const handleAddModelMessage = useCallback(() => {
+    const msg: Message = {
+      id: generateId(),
+      role: 'model',
+      parts: [{ text: '' }],
+      modelName: model || undefined,
+      apiKeySuffix: selectedApiKeySuffix || undefined,
+    };
     setMessages(prev => [...prev, msg]);
-  }, []);
+    setUnsaved(true);
+  }, [model, selectedApiKeySuffix]);
 
   const clearChatState = useCallback(() => {
     if (messages.length > 0) {
@@ -3423,6 +3569,9 @@ export default function Home() {
                       onOpenAgentChat={(agentId) => handleOpenAgent(agentId, currentChatId || undefined)}
                       onFeedback={appMode === 'arena' ? undefined : handleFeedback}
                       onRegenerateWithFeedback={appMode === 'arena' ? undefined : handleRegenerateWithFeedback}
+                      onRememberStyle={appMode === 'arena' ? undefined : handleRememberStyle}
+                      onShorter={appMode === 'arena' ? undefined : handleShorter}
+                      onContinueFromCursor={appMode === 'arena' ? undefined : handleContinueFromCursor}
                       onRegenerateTextOnly={appMode === 'arena' ? undefined : handleRegenerateTextOnly}
                       onDismissBlocked={appMode === 'arena' ? undefined : handleDismissBlocked}
                       onEditDeepThinking={appMode === 'arena' ? undefined : handleEditDeepThinking}
@@ -3493,7 +3642,7 @@ export default function Home() {
               : handleSend
             }
             onStop={appMode === 'arena' ? arena.stopStreaming : appMode === 'agents' ? () => window.dispatchEvent(new CustomEvent('agent-chat-stop')) : handleStop}
-            onAddUserMessage={appMode === 'arena' ? () => {} : handleAddUserMessage}
+            onAddUserMessage={appMode === 'arena' ? () => {} : handleAddModelMessage}
             isStreaming={appMode === 'arena' ? arena.isStreaming : appMode === 'agents' ? isAgentRunning : isStreaming}
             disabled={appMode === 'arena' ? !arena.activeSession : appMode === 'agents' ? !agentChatAgentId : !hasApiAndModel}
             canContinue={appMode === 'arena' ? (

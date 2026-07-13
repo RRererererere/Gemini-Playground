@@ -137,13 +137,24 @@ export default function FileEditorCanvas({
   onRevert,
   onClose
 }: FileEditorCanvasProps) {
-  const [viewMode, setViewMode] = useState<ViewMode>('diff');
+  const [viewMode, setViewMode] = useState<ViewMode>('editor');
   const [copied, setCopied] = useState(false);
   const [isAccepting, setIsAccepting] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   
   const activeFile = openFiles.find(f => f.id === activeFileId);
-  const hasPendingEdits = activeFile && pendingEdits.has(activeFile.id);
+  // AI-правки → pendingEdits; fallback: dirty + history (AI touch) if map lost
+  const hasPendingEdits =
+    !!activeFile &&
+    (pendingEdits.has(activeFile.id) ||
+      (activeFile.isDirty &&
+        activeFile.history.length > 0 &&
+        activeFile.content !== activeFile.originalContent));
+
+  // При AI-правках автоматически показываем Diff
+  React.useEffect(() => {
+    if (hasPendingEdits) setViewMode('diff');
+  }, [hasPendingEdits, activeFileId]);
   
   const diffLines = useMemo(() => {
     if (!activeFile) return [];
@@ -177,8 +188,8 @@ export default function FileEditorCanvas({
       <div className="h-full flex items-center justify-center bg-[var(--surface-1)] text-[var(--text-dim)]">
         <div className="text-center">
           <FileCode size={48} className="mx-auto mb-3 opacity-30" />
-          <p className="text-sm">Прикрепите code-файл для редактирования</p>
-          <p className="text-xs mt-1 opacity-60">Поддерживаются: .ts, .js, .py, .html, .css и др.</p>
+          <p className="text-sm">Прикрепите .txt / code-файл для редактирования</p>
+          <p className="text-xs mt-1 opacity-60">AI правит точечно (SEARCH/REPLACE), не переписывая файл целиком</p>
         </div>
       </div>
     );
@@ -326,7 +337,7 @@ export default function FileEditorCanvas({
             <button
               onClick={() => onRevert(activeFile.id)}
               className="flex items-center gap-1 px-2 py-1.5 text-xs text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-lg transition-all"
-              title="Revert to original"
+              title="Вернуть к оригиналу"
             >
               <RotateCcw size={14} />
             </button>

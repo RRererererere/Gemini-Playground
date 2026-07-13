@@ -827,15 +827,15 @@ export default function ChatInput({
               </button>
             )}
 
-            {/* Add user message turn */}
+            {/* Add empty model (assistant) turn for manual typing / seeding */}
             <button
               onClick={onAddUserMessage}
               disabled={disabled || isStreaming}
               className="flex items-center gap-1 px-3 sm:px-2 h-10 sm:h-8 text-sm sm:text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Добавить пустой ответ пользователя"
+              title="Добавить пустой ответ модели (можно вписать вручную)"
             >
               <Plus size={16} className="sm:w-[13px] sm:h-[13px]" />
-              <span className="hidden sm:block">Ход</span>
+              <span className="hidden sm:block">Ход AI</span>
             </button>
           </div>
 

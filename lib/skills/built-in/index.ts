@@ -10,6 +10,7 @@ import imageAnalyserSkill from './image-analyser';
 import { videoFrameExtractorSkill } from './video-frame-extractor/skill';
 import fileEditorSkill from './file-editor';
 import { agentCreatorSkill } from './agent-creator';
+import fLoveSkill from './f-love-skill';
 import type { Skill } from '../types';
 
 export const BUILT_IN_SKILLS: Skill[] = [
@@ -25,6 +26,7 @@ export const BUILT_IN_SKILLS: Skill[] = [
   videoFrameExtractorSkill,
   fileEditorSkill,
   agentCreatorSkill,
+  fLoveSkill,
 ];
 
-export { datetimeSkill, calculatorSkill, urlReaderSkill, notesSkill, qrGeneratorSkill, tableGeneratorSkill, websiteBuilderSkill, officeExportSkill, imageAnalyserSkill, videoFrameExtractorSkill, fileEditorSkill, agentCreatorSkill };
+export { datetimeSkill, calculatorSkill, urlReaderSkill, notesSkill, qrGeneratorSkill, tableGeneratorSkill, websiteBuilderSkill, officeExportSkill, imageAnalyserSkill, videoFrameExtractorSkill, fileEditorSkill, agentCreatorSkill, fLoveSkill };

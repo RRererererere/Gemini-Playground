@@ -59,31 +59,35 @@ function createContext(
   messages: Message[],
   emitter: (event: SkillUIEvent) => void
 ): SkillContext {
-  // Находим последнее user сообщение для attachedFiles
-  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
-  
-  const attachedFiles: AttachedFileRef[] = (lastUserMsg?.files ?? []).map(file => ({
+  // Все user-файлы из истории (последние перекрывают старые по id) —
+  // иначе file-editor «теряет» txt после следующего сообщения без вложения.
+  const filesById = new Map<string, NonNullable<Message['files']>[number]>();
+  for (const msg of messages) {
+    if (msg.role !== 'user' || !msg.files?.length) continue;
+    for (const file of msg.files) {
+      filesById.set(file.id, file);
+    }
+  }
+
+  const attachedFiles: AttachedFileRef[] = Array.from(filesById.values()).map(file => ({
     id: file.id,
     name: file.name,
     mimeType: file.mimeType,
     size: file.size,
     getData: async () => {
-      // Если data уже в памяти — возвращаем
       if (file.data) return file.data;
-      // Иначе загружаем из IndexedDB
       const data = await loadFileData(file.id);
       return data ?? '';
     },
     getBlob: async () => {
-      const base64 = file.data || await loadFileData(file.id) || '';
+      const base64 = file.data || (await loadFileData(file.id)) || '';
       const bytes = atob(base64);
       const arr = new Uint8Array(bytes.length);
       for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
       return new Blob([arr], { type: file.mimeType });
-    }
+    },
   }));
 
-  // Создаем маппинг ID изображений для прямого доступа
   const imageAliases = createImageAliases(messages);
 
   return {

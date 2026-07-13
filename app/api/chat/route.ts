@@ -118,6 +118,8 @@ export async function POST(request: NextRequest) {
       thinkingBudget, // -1 = авто, 0 = выкл, N = конкретное
       maxOutputTokens, // Максимальное количество токенов в ответе
       includeThoughts, // request model thoughts (Gemini 2.x/3.x)
+      /** Optional Gemini toolConfig, e.g. force function calling for file editor */
+      toolConfig,
     } = body;
 
     if (!apiKey) {
@@ -244,6 +246,11 @@ export async function POST(request: NextRequest) {
       // Добавляем инструменты памяти к существующим
       requestBody.tools[0].functionDeclarations.push(...memoryTools);
       console.log('[API] Total tools after adding memory:', requestBody.tools[0].functionDeclarations.length);
+    }
+
+    // Forced / constrained function calling (file editor, etc.)
+    if (toolConfig && typeof toolConfig === 'object') {
+      requestBody.toolConfig = toolConfig;
     }
 
     // Режим размышлений (актуально в основном для Gemini 2.x/3.x).

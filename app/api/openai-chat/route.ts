@@ -20,6 +20,8 @@ export async function POST(request: NextRequest) {
       maxOutputTokens,
       tools,      // ChatTool[] — user-defined tools
       memoryTools, // ChatTool[] — memory / skill tools (same shape)
+      /** 'auto' | 'required' | { type:'function', function:{ name } } */
+      toolChoice,
     } = body;
 
     // DEBUG: Log incoming request
@@ -80,6 +82,9 @@ export async function POST(request: NextRequest) {
     
     if (oaiTools.length > 0) {
       requestBody.tools = oaiTools;
+      if (toolChoice) {
+        requestBody.tool_choice = toolChoice;
+      }
     }
 
     // ── Start streaming with raw fetch ────────────────────────────────────────
