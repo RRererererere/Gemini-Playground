@@ -1,10 +1,12 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { X, Search, List, Network, Trash2, Edit2, Check } from 'lucide-react';
+import { X, Search, List, Network, Trash2, Edit2, Check, Image as ImageIcon } from 'lucide-react';
 import type { Memory, MemoryScope, MemoryCategory } from '@/lib/memory-store';
 import { getMemories, updateMemory, forgetMemory } from '@/lib/memory-store';
+import { getImageMemoryIndex, forgetImageMemory, type ImageMemoryMeta } from '@/lib/image-memory-store';
 import MemoryGraph from './MemoryGraph';
+import ImageMemoryDetailModal from './ImageMemoryDetailModal';
 
 interface MemoryModalProps {
   open: boolean;
@@ -44,16 +46,44 @@ export default function MemoryModal({ open, onClose, chatId }: MemoryModalProps)
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [imageMemories, setImageMemories] = useState<ImageMemoryMeta[]>([]);
+  const [showImages, setShowImages] = useState(true);
+  const [selectedImageMemoryId, setSelectedImageMemoryId] = useState<string | null>(null);
+  const [imageSearchQuery, setImageSearchQuery] = useState('');
 
   const loadMemories = () => {
     const mems = getMemories(activeTab, activeTab === 'local' ? chatId : undefined);
     setMemories(mems);
+    
+    // Загружаем image memories
+    const allImageMems = getImageMemoryIndex();
+    console.log('[MemoryModal] Loaded image memories:', allImageMems.length, allImageMems);
+    const filteredImageMems = allImageMems.filter(img => {
+      if (activeTab === 'global') return img.scope === 'global';
+      if (activeTab === 'local' && chatId) return img.scope === 'local' && img.savedFromChatId === chatId;
+      return false;
+    });
+    console.log('[MemoryModal] Filtered image memories:', filteredImageMems.length, 'for scope:', activeTab);
+    setImageMemories(filteredImageMems);
   };
 
   useEffect(() => {
     if (open) {
       loadMemories();
     }
+  }, [open, activeTab, chatId]);
+
+  // Слушаем события сохранения image memory
+  useEffect(() => {
+    if (!open) return;
+    
+    const handleImageMemorySaved = () => {
+      console.log('[MemoryModal] Image memory saved event received, reloading...');
+      loadMemories();
+    };
+    
+    window.addEventListener('imageMemorySaved', handleImageMemorySaved);
+    return () => window.removeEventListener('imageMemorySaved', handleImageMemorySaved);
   }, [open, activeTab, chatId]);
 
   useEffect(() => {
@@ -88,6 +118,17 @@ export default function MemoryModal({ open, onClose, chatId }: MemoryModalProps)
 
     return result;
   }, [memories, searchQuery, categoryFilter, sortMode]);
+
+  const filteredImageMemories = useMemo(() => {
+    if (!imageSearchQuery.trim()) return imageMemories;
+    
+    const q = imageSearchQuery.toLowerCase();
+    return imageMemories.filter(img =>
+      img.description.toLowerCase().includes(q) ||
+      img.tags.some(tag => tag.toLowerCase().includes(q)) ||
+      img.entities.some(entity => entity.toLowerCase().includes(q))
+    );
+  }, [imageMemories, imageSearchQuery]);
 
   const handleDelete = (id: string) => {
     forgetMemory(id, activeTab, activeTab === 'local' ? chatId : undefined);
@@ -179,22 +220,50 @@ export default function MemoryModal({ open, onClose, chatId }: MemoryModalProps)
                 <Network size={14} />
                 Граф
               </button>
+              
+              {/* Toggle Images */}
+              <button
+                onClick={() => setShowImages(!showImages)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs transition-all ${
+                  showImages
+                    ? 'bg-[var(--surface-3)] text-[var(--text-primary)]'
+                    : 'text-[var(--text-dim)] hover:text-[var(--text-primary)]'
+                }`}
+                title={`${imageMemories.length} изображений`}
+              >
+                <ImageIcon size={14} />
+                {imageMemories.length}
+              </button>
             </div>
           </div>
         </div>
         {/* Filters (только для списка) */}
         {viewMode === 'list' && (
           <div className="flex-shrink-0 border-b border-[var(--border)] px-6 py-3 space-y-3">
-            {/* Search */}
-            <div className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Поиск по тексту..."
-                className="w-full pl-9 pr-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
-              />
+            {/* Search - две строки для текстовой и визуальной памяти */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Поиск текстовой памяти..."
+                  className="w-full pl-9 pr-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
+                />
+              </div>
+              {showImages && (
+                <div className="relative">
+                  <ImageIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-dim)]" />
+                  <input
+                    type="text"
+                    value={imageSearchQuery}
+                    onChange={e => setImageSearchQuery(e.target.value)}
+                    placeholder="Поиск изображений..."
+                    className="w-full pl-9 pr-4 py-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
+                  />
+                </div>
+              )}
             </div>
 
             {/* Category chips */}
@@ -259,7 +328,7 @@ export default function MemoryModal({ open, onClose, chatId }: MemoryModalProps)
         {/* Content */}
         <div className="flex-1 min-h-0 overflow-y-auto p-6">
           {viewMode === 'list' ? (
-            filteredMemories.length === 0 ? (
+            filteredMemories.length === 0 && imageMemories.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center">
                 <div className="w-16 h-16 rounded-2xl bg-[var(--surface-3)] flex items-center justify-center mb-4">
                   <Search size={24} className="text-[var(--text-dim)]" />
@@ -274,7 +343,76 @@ export default function MemoryModal({ open, onClose, chatId }: MemoryModalProps)
                 </p>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-6">
+                {/* Image Memories Section */}
+                {showImages && imageMemories.length > 0 && (
+                  <div>
+                    <h3 className="text-xs font-medium text-[var(--text-muted)] mb-3 flex items-center gap-2">
+                      <ImageIcon size={14} />
+                      Визуальная память ({filteredImageMemories.length})
+                      {imageSearchQuery && ` из ${imageMemories.length}`}
+                    </h3>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                      {filteredImageMemories.map(img => (
+                        <div
+                          key={img.id}
+                          className="group relative rounded-xl border border-[var(--border)] bg-[var(--surface-2)] overflow-hidden hover:border-[var(--border-strong)] transition-all cursor-pointer"
+                          onClick={() => setSelectedImageMemoryId(img.id)}
+                        >
+                          <div className="aspect-square relative">
+                            <img
+                              src={img.thumbnailBase64}
+                              alt={img.description}
+                              className="w-full h-full object-cover"
+                            />
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="absolute bottom-0 left-0 right-0 p-2">
+                                <p className="text-[10px] text-white line-clamp-2 mb-1">
+                                  {img.description}
+                                </p>
+                                <div className="flex items-center gap-1 flex-wrap">
+                                  {img.tags.slice(0, 2).map((tag, i) => (
+                                    <span
+                                      key={i}
+                                      className="px-1.5 py-0.5 rounded bg-white/20 text-[8px] text-white"
+                                    >
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                            <button
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (!confirm('Удалить это изображение из памяти?')) return;
+                                await forgetImageMemory(img.id);
+                                loadMemories();
+                              }}
+                              className="absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded-lg bg-black/50 text-white opacity-0 group-hover:opacity-100 hover:bg-red-500 transition-all z-10"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                          <div className="p-2 space-y-1">
+                            <div className="flex items-center justify-between text-[9px] text-[var(--text-dim)]">
+                              <span>{img.mentions} упоминаний</span>
+                              <span>{new Date(img.created_at).toLocaleDateString('ru-RU')}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Text Memories Section */}
+                {filteredMemories.length > 0 && (
+                  <div>
+                    <h3 className="text-xs font-medium text-[var(--text-muted)] mb-3">
+                      Текстовая память ({filteredMemories.length})
+                    </h3>
+                    <div className="space-y-3">
                 {filteredMemories.map(memory => (
                   <div
                     key={memory.id}
@@ -359,6 +497,9 @@ export default function MemoryModal({ open, onClose, chatId }: MemoryModalProps)
                     )}
                   </div>
                 ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )
           ) : (
@@ -377,6 +518,18 @@ export default function MemoryModal({ open, onClose, chatId }: MemoryModalProps)
           )}
         </div>
       </div>
+      
+      {/* Image Memory Detail Modal */}
+      {selectedImageMemoryId && (
+        <ImageMemoryDetailModal
+          memoryId={selectedImageMemoryId}
+          onClose={() => setSelectedImageMemoryId(null)}
+          onDelete={() => {
+            setSelectedImageMemoryId(null);
+            loadMemories();
+          }}
+        />
+      )}
     </div>
   );
 }

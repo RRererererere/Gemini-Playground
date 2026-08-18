@@ -1,14 +1,16 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Send, Square, Paperclip, X, FileText, Image as ImageIcon,
-  Volume2, Braces, Plus, ArrowRight, Video
+  Volume2, Braces, Plus, ArrowRight, Video, Brain
 } from 'lucide-react';
-import type { AttachedFile } from '@/types';
+import type { AttachedFile, CanvasElement, AnnotationReference } from '@/types';
+import { generateImageId } from '@/lib/imageId';
+import { formatUploadSize } from '@/lib/storage';
 
 interface ChatInputProps {
-  onSend: (text: string, files: AttachedFile[]) => void;
+  onSend: (text: string, files: AttachedFile[], annotationRefs?: AnnotationReference[]) => void;
   onStop: () => void;
   onAddUserMessage: () => void;
   isStreaming: boolean;
@@ -17,6 +19,12 @@ interface ChatInputProps {
   onContinue: () => void;
   canRun: boolean;
   onRun: () => void;
+  pendingCanvasElement?: CanvasElement | null;
+  onCanvasElementConsumed?: () => void;
+  onAnnotationClick?: (text: string) => void;
+  deepThinkEnabled?: boolean;
+  onDeepThinkToggle?: () => void;
+  maxUploadSizeMB?: number;
 }
 
 const ACCEPTED_TYPES = {
@@ -41,7 +49,33 @@ const ACCEPTED_TYPES = {
   'video/3gpp2': ['.3g2'],
   'text/plain': ['.txt'],
   'application/json': ['.json'],
+  // Code files
+  'text/typescript': ['.ts', '.tsx'],
+  'text/javascript': ['.js', '.jsx', '.mjs', '.cjs'],
+  'text/python': ['.py'],
+  'text/css': ['.css', '.scss', '.sass', '.less'],
+  'text/html': ['.html', '.htm'],
+  'text/markdown': ['.md', '.mdx'],
+  'text/yaml': ['.yaml', '.yml'],
+  'text/x-rust': ['.rs'],
+  'text/x-go': ['.go'],
+  'text/x-java': ['.java'],
+  'text/x-c': ['.c', '.cpp', '.h', '.hpp'],
+  'text/x-shellscript': ['.sh', '.bash'],
+  'text/x-toml': ['.toml'],
+  'text/x-env': ['.env.example'],
+  'text/xml': ['.xml', '.svg'],
+  'text/x-php': ['.php'],
+  'text/x-ruby': ['.rb'],
+  'text/x-swift': ['.swift'],
+  'text/x-kotlin': ['.kt', '.kts'],
+  'text/x-sql': ['.sql'],
+  'application/x-ndjson': ['.ndjson'],
 };
+
+// Максимальный размер файла в байтах (3.5MB для безопасности, учитывая лимит Vercel 4.5MB)
+// DEPRECATED: теперь используется проп maxUploadSizeMB
+// const MAX_FILE_SIZE = 3.5 * 1024 * 1024;
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -53,6 +87,116 @@ function fileToBase64(file: File): Promise<string> {
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
+  });
+}
+
+function fileToText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve(reader.result as string);
+    };
+    reader.onerror = reject;
+    reader.readAsText(file, 'UTF-8');
+  });
+}
+
+// Сжатие изображения если оно слишком большое
+async function compressImage(file: File, maxSizeMB: number = 3.5): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        
+        // Уменьшаем размер если изображение слишком большое
+        const maxDimension = 2048;
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = (height / width) * maxDimension;
+            width = maxDimension;
+          } else {
+            width = (width / height) * maxDimension;
+            height = maxDimension;
+          }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+        
+        // Используем высокое качество (0.95) с минимальным порогом 0.85
+        let quality = 0.95;
+        const tryCompress = () => {
+          canvas.toBlob(
+            (blob) => {
+              if (!blob) {
+                reject(new Error('Compression failed'));
+                return;
+              }
+              
+              // Если размер все еще большой и качество можно снизить (но не ниже 0.85)
+              if (blob.size > maxSizeMB * 1024 * 1024 && quality > 0.85) {
+                quality -= 0.05;
+                tryCompress();
+                return;
+              }
+              
+              const compressedFile = new File([blob], file.name, {
+                type: 'image/jpeg',
+                lastModified: Date.now(),
+              });
+              resolve(compressedFile);
+            },
+            'image/jpeg',
+            quality
+          );
+        };
+        
+        tryCompress();
+      };
+      img.onerror = () => reject(new Error('Image load failed'));
+      img.src = e.target?.result as string;
+    };
+    reader.onerror = () => reject(new Error('File read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+// Сжатие видео (уменьшение разрешения и битрейта)
+async function compressVideo(file: File, maxSizeMB: number = 3.5): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    video.onloadedmetadata = async () => {
+      try {
+        // Уменьшаем разрешение
+        const scale = Math.min(1, Math.sqrt((maxSizeMB * 1024 * 1024) / file.size));
+        canvas.width = Math.floor(video.videoWidth * scale);
+        canvas.height = Math.floor(video.videoHeight * scale);
+        
+        // Если файл уже достаточно маленький, возвращаем как есть
+        if (file.size <= maxSizeMB * 1024 * 1024) {
+          resolve(file);
+          return;
+        }
+        
+        // Для больших видео предупреждаем пользователя
+        alert(`Видео слишком большое (${(file.size / 1024 / 1024).toFixed(1)}MB). Максимальный размер: ${maxSizeMB}MB. Попробуйте сжать видео перед загрузкой или используйте более короткий клип.`);
+        reject(new Error('Video too large'));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    
+    video.onerror = () => reject(new Error('Video load failed'));
+    video.src = URL.createObjectURL(file);
   });
 }
 
@@ -114,22 +258,157 @@ function FileChip({ file, onRemove }: { file: AttachedFile; onRemove: () => void
   );
 }
 
+// Цвета для типов аннотаций
+const annotationColors: Record<string, string> = {
+  highlight: '#FBBF24',
+  pointer: '#60A5FA',
+  warning: '#F87171',
+  success: '#4ADE80',
+  info: '#A78BFA'
+};
+
 export default function ChatInput({
   onSend, onStop, isStreaming, disabled,
-  canContinue, onContinue, canRun, onRun, onAddUserMessage
+  canContinue, onContinue, canRun, onRun, onAddUserMessage,
+  pendingCanvasElement, onCanvasElementConsumed, onAnnotationClick,
+  deepThinkEnabled, onDeepThinkToggle,
+  maxUploadSizeMB = 3.5,
 }: ChatInputProps) {
+  const MAX_FILE_SIZE = maxUploadSizeMB * 1024 * 1024; // Вычисляем из пропа
+  
   const [text, setText] = useState('');
   const [files, setFiles] = useState<AttachedFile[]>([]);
+  const [annotationRefs, setAnnotationRefs] = useState<AnnotationReference[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [canvasPreview, setCanvasPreview] = useState<CanvasElement | null>(null);
+  const [sendAnimating, setSendAnimating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Expose addAnnotationRef to parent via callback
+  useEffect(() => {
+    if (onAnnotationClick) {
+      // Store addAnnotationRef in a way parent can access it
+      (window as any).__chatInputAddAnnotation = (annotationRef: AnnotationReference) => {
+        setAnnotationRefs(prev => [...prev, annotationRef]);
+        textareaRef.current?.focus();
+      };
+    }
+    return () => {
+      delete (window as any).__chatInputAddAnnotation;
+    };
+  }, [onAnnotationClick]);
+
+  // Listen for append-to-input event from SelectionToolbar
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      setText(prev => prev + customEvent.detail);
+      textareaRef.current?.focus();
+    };
+    window.addEventListener('append-to-input', handler);
+    return () => window.removeEventListener('append-to-input', handler);
+  }, []);
+
+  useEffect(() => {
+    if (pendingCanvasElement) {
+      setCanvasPreview(pendingCanvasElement);
+      onCanvasElementConsumed?.();
+      // Фокус на textarea
+      textareaRef.current?.focus();
+    }
+  }, [pendingCanvasElement, onCanvasElementConsumed]);
+
+  useEffect(() => {
+    let dragCounter = 0;
+    let dragLeaveTimeout: NodeJS.Timeout | null = null;
+
+    const handleWindowDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter++;
+      
+      // Проверяем что это файлы, а не ноды из ReactFlow
+      const types = e.dataTransfer?.types || [];
+      const isFiles = types.includes('Files');
+      const isReactFlow = types.includes('application/reactflow');
+      
+      // Активируем только для файлов, не для нод
+      if (isFiles && !isReactFlow) {
+        if (dragLeaveTimeout) {
+          clearTimeout(dragLeaveTimeout);
+          dragLeaveTimeout = null;
+        }
+        setIsDragging(true);
+      }
+    };
+
+    const handleWindowDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      
+      // Проверяем что это файлы
+      const types = e.dataTransfer?.types || [];
+      const isFiles = types.includes('Files');
+      const isReactFlow = types.includes('application/reactflow');
+      
+      if (isFiles && !isReactFlow) {
+        if (dragLeaveTimeout) {
+          clearTimeout(dragLeaveTimeout);
+          dragLeaveTimeout = null;
+        }
+      }
+    };
+
+    const handleWindowDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter--;
+      
+      // Используем debounce чтобы избежать мерцания при переходе между элементами
+      if (dragCounter <= 0) {
+        dragCounter = 0;
+        if (dragLeaveTimeout) clearTimeout(dragLeaveTimeout);
+        dragLeaveTimeout = setTimeout(() => {
+          setIsDragging(false);
+        }, 100);
+      }
+    };
+
+    const handleWindowDrop = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter = 0;
+      if (dragLeaveTimeout) {
+        clearTimeout(dragLeaveTimeout);
+        dragLeaveTimeout = null;
+      }
+      setIsDragging(false);
+    };
+
+    window.addEventListener('dragenter', handleWindowDragEnter);
+    window.addEventListener('dragover', handleWindowDragOver);
+    window.addEventListener('dragleave', handleWindowDragLeave);
+    window.addEventListener('drop', handleWindowDrop);
+    
+    return () => {
+      window.removeEventListener('dragenter', handleWindowDragEnter);
+      window.removeEventListener('dragover', handleWindowDragOver);
+      window.removeEventListener('dragleave', handleWindowDragLeave);
+      window.removeEventListener('drop', handleWindowDrop);
+      if (dragLeaveTimeout) clearTimeout(dragLeaveTimeout);
+    };
+  }, []);
 
   const processFile = useCallback(async (file: File): Promise<AttachedFile | null> => {
     const lowerName = file.name.toLowerCase();
     const mimeType = file.type || 'text/plain';
     const accepted = Object.keys(ACCEPTED_TYPES);
 
-    if (!accepted.includes(mimeType) && !lowerName.endsWith('.txt') && !lowerName.endsWith('.json') && !lowerName.endsWith('.pdf')) {
+    // Определяем является ли файл code-файлом
+    const isCodeFile = Object.entries(ACCEPTED_TYPES).some(([mime, exts]) => 
+      mime.startsWith('text/') && 
+      !['text/plain', 'application/pdf'].includes(mime) &&
+      exts.some(ext => lowerName.endsWith(ext))
+    );
+
+    if (!accepted.includes(mimeType) && !lowerName.endsWith('.txt') && !lowerName.endsWith('.json') && !lowerName.endsWith('.pdf') && !isCodeFile) {
       return null;
     }
 
@@ -146,25 +425,119 @@ export default function ChatInput({
     if (lowerName.endsWith('.webm') && !mimeType.startsWith('video/')) finalMimeType = 'video/webm';
     if (lowerName.endsWith('.3gp')) finalMimeType = 'video/3gpp';
     if (lowerName.endsWith('.3g2')) finalMimeType = 'video/3gpp2';
+    
+    // Code file MIME types
+    if (lowerName.endsWith('.ts') || lowerName.endsWith('.tsx')) finalMimeType = 'text/typescript';
+    if (lowerName.endsWith('.js') || lowerName.endsWith('.jsx') || lowerName.endsWith('.mjs') || lowerName.endsWith('.cjs')) finalMimeType = 'text/javascript';
+    if (lowerName.endsWith('.py')) finalMimeType = 'text/python';
+    if (lowerName.endsWith('.css') || lowerName.endsWith('.scss') || lowerName.endsWith('.sass') || lowerName.endsWith('.less')) finalMimeType = 'text/css';
+    if (lowerName.endsWith('.html') || lowerName.endsWith('.htm')) finalMimeType = 'text/html';
+    if (lowerName.endsWith('.md') || lowerName.endsWith('.mdx')) finalMimeType = 'text/markdown';
+    if (lowerName.endsWith('.yaml') || lowerName.endsWith('.yml')) finalMimeType = 'text/yaml';
+    if (lowerName.endsWith('.rs')) finalMimeType = 'text/x-rust';
+    if (lowerName.endsWith('.go')) finalMimeType = 'text/x-go';
+    if (lowerName.endsWith('.java')) finalMimeType = 'text/x-java';
+    if (lowerName.endsWith('.c') || lowerName.endsWith('.cpp') || lowerName.endsWith('.h') || lowerName.endsWith('.hpp')) finalMimeType = 'text/x-c';
+    if (lowerName.endsWith('.sh') || lowerName.endsWith('.bash')) finalMimeType = 'text/x-shellscript';
+    if (lowerName.endsWith('.toml')) finalMimeType = 'text/x-toml';
+    if (lowerName.endsWith('.env.example')) finalMimeType = 'text/x-env';
+    if (lowerName.endsWith('.xml') || lowerName.endsWith('.svg')) finalMimeType = 'text/xml';
+    if (lowerName.endsWith('.php')) finalMimeType = 'text/x-php';
+    if (lowerName.endsWith('.rb')) finalMimeType = 'text/x-ruby';
+    if (lowerName.endsWith('.swift')) finalMimeType = 'text/x-swift';
+    if (lowerName.endsWith('.kt') || lowerName.endsWith('.kts')) finalMimeType = 'text/x-kotlin';
+    if (lowerName.endsWith('.sql')) finalMimeType = 'text/x-sql';
 
     try {
-      const data = await fileToBase64(file);
+      let processedFile = file;
+      
+      // Code files и text files читаем как текст, затем конвертируем в base64
+      const isTextFile = finalMimeType.startsWith('text/') || finalMimeType === 'application/json';
+      
+      if (isTextFile) {
+        // Читаем как текст
+        const text = await fileToText(file);
+        
+        // Проверяем размер текстового файла на соответствие динамическому лимиту
+        if (file.size > MAX_FILE_SIZE) {
+          alert(`Файл слишком большой (${formatUploadSize(file.size / 1024 / 1024)}). Максимальный размер: ${formatUploadSize(maxUploadSizeMB)}`);
+          return null;
+        }
+        
+        // Конвертируем в base64 для API
+        let base64Data: string;
+        try {
+          base64Data = btoa(unescape(encodeURIComponent(text)));
+        } catch (e) {
+          console.error('Failed to encode text to base64:', e);
+          // Fallback через TextEncoder
+          const encoder = new TextEncoder();
+          const bytes = encoder.encode(text);
+          base64Data = btoa(String.fromCharCode.apply(null, Array.from(bytes)));
+        }
+        
+        return {
+          id: Math.random().toString(36).slice(2),
+          name: file.name,
+          mimeType: finalMimeType,
+          size: text.length,
+          data: base64Data, // храним как base64 для API
+          // Для code файлов не создаём previewUrl
+        };
+      }
+      
+      // Проверяем размер файла для бинарных файлов
+      if (file.size > MAX_FILE_SIZE) {
+        // Для изображений пробуем сжать
+        if (finalMimeType.startsWith('image/')) {
+          try {
+            processedFile = await compressImage(file, maxUploadSizeMB);
+            console.log(`Изображение сжато: ${formatUploadSize(file.size / 1024 / 1024)} → ${formatUploadSize(processedFile.size / 1024 / 1024)}`);
+          } catch (err) {
+            alert(`Не удалось сжать изображение. Максимальный размер: ${formatUploadSize(maxUploadSizeMB)}`);
+            return null;
+          }
+        }
+        // Для видео показываем предупреждение
+        else if (finalMimeType.startsWith('video/')) {
+          try {
+            await compressVideo(file, maxUploadSizeMB);
+            return null; // compressVideo выбросит ошибку для больших файлов
+          } catch {
+            return null;
+          }
+        }
+        // Для остальных файлов просто отклоняем
+        else {
+          alert(`Файл слишком большой (${formatUploadSize(file.size / 1024 / 1024)}). Максимальный размер: ${formatUploadSize(maxUploadSizeMB)}`);
+          return null;
+        }
+      }
+      
+      // Финальная проверка размера после сжатия
+      if (processedFile.size > MAX_FILE_SIZE) {
+        alert(`Файл все еще слишком большой после сжатия. Максимальный размер: ${formatUploadSize(maxUploadSizeMB)}`);
+        return null;
+      }
+
+      const data = await fileToBase64(processedFile);
       const previewUrl = finalMimeType.startsWith('image/') || finalMimeType === 'application/pdf'
-        ? URL.createObjectURL(file)
+        ? URL.createObjectURL(processedFile)
         : undefined;
 
       return {
-        id: Math.random().toString(36).slice(2),
+        id: finalMimeType.startsWith('image/') ? generateImageId() : Math.random().toString(36).slice(2),
         name: file.name,
         mimeType: finalMimeType,
-        size: file.size,
+        size: processedFile.size,
         data,
         previewUrl,
       };
-    } catch {
+    } catch (err) {
+      console.error('File processing error:', err);
       return null;
     }
-  }, []);
+  }, [maxUploadSizeMB]);
 
   const handleFiles = useCallback(async (fileList: FileList | File[]) => {
     const arr = Array.from(fileList);
@@ -173,13 +546,74 @@ export default function ChatInput({
     setFiles(prev => [...prev, ...valid].slice(0, 10)); // max 10 files
   }, [processFile]);
 
+  const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData.items);
+    const imageItems = items.filter(item => item.type.startsWith('image/'));
+    
+    if (imageItems.length === 0) return; // обычный текст — не перехватываем
+    
+    e.preventDefault(); // предотвращаем вставку base64 текста в textarea
+    
+    const files = imageItems
+      .map(item => item.getAsFile())
+      .filter(Boolean) as File[];
+    
+    if (files.length > 0) {
+      await handleFiles(files);
+    }
+  }, [handleFiles]);
+
+  useEffect(() => {
+    const handleMobileDrop = (e: any) => {
+      const payload = e.detail;
+      if (payload && payload.type === 'text') {
+        const quoteContent = `[Элемент из Canvas] <${payload.tagName?.toLowerCase()}>:\n"${payload.content}"\n`;
+        setText(prev => prev + (prev ? '\n\n' : '') + quoteContent);
+      } else if (payload && payload.type === 'image' && payload.dataURL) {
+        fetch(payload.dataURL).then(r => r.blob()).then(blob => {
+          const file = new File([blob], `canvas-image-${Date.now()}.png`, { type: 'image/png' });
+          handleFiles([file]);
+        });
+        setText(prev => prev + (prev ? '\n\n' : '') + `[Перетащил изображение из Canvas] ${payload.alt ? `(alt: ${payload.alt})` : ''}\n`);
+      }
+    };
+    document.addEventListener('canvas-mobile-drop', handleMobileDrop);
+    return () => document.removeEventListener('canvas-mobile-drop', handleMobileDrop);
+  }, [handleFiles]);
+
   const handleSend = () => {
     if (isStreaming) return;
-    if (!text.trim() && files.length === 0) return;
+    if (!text.trim() && files.length === 0 && !canvasPreview && annotationRefs.length === 0) return;
     if (disabled) return;
-    onSend(text.trim(), files);
+
+    // Анимация кнопки Send
+    setSendAnimating(true);
+    setTimeout(() => setSendAnimating(false), 250);
+
+    let finalText = text;
+    let additionalFiles = [...files];
+
+    if (canvasPreview) {
+      if (canvasPreview.type === 'drag-image' && canvasPreview.dataURL) {
+        const base64Data = canvasPreview.dataURL.split(',')[1];
+        additionalFiles.push({
+          id: generateImageId(),
+          type: 'image',
+          mimeType: 'image/png',
+          data: base64Data,
+          size: Math.round((base64Data.length * 3) / 4),
+          name: canvasPreview.alt || 'canvas-element.png',
+        } as any);
+      } else {
+        finalText = `[Элемент с сайта: <${canvasPreview.tagName?.toLowerCase()}> "${canvasPreview.innerText?.slice(0, 100)}"]\n\n${text}`;
+      }
+      setCanvasPreview(null);
+    }
+
+    onSend(finalText.trim(), additionalFiles, annotationRefs.length > 0 ? annotationRefs : undefined);
     setText('');
     setFiles([]);
+    setAnnotationRefs([]);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -191,11 +625,65 @@ export default function ChatInput({
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragging(false);
+    
+    try {
+      const jsonStr = e.dataTransfer.getData('application/json');
+      if (jsonStr) {
+        const payload = JSON.parse(jsonStr);
+        if (payload && payload.source === 'live-canvas-drag') {
+          if (payload.type === 'text') {
+            const quoteContent = `[Элемент из Canvas] <${payload.tagName.toLowerCase()}>:\n"${payload.content}"\n`;
+            setText(prev => prev + (prev ? '\n\n' : '') + quoteContent);
+          } else if (payload.type === 'image' && payload.dataURL) {
+            fetch(payload.dataURL)
+              .then(res => res.blob())
+              .then(blob => {
+                const file = new File([blob], `canvas-image-${Date.now()}.png`, { type: 'image/png' });
+                handleFiles([file]);
+              });
+            setText(prev => prev + (prev ? '\n\n' : '') + `[Перетащил изображение из Canvas] ${payload.alt ? `(alt: ${payload.alt})` : ''}\n`);
+          }
+          return;
+        }
+      }
+    } catch (err) {
+      // Ignore parsing errors, fallback to files
+    }
+
     handleFiles(e.dataTransfer.files);
   };
 
-  const hasContent = text.trim().length > 0 || files.length > 0;
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Проверяем что это файлы
+    const types = Array.from(e.dataTransfer.types);
+    const isFiles = types.includes('Files');
+    const isReactFlow = types.includes('application/reactflow');
+    
+    if (isFiles && !isReactFlow) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Проверяем что действительно покинули область (не переход к дочернему элементу)
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX;
+    const y = e.clientY;
+    
+    if (x <= rect.left || x >= rect.right || y <= rect.top || y >= rect.bottom) {
+      setIsDragging(false);
+    }
+  };
+
+  const hasContent = text.trim().length > 0 || files.length > 0 || canvasPreview !== null || annotationRefs.length > 0;
 
   return (
     <div className="px-4 pb-4 pt-2">
@@ -216,10 +704,50 @@ export default function ChatInput({
             ? 'border-[var(--accent)] shadow-glow-md'
             : 'border-[var(--border-subtle)] hover:border-[var(--border-strong)] focus-within:border-[var(--accent)] focus-within:shadow-glow-sm'
         }`}
-        onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
-        onDragLeave={() => setIsDragging(false)}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        {/* Annotation reference markers */}
+        {annotationRefs.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-3 pt-3">
+            {annotationRefs.map(ref => (
+              <div
+                key={ref.id}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border transition-all group hover:scale-105"
+                style={{
+                  backgroundColor: `${ref.color}15`,
+                  borderColor: ref.color,
+                  boxShadow: `0 0 8px ${ref.color}40`
+                }}
+              >
+                <div
+                  className="w-4 h-4 rounded-full border-2 flex items-center justify-center text-[9px] font-bold"
+                  style={{
+                    borderColor: ref.color,
+                    color: ref.color
+                  }}
+                >
+                  @
+                </div>
+                <span className="text-xs font-medium" style={{ color: ref.color }}>
+                  {ref.annotation.label}
+                </span>
+                <span className="text-[10px] opacity-60" style={{ color: ref.color }}>
+                  · {ref.imageName}
+                </span>
+                <button
+                  onClick={() => setAnnotationRefs(prev => prev.filter(r => r.id !== ref.id))}
+                  className="ml-1 opacity-60 hover:opacity-100 transition-opacity"
+                  style={{ color: ref.color }}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* File chips */}
         {files.length > 0 && (
           <div className="flex flex-wrap gap-2 px-3 pt-3">
@@ -233,12 +761,28 @@ export default function ChatInput({
           </div>
         )}
 
+        {/* Canvas preview */}
+        {canvasPreview && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-[var(--surface-3)] border border-[var(--border)] rounded-lg mx-3 mt-3 mb-1 text-xs">
+            <span className="text-[var(--accent)]">📌 Из Canvas:</span>
+            {canvasPreview.type === 'drag-image' && canvasPreview.dataURL ? (
+              <img src={canvasPreview.dataURL} className="h-8 w-8 object-cover rounded" alt={canvasPreview.alt} />
+            ) : (
+              <span className="text-[var(--text-muted)] truncate max-w-[200px]">
+                &lt;{canvasPreview.tagName?.toLowerCase()}&gt; {canvasPreview.innerText?.slice(0, 60)}
+              </span>
+            )}
+            <button onClick={() => setCanvasPreview(null)} className="ml-auto text-[var(--text-dim)] hover:text-red-400">✕</button>
+          </div>
+        )}
+
         {/* Textarea */}
         <textarea
           ref={textareaRef}
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder={disabled ? 'Добавьте API ключ для начала…' : 'Сообщение Gemini… (Enter — отправить, Shift+Enter — новая строка)'}
           disabled={disabled || isStreaming}
           rows={1}
@@ -262,20 +806,36 @@ export default function ChatInput({
               ref={fileInputRef}
               type="file"
               multiple
-              accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.mp3,.wav,.ogg,.m4a,.weba,.mp4,.mpeg,.mpg,.mov,.avi,.flv,.mkv,.webm,.3gp,.3g2,.txt,.json"
+              accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.mp3,.wav,.ogg,.m4a,.weba,.mp4,.mpeg,.mpg,.mov,.avi,.flv,.mkv,.webm,.3gp,.3g2,.txt,.json,.ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.css,.scss,.sass,.less,.html,.htm,.md,.mdx,.yaml,.yml,.rs,.go,.java,.c,.cpp,.h,.hpp,.sh,.bash,.toml,.xml,.svg,.php,.rb,.swift,.kt,.kts,.sql"
               className="hidden"
               onChange={e => e.target.files && handleFiles(e.target.files)}
             />
 
-            {/* Add user message turn */}
+            {/* DeepThink Toggle */}
+            {onDeepThinkToggle && (
+              <button
+                onClick={onDeepThinkToggle}
+                disabled={disabled || isStreaming}
+                title={deepThinkEnabled ? 'DeepThink включён' : 'DeepThink выключен'}
+                className={`flex items-center justify-center w-8 h-8 rounded-lg transition-all disabled:opacity-40 ${
+                  deepThinkEnabled
+                    ? 'text-[var(--gem-blue)] bg-[rgba(74,158,255,0.12)] hover:bg-[rgba(74,158,255,0.18)]'
+                    : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'
+                }`}
+              >
+                <Brain size={15} />
+              </button>
+            )}
+
+            {/* Add empty model (assistant) turn for manual typing / seeding */}
             <button
               onClick={onAddUserMessage}
               disabled={disabled || isStreaming}
               className="flex items-center gap-1 px-3 sm:px-2 h-10 sm:h-8 text-sm sm:text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Добавить пустой ответ пользователя"
+              title="Добавить пустой ответ модели (можно вписать вручную)"
             >
               <Plus size={16} className="sm:w-[13px] sm:h-[13px]" />
-              <span className="hidden sm:block">Ход</span>
+              <span className="hidden sm:block">Ход AI</span>
             </button>
           </div>
 
@@ -297,7 +857,7 @@ export default function ChatInput({
                   else if (canRun) onRun();
                 }}
                 disabled={( !hasContent && !canContinue && !canRun ) || disabled}
-                className={`flex items-center gap-1.5 px-5 sm:px-4 h-10 sm:h-9 text-base sm:text-sm font-medium rounded-xl transition-all ${
+                className={`flex items-center gap-1.5 px-5 sm:px-4 h-10 sm:h-9 text-base sm:text-sm font-medium rounded-xl transition-all ${sendAnimating ? 'animate-send-pop' : ''} ${
                   (hasContent || canContinue || canRun) && !disabled
                     ? 'bg-white hover:opacity-80 text-black'
                     : 'bg-[var(--surface-3)] text-[var(--text-dim)] cursor-not-allowed opacity-50'
@@ -331,7 +891,7 @@ export default function ChatInput({
       </div>
 
       <p className="text-center text-[11px] text-[var(--text-dim)] mt-2 input-hint">
-        Shift+Enter — новая строка · Перетащите файлы для прикрепления
+        Shift+Enter — новая строка · Перетащите или вставьте (Ctrl+V) изображения
       </p>
     </div>
   );

@@ -1,22 +1,44 @@
 'use client';
 
+// Запрещаем статическую генерацию — страница использует localStorage
+export const dynamic = 'force-dynamic';
+
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import dynamicImport from 'next/dynamic';
 import { ChatSidebar, SettingsSidebar } from '@/components/Sidebar';
 import ChatMessage from '@/components/ChatMessage';
 import ChatInput from '@/components/ChatInput';
-import { ToolBuilderModal } from '@/components/ToolBuilder';
-import MemoryModal from '@/components/MemoryModal';
+import MemoryPill from '@/components/MemoryPill';
+import ImageMemoryPill from '@/components/ImageMemoryPill';
+import ImageMemoryRecallPill from '@/components/ImageMemoryRecallPill';
+import StorageWarningBanner from '@/components/StorageWarningBanner';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,
-  Save, X, ArrowDown, RefreshCw
+  ChevronUp,
+  Save, X, ArrowDown, RefreshCw, MonitorPlay, Zap, FilePen, BarChart2,
+  Brain, Loader2, CheckCircle2, Bot, Pencil
 } from 'lucide-react';
+
+import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels';
+import LivePreviewPanel from '@/components/LivePreviewPanel';
+import FileEditorCanvas from '@/components/FileEditorCanvas';
+import InsightsPanel from '@/components/InsightsPanel';
 import { useDeepThink } from '@/lib/useDeepThink';
 import DeepThinkToggle from '@/components/DeepThinkToggle';
-import type { ChatTool, Message, GeminiModel, AttachedFile, Part, ApiKeyEntry, SavedChat, DeepThinkAnalysis, ToolResponse, SavedSystemPrompt } from '@/types';
+
+import AgentMessageHeader from '@/components/AgentMessageHeader';
+import ArenaInputBar from '@/components/ArenaInputBar';
+import ArenaAgentsSidebar from '@/components/ArenaAgentsSidebar';
+import { useArena } from '@/lib/useArena';
+import { loadSceneStateConfig, saveSceneStateConfig } from '@/lib/scene-state-storage';
+import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, ToolResponse, SavedSystemPrompt, SkillArtifact, CanvasElement, Provider, UniversalModel, ActiveModel, Message, AttachedFile, Part, DeepThinkAnalysis, WebsiteType, OpenFile, FileDiffOp } from '@/types';
 import {
-  loadApiKeys, saveApiKeys, isRateLimitError,
+  loadApiKeys, saveApiKeys, isRateLimitError, addApiKey, removeApiKey, getNextAvailableKey, markKeyBlocked, markKeyUsed, unblockExpiredKeys, migrateOldApiKeys,
 } from '@/lib/apiKeyManager';
+import {
+  loadProviders, saveCustomProvider, removeProvider, loadModelsCache, saveModelsCache, getActiveProviderId, setActiveProviderId, getActiveModel, setActiveModel, migrateOldModelSelection, GOOGLE_PROVIDER,
+} from '@/lib/providerStorage';
 import {
   loadSavedChats, saveChatToStorage, deleteChatFromStorage,
   getActiveChatId, setActiveChatId,
@@ -25,38 +47,150 @@ import {
   loadSystemPrompts,
   saveSystemPrompts,
   createSystemPrompt,
+  revokePreviewUrls,
+  loadGhostNudgeEnabled, saveGhostNudgeEnabled,
+  loadGhostNudgeMaxRetries, saveGhostNudgeMaxRetries,
+  checkAndRepairStorage,
 } from '@/lib/storage';
+import { addLogEntry, serializeMessage } from '@/lib/logStore';
 import {
   DEFAULT_DEEPTHINK_SYSTEM_PROMPT,
+  DEEPTHINK_MEMORY_MARKER,
   buildChatRequestMessages,
   getVisibleMessageText,
   isThoughtPart,
   normalizeToolResponseInput,
 } from '@/lib/gemini';
-import { buildMemoryPrompt, markMemoriesUsed } from '@/lib/memory-prompt';
-import { MEMORY_TOOLS } from '@/lib/memory-tools';
+import { markMemoriesUsed } from '@/lib/memory-prompt';
+import { buildSystemPromptLayers } from '@/lib/context-layers';
+import { loadContextLayersConfig } from '@/lib/context-layers-storage';
+import { MEMORY_TOOLS, IMAGE_MEMORY_TOOLS } from '@/lib/memory-tools';
 import { saveMemory, updateMemory, forgetMemory, getMemories } from '@/lib/memory-store';
+import { getAgents } from '@/lib/agents/agent-store';
+import { 
+  saveImageMemory, 
+  searchImageMemories, 
+  getImageMemory, 
+  loadImageMemoryData,
+  incrementImageMemoryMentions 
+} from '@/lib/image-memory-store';
+import { getImageDimensions } from '@/lib/image-utils';
+import { collectImages } from '@/lib/image-context';
+import { cropAndScale } from '@/lib/skills/built-in/image-analyser/cropper';
+import { generateImageId } from '@/lib/imageId';
+import {
+  loadRPGProfile,
+  saveRPGProfile,
+  addFeedbackEntry,
+  needsCondensation,
+  buildCondensationPrompt,
+} from '@/lib/rpg-style-profile';
+import {
+  recordStyleEdit,
+  recordStyleFeedback,
+  recordAbortAccepted,
+  addCustomRule,
+  SHORTER_HINT,
+} from '@/lib/f-love-profile';
+import { installSkill, isSkillActive } from '@/lib/skills/registry';
+import {
+  loadRPGFeedbackSettings,
+  saveRPGFeedbackSettings,
+  DEFAULT_RPG_FEEDBACK_SETTINGS,
+} from '@/lib/rpg-feedback-settings';
+// Skills system
+import {
+  collectSkillTools,
+  executeSkillToolCall,
+  notifySkillsMessageComplete,
+  isSkillToolCall,
+  reloadHFSpaceSkills,
+} from '@/lib/skills';
+import { useSkillsUI } from '@/lib/useSkillsUI';
+import { useAppState } from '@/lib/useAppState';
+import { useWindowedMessages } from '@/lib/hooks/useWindowedMessages';
+import { AgentsHistory } from '@/components/agent-editor/AgentsHistory';
+import { GraphExecutor } from '@/lib/agent-engine/executor';
+import { getGraphById } from '@/lib/agent-engine/graph-storage';
+import type { AgentGraph, AgentRun } from '@/lib/agent-engine/types';
+
+const ToolBuilderModal = dynamicImport(() => import('@/components/ToolBuilder').then(module => module.ToolBuilderModal));
+const MemoryModal = dynamicImport(() => import('@/components/MemoryModal'));
+const RPGProfileModal = dynamicImport(() => import('@/components/RPGProfileModal').then(module => module.RPGProfileModal));
+const CommandPalette = dynamicImport(() => import('@/components/CommandPalette').then(module => module.CommandPalette));
+const AgentChatPage = dynamicImport(() => import('@/components/agent-chat/AgentChatPage').then(module => module.AgentChatPage));
+const AgentChatList = dynamicImport(() => import('@/components/agent-chat/AgentChatList').then(module => module.AgentChatList));
+const DeepThinkSettingsDialog = dynamicImport(() => import('@/components/DeepThinkSettingsDialog').then(module => module.DeepThinkSettingsDialog));
+const SceneStateSettingsModal = dynamicImport(() => import('@/components/SceneStateSettingsModal').then(module => module.SceneStateSettingsModal));
+const ContextInspectorModal = dynamicImport(() => import('@/components/ContextInspectorModal').then(module => module.ContextInspectorModal));
+const SkillsMarket = dynamicImport(() => import('@/components/SkillsMarket').then(module => module.SkillsMarket));
+const HFSpaceManager = dynamicImport(() => import('@/components/HFSpaceManager').then(module => module.HFSpaceManager));
+const SelectionToolbar = dynamicImport(() => import('@/components/SelectionToolbar').then(module => module.SelectionToolbar));
 
 function generateId() {
+  // Используем crypto.randomUUID для гарантированной уникальности
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // Fallback для старых браузеров
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
 const ACTIVE_API_KEY_INDEX_STORAGE_KEY = 'gemini_active_key_index';
 
 function generateToolCallId(name: string, args: unknown) {
-  return `${name}:${JSON.stringify(args)}`;
+  return `${name}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
 function getApiKeySuffix(key?: string | null): string {
   return key ? key.slice(-4) : '';
 }
 
+// Вспомогательная функция для одиночного вызова Gemini без стриминга
+async function callGeminiOnce(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  maxTokens: number
+): Promise<string> {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          maxOutputTokens: maxTokens,
+          temperature: 0.7,
+        },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Gemini API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  return text;
+}
+
 function sanitizeApiKeys(keys: ApiKeyEntry[]): ApiKeyEntry[] {
-  return keys.map(({ blockedUntil: _blockedUntil, blockedByModel: _blockedByModel, ...entry }) => ({
-    ...entry,
-    blockedUntil: undefined,
-    blockedByModel: undefined,
-  }));
+  const now = Date.now();
+  return keys.map(k => {
+    const next: ApiKeyEntry = { ...k };
+    if (next.blockedUntil && next.blockedUntil <= now) next.blockedUntil = undefined;
+    if (next.blockedByModel) {
+      const cleaned: Record<string, number> = {};
+      for (const [m, until] of Object.entries(next.blockedByModel)) {
+        if (typeof until === 'number' && until > now) cleaned[m] = until;
+      }
+      next.blockedByModel = Object.keys(cleaned).length ? cleaned : undefined;
+    }
+    return next;
+  });
 }
 
 function generateChatTitle(messages: Message[]): string {
@@ -89,232 +223,191 @@ ${analysis.futureStrategy ? `План на будущее: ${analysis.futureStra
 ---`;
 }
 
-const DEEPTHINK_MEMORY_MARKER = '[DeepThink context from previous assistant turn]';
-
 export default function Home() {
-  // API Keys (multiple)
-  const [apiKeys, setApiKeys] = useState<ApiKeyEntry[]>([]);
-  const [activeKeyIndex, setActiveKeyIndex] = useState(0);
+  const app = useAppState();
 
-  // Model
-  const [model, setModel] = useState<string>('');
-  const [models, setModels] = useState<GeminiModel[]>([]);
+  // Destructure all for backward compatibility
+  const {
+    providers, setProviders, activeProviderId, activeProvider,
+    apiKeys, activeKeyIndex, activeModel, setActiveModel: setActiveModelState, allModels, setAllModels,
+    model, models, effectiveProviderId, currentProviderKeys, currentKeyIndex,
+    selectedApiKeyEntry, selectedApiKey, selectedApiKeySuffix,
+    setActiveProviderId: setActiveProviderIdState,
+    systemPrompt, setSystemPrompt, tools, setTools,
+    deepThinkSystemPrompt, setDeepThinkSystemPrompt,
+    deepThinkProviderId, setDeepThinkProviderId,
+    deepThinkModelId, setDeepThinkModelId,
+    deepThinkApiKeyIndex, setDeepThinkApiKeyIndex,
+    temperature, setTemperature, thinkingBudget, setThinkingBudget,
+    maxOutputTokens, maxMemoryCalls, maxToolRounds,
+    memoryEnabled, setMemoryEnabled, ghostNudgeEnabled, ghostNudgeMaxRetries,
+    savedPrompts, setSavedPrompts,
+    messages, setMessages, messagesRef,
+    savedChats, setSavedChats,
+    currentChatId, setCurrentChatId, chatTitle, setChatTitle, unsaved, setUnsaved,
+    isStreaming, setIsStreaming, streamingId, setStreamingId,
+    error, setError, abortControllerRef,
+    showLiveCanvas, setShowLiveCanvas, liveCode, setLiveCode,
+    websiteType, setWebsiteType, showInsights, setShowInsights,
+    livePreviewRef,
+    openFiles, setOpenFiles, activeFileId, setActiveFileId,
+    showFileEditor, setShowFileEditor, pendingEdits, setPendingEdits,
+    checkFilesForEditor,
+    acceptFileEditorEdits, rejectFileEditorEdits, manualFileEditorEdit,
+    closeFileEditorFile, revertFileEditorFile, fileEditorChatKey,
+    mobileCanvasState, setMobileCanvasState, pendingCanvasElement, setPendingCanvasElement,
+    appMode, setAppMode, activeAgentId, setActiveAgentId, arena,
+    showToolBuilder, setShowToolBuilder, editingTool, setEditingTool,
+    showSavePromptDialog, setShowSavePromptDialog, newPromptName, setNewPromptName,
+    showDeepThinkDialog, setShowDeepThinkDialog, deepThinkDraft, setDeepThinkDraft,
+    chatSidebarOpen, setChatSidebarOpen,
+    settingsSidebarOpen, setSettingsSidebarOpen,
+    isMobile,
+    showSkillsMarket, setShowSkillsMarket, showHFSpaces, setShowHFSpaces,
+    showContextInspector, setShowContextInspector,
+    skillsRevision, setSkillsRevision,
+    handleSkillEvent,
+    showScrollBottom, isAtBottomRef, chatEndRef, handleScroll, scrollToBottom,
+    scrollToBottomImmediate, maintainScrollPosition, getScrollContainer, setScrollContainer,
+    tokenCount, setTokenCount, isCountingTokens, countTokens, scheduleTokenCount,
+    showMemoryModal, setShowMemoryModal,
+    deepThink,
+    settingsSidebarProps,
+    chatSidebarArenaProps,
+  } = app;
 
-  // Settings
-  const [systemPrompt, setSystemPrompt] = useState<string>('');
-  const [tools, setTools] = useState<ChatTool[]>([]);
-  const [showToolBuilder, setShowToolBuilder] = useState(false);
-  const [editingTool, setEditingTool] = useState<ChatTool | null>(null);
-  const [showSavePromptDialog, setShowSavePromptDialog] = useState(false);
-  const [newPromptName, setNewPromptName] = useState('');
-  const [savedPrompts, setSavedPrompts] = useState<SavedSystemPrompt[]>([]);
-  const [showDeepThinkDialog, setShowDeepThinkDialog] = useState(false);
-  const [deepThinkDraft, setDeepThinkDraft] = useState('');
-  const [deepThinkSystemPrompt, setDeepThinkSystemPrompt] = useState<string>(DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
-  const [temperature, setTemperature] = useState<number>(1.0);
-  const [thinkingBudget, setThinkingBudget] = useState<number>(-1); // -1=авто
-  const [memoryEnabled, setMemoryEnabled] = useState<boolean>(true);
-  const [showMemoryModal, setShowMemoryModal] = useState(false);
+  // Agent Chat State
+  const [agentTrace, setAgentTrace] = useState<{ id: string; name: string; status: 'running' | 'success' | 'error'; startTime: number; duration?: number }[]>([]);
+  const [agentInputRequest, setAgentInputRequest] = useState<{ source: string; context: any; resolve: (val: any) => void } | null>(null);
+  const [currentExecutor, setCurrentExecutor] = useState<GraphExecutor | null>(null);
 
-  // UI state
-  const [chatSidebarOpen, setChatSidebarOpen] = useState(true);
-  const [settingsSidebarOpen, setSettingsSidebarOpen] = useState(true);
-  const [isMobile, setIsMobile] = useState(false);
+  // Agent Chat 2.0 State
+  const [agentChatAgentId, setAgentChatAgentId] = useState<string | null>(null);
+  const [agentChatThreadId, setAgentChatThreadId] = useState<string | null>(null);
+  const [agentChatRenderKey, setAgentChatRenderKey] = useState(0); // Для принудительного ре-рендера
+  const [isAgentRunning, setIsAgentRunning] = useState(false);
+  
+  // RPG Profile Modal
+  const [showRPGProfileModal, setShowRPGProfileModal] = useState(false);
 
-  // Chat state
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [streamingId, setStreamingId] = useState<string | null>(null);
-  const [tokenCount, setTokenCount] = useState(0);
-  const [error, setError] = useState<string>('');
-
-  // Saved chats
-  const [savedChats, setSavedChats] = useState<SavedChat[]>([]);
-  const [currentChatId, setCurrentChatId] = useState<string | null>(null);
-  const [chatTitle, setChatTitle] = useState('');
-  const [unsaved, setUnsaved] = useState(false);
-
-  // Scroll state
-  const [showScrollBottom, setShowScrollBottom] = useState(false);
-  const isAtBottomRef = useRef(true);
-  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-    const distanceToBottom = scrollHeight - scrollTop - clientHeight;
-    const atBottom = distanceToBottom <= 40;
-    isAtBottomRef.current = atBottom;
-
-    if (distanceToBottom > 150) {
-      setShowScrollBottom(true);
-    } else {
-      setShowScrollBottom(false);
-    }
-  }, []);
-
-  const scrollToBottom = useCallback(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, []);
-
-  // Refs
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const chatEndRef = useRef<HTMLDivElement>(null);
-  const tokenDebounceRef = useRef<NodeJS.Timeout | null>(null);
-
-  const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze } = useDeepThink();
-  const selectedApiKeyEntry = apiKeys[activeKeyIndex] || null;
-  const selectedApiKey = selectedApiKeyEntry?.key || '';
-  const selectedApiKeySuffix = getApiKeySuffix(selectedApiKeyEntry?.key);
-
-  // Detect mobile only when crossing breakpoint.
-  // Keyboard open/close on mobile fires resize, so we avoid closing panels on every resize event.
+  // ============ STORAGE REPAIR ============
   useEffect(() => {
-    const query = window.matchMedia('(max-width: 767px)');
+    const result = checkAndRepairStorage();
+    if (!result.ok) {
+      console.warn('[storage] Repair result:', result.warning);
+    }
+  }, []); // только один раз при маунте
 
-    const applyViewportMode = (mobile: boolean) => {
-      setIsMobile(prev => {
-        if (prev !== mobile && mobile) {
-          setChatSidebarOpen(false);
-          setSettingsSidebarOpen(false);
-        }
-        return mobile;
+  // F-Love skill always available (style learning)
+  useEffect(() => {
+    try {
+      if (!isSkillActive('f-love')) {
+        installSkill('f-love');
+        setSkillsRevision(r => r + 1);
+      }
+    } catch { /* ignore */ }
+  }, [setSkillsRevision]);
+
+  useEffect(() => {
+    const handleStatus = (e: Event) => {
+      const { running, title } = (e as CustomEvent).detail;
+      setIsAgentRunning(running);
+      if (title) {
+        const el = document.getElementById('agent-thread-title');
+        if (el) el.innerText = title;
+      }
+    };
+    const onLoadThread = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (typeof detail === 'object' && detail.threadId && detail.agentConfigId) {
+        setAgentChatAgentId(detail.agentConfigId);
+        setAgentChatThreadId(detail.threadId);
+        setAgentChatRenderKey(prev => prev + 1); // Принудительный ре-рендер
+      } else {
+        setAgentChatThreadId(detail);
+        setAgentChatRenderKey(prev => prev + 1); // Принудительный ре-рендер
+      }
+    };
+    const onNewThread = () => {
+      setAgentChatThreadId(null); // Сбрасываем тред для создания нового
+      setAgentChatRenderKey(prev => prev + 1); // Принудительный ре-рендер
+    };
+    window.addEventListener('agent-chat-status', handleStatus);
+    window.addEventListener('agent-chat-load-thread', onLoadThread);
+    window.addEventListener('agent-chat-new-thread', onNewThread);
+    return () => {
+      window.removeEventListener('agent-chat-status', handleStatus);
+      window.removeEventListener('agent-chat-load-thread', onLoadThread);
+      window.removeEventListener('agent-chat-new-thread', onNewThread);
+    };
+  }, []);
+
+  // Arena: add onOpenAgent to chatSidebarArenaProps
+  const chatSidebarArenaPropsWithAgent = {
+    ...chatSidebarArenaProps,
+    onOpenAgent: null as any, // будет установлен ниже
+    activeAgentId: agentChatAgentId,
+    onSelectAgent: (id: string | null) => setAgentChatAgentId(id),
+  };
+
+  const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze, abort: abortDeepThink } = deepThink;
+
+  const [isSceneStatePinned, setIsSceneStatePinned] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return loadSceneStateConfig().pinned;
+    }
+    return false;
+  });
+  const [isSceneStateSettingsOpen, setIsSceneStateSettingsOpen] = useState(false);
+
+  const handleToggleSceneStatePin = useCallback(() => {
+    setIsSceneStatePinned(prev => {
+      const next = !prev;
+      const config = loadSceneStateConfig();
+      saveSceneStateConfig({ ...config, pinned: next });
+      return next;
+    });
+  }, []);
+
+  const handleRequestSceneCategory = useCallback((request: { id: string; content: string }) => {
+    const config = loadSceneStateConfig();
+    if (!config.customCategories.find(c => c.id === request.id)) {
+      const newCategory = {
+        id: request.id,
+        label: request.id.charAt(0).toUpperCase() + request.id.slice(1),
+        icon: '🤖',
+        priority: 'medium' as const,
+        enabled: true,
+        content: request.content,
+      };
+      saveSceneStateConfig({
+        ...config,
+        customCategories: [...config.customCategories, newCategory],
+        enabledCategories: [...config.enabledCategories, request.id],
+        categoryOrder: [...config.categoryOrder, request.id],
       });
-    };
-
-    applyViewportMode(query.matches);
-
-    const onMediaChange = (event: MediaQueryListEvent) => {
-      applyViewportMode(event.matches);
-    };
-
-    query.addEventListener('change', onMediaChange);
-    return () => query.removeEventListener('change', onMediaChange);
-  }, []);
-
-  // Load from localStorage
-  useEffect(() => {
-    const loadData = async () => {
-      const keys = sanitizeApiKeys(loadApiKeys());
-      setApiKeys(keys);
-      saveApiKeys(keys);
-      const savedActiveKeyIndex = parseInt(localStorage.getItem(ACTIVE_API_KEY_INDEX_STORAGE_KEY) || '0', 10);
-      if (keys.length > 0 && Number.isFinite(savedActiveKeyIndex)) {
-        setActiveKeyIndex(Math.min(Math.max(savedActiveKeyIndex, 0), keys.length - 1));
-      }
-
-      const savedModel = localStorage.getItem('gemini_model');
-      const savedSysPrompt = localStorage.getItem('gemini_sys_prompt');
-      const savedTemp = localStorage.getItem('gemini_temperature');
-      const savedLegacySidebar = localStorage.getItem('gemini_sidebar');
-      const savedChatSidebar = localStorage.getItem('gemini_chats_sidebar');
-      const savedSettingsSidebar = localStorage.getItem('gemini_settings_sidebar');
-      const savedThinking = localStorage.getItem('gemini_thinking_budget');
-      const savedMemoryEnabled = localStorage.getItem('gemini_memory_enabled');
-      const savedDeepThinkPrompt = loadDeepThinkSystemPrompt();
-      const mobileViewport = window.matchMedia('(max-width: 767px)').matches;
-
-      if (savedModel) setModel(savedModel);
-      if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
-      if (savedTemp) setTemperature(parseFloat(savedTemp));
-      setDeepThinkSystemPrompt(savedDeepThinkPrompt || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
-      if (!mobileViewport) {
-        if (savedChatSidebar !== null) setChatSidebarOpen(savedChatSidebar === 'true');
-        else if (savedLegacySidebar !== null) setChatSidebarOpen(savedLegacySidebar === 'true');
-        if (savedSettingsSidebar !== null) setSettingsSidebarOpen(savedSettingsSidebar === 'true');
-      }
-      if (savedThinking !== null) setThinkingBudget(parseInt(savedThinking));
-      if (savedMemoryEnabled !== null) setMemoryEnabled(savedMemoryEnabled === 'true');
-
-      const chats = await loadSavedChats();
-      setSavedChats(chats);
-
-      const activeChatId = getActiveChatId();
-      if (activeChatId) {
-        const chat = chats.find(c => c.id === activeChatId);
-        if (chat) {
-          setMessages(chat.messages);
-          setCurrentChatId(chat.id);
-          setChatTitle(chat.title);
-          setModel(chat.model || savedModel || '');
-          setSystemPrompt(chat.systemPrompt || savedSysPrompt || '');
-          setDeepThinkSystemPrompt(chat.deepThinkSystemPrompt || savedDeepThinkPrompt || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
-          setTools(chat.tools || []);
-          setTemperature(chat.temperature ?? parseFloat(savedTemp || '1'));
-        }
-      }
-    };
-    loadData();
-  }, []);
-
-  // Load saved prompts
-  useEffect(() => {
-    setSavedPrompts(loadSystemPrompts());
-  }, []);
-
-  // Update deepThinkDraft when dialog opens
-  useEffect(() => {
-    if (!showDeepThinkDialog) return;
-    setDeepThinkDraft(deepThinkSystemPrompt || loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
-  }, [showDeepThinkDialog, deepThinkSystemPrompt]);
-
-  // Persist simple settings
-  useEffect(() => { if (model) localStorage.setItem('gemini_model', model); }, [model]);
-  useEffect(() => { localStorage.setItem('gemini_sys_prompt', systemPrompt); }, [systemPrompt]);
-  useEffect(() => { localStorage.setItem('gemini_temperature', temperature.toString()); }, [temperature]);
-  useEffect(() => { localStorage.setItem(ACTIVE_API_KEY_INDEX_STORAGE_KEY, activeKeyIndex.toString()); }, [activeKeyIndex]);
-  useEffect(() => { localStorage.setItem('gemini_chats_sidebar', chatSidebarOpen.toString()); }, [chatSidebarOpen]);
-  useEffect(() => { localStorage.setItem('gemini_settings_sidebar', settingsSidebarOpen.toString()); }, [settingsSidebarOpen]);
-  useEffect(() => { localStorage.setItem('gemini_thinking_budget', thinkingBudget.toString()); }, [thinkingBudget]);
-  useEffect(() => { localStorage.setItem('gemini_memory_enabled', memoryEnabled.toString()); }, [memoryEnabled]);
-
-  useEffect(() => {
-    if (apiKeys.length === 0) {
-      if (activeKeyIndex !== 0) setActiveKeyIndex(0);
-      return;
     }
+  }, []);
 
-    if (activeKeyIndex >= apiKeys.length) {
-      setActiveKeyIndex(apiKeys.length - 1);
+  // ============ SIDEBAR PROPS SETUP ============
+  // onLoadChat, onNewChat, onDeleteChat — будут установлены ниже после определения handlers
+
+  // ============ FILE EDITOR AUTO-OPEN ============
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage?.role === 'user' && lastMessage.files) {
+      checkFilesForEditor(lastMessage.files);
     }
-  }, [apiKeys.length, activeKeyIndex]);
-
-  // Auto-scroll (only when user is near bottom; avoid smooth on every streamed chunk)
-  useEffect(() => {
-    if (messages.length === 0) return;
-    if (!isAtBottomRef.current) return;
-    chatEndRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth' });
-  }, [messages, isStreaming]);
-
-  // Mark unsaved when messages change
-  useEffect(() => {
-    if (messages.length > 0) setUnsaved(true);
   }, [messages]);
 
-  // Token counting
-  const countTokens = useCallback(async (msgs: Message[], sys: string, mod: string, apiKey: string) => {
-    if (!apiKey || !mod || msgs.length === 0) { setTokenCount(0); return; }
-    try {
-      const res = await fetch('/api/tokens', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: buildChatRequestMessages(msgs),
-          model: mod,
-          systemInstruction: sys,
-          apiKey,
-        }),
-      });
-      const data = await res.json();
-      setTokenCount(data.totalTokens || 0);
-    } catch {}
-  }, []);
-
+  // ============ TOKEN COUNTING (auto-debounced) ============
   useEffect(() => {
-    if (tokenDebounceRef.current) clearTimeout(tokenDebounceRef.current);
-    if (isStreaming) return;
-    tokenDebounceRef.current = setTimeout(() => {
-      countTokens(messages, systemPrompt, model, selectedApiKey);
-    }, 400);
-    return () => { if (tokenDebounceRef.current) clearTimeout(tokenDebounceRef.current); };
-  }, [messages, systemPrompt, model, selectedApiKey, countTokens, isStreaming]);
+    scheduleTokenCount(
+      messages, systemPrompt, model, selectedApiKey,
+      currentChatId, memoryEnabled, handleSkillEvent,
+      isStreaming, skillsRevision
+    );
+  }, [messages, systemPrompt, model, selectedApiKey, currentChatId, memoryEnabled, handleSkillEvent, isStreaming, skillsRevision]);
 
   // ============ SAVE CHAT ============
   const saveCurrentChat = useCallback(async (msgs: Message[], title?: string, updateCurrentId: boolean = true) => {
@@ -333,12 +426,31 @@ export default function Home() {
       updatedAt: Date.now(),
     };
     // Если чат уже существует, сохраняем createdAt
-    const existing = savedChats.find(c => c.id === chatId);
+    const existing = savedChats.find((c: SavedChat) => c.id === chatId);
     if (existing) chatObj.createdAt = existing.createdAt;
 
     await saveChatToStorage(chatObj);
-    const updated = await loadSavedChats();
-    setSavedChats(updated);
+
+    // File editor: переносим open files с session-id на реальный chatId
+    if (!currentChatId || currentChatId !== chatId) {
+      try {
+        const { migrateEditorChatId } = await import('@/lib/file-editor-bridge');
+        migrateEditorChatId(fileEditorChatKey || currentChatId, chatId);
+      } catch (e) {
+        console.error('[File Editor] migrate chat id failed:', e);
+      }
+    }
+    
+    // Оптимизация: обновляем savedChats локально вместо перезагрузки всех чатов
+    setSavedChats((prev: SavedChat[]) => {
+      const idx = prev.findIndex((c: SavedChat) => c.id === chatId);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = chatObj;
+        return updated;
+      }
+      return [...prev, chatObj];
+    });
     
     // Обновляем currentChatId только если это не создание нового чата
     if (updateCurrentId) {
@@ -349,7 +461,42 @@ export default function Home() {
     
     setUnsaved(false);
     return chatObj;
-  }, [currentChatId, chatTitle, model, systemPrompt, deepThinkSystemPrompt, tools, temperature, savedChats]);
+  }, [currentChatId, chatTitle, model, systemPrompt, deepThinkSystemPrompt, tools, temperature, savedChats, fileEditorChatKey]);
+
+  // ============ GNP HELPERS ============
+  // Ghost Nudge Protocol v2: вспомогательные функции
+
+  // Взять последние N слов из текста (для хвоста инъекции)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const gnpGetTailWords = useCallback((text: string, wordCount: number = 3): string => {
+    const words = text.trim().split(/\s+/);
+    return words.slice(-wordCount).join(' ');
+  }, []);
+
+  // Срезать хвост (tailWords) из начала continuation текста
+  // Нейронка продолжает с tailWords, поэтому они будут в начале continuation
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const gnpTrimContinuation = useCallback((continuation: string, tail: string): string => {
+    if (!tail.trim()) return continuation;
+
+    // Нормализуем tail: убираем лишние пробелы
+    const normalizedTail = tail.trim();
+
+    // Ищем tail в начале continuation (возможно с ведущим пробелом)
+    const trimmed = continuation.trimStart();
+    if (trimmed.toLowerCase().startsWith(normalizedTail.toLowerCase())) {
+      return trimmed.slice(normalizedTail.length);
+    }
+
+    // Фаллбэк: попробуем по словам — ищем первое совпадение tail в тексте
+    const idx = continuation.toLowerCase().indexOf(normalizedTail.toLowerCase());
+    if (idx !== -1 && idx < 30) { // хвост должен быть в начале (первые 30 символов)
+      return continuation.slice(idx + normalizedTail.length);
+    }
+
+    // Если не нашли — возвращаем как есть (без потерь)
+    return continuation;
+  }, []);
 
   // ============ STREAMING ============
   const streamGeneration = useCallback(async (
@@ -357,6 +504,7 @@ export default function Home() {
     targetMessageId: string,
     isAppending: boolean,
     customAnalysis?: DeepThinkAnalysis, // Кастомный анализ после редактирования
+    prebuiltSystemPrompt?: string,      // Готовый prompt от предыдущего DeepThink
   ) => {
     // Получить следующий доступный ключ
     const key = selectedApiKeyEntry?.key;
@@ -380,31 +528,37 @@ export default function Home() {
     ));
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // Память — добавляем в системный промпт
+    // Сборка системного промпта (слои из Context Inspector)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const userMessages = history
-      .filter(m => m.role === 'user')
-      .map(m => getVisibleMessageText(m.parts));
-    
-    const { prompt: memoryPrompt, usedMemoryIds } = buildMemoryPrompt(
-      userMessages,
-      currentChatId || undefined,
-      memoryEnabled
-    );
+    const contextConfig = loadContextLayersConfig();
+    const messageFilters = contextConfig.messageFilters;
 
-    // Отмечаем использованные воспоминания
-    if (usedMemoryIds.length > 0) {
-      markMemoriesUsed(usedMemoryIds, currentChatId || undefined);
+    const initialBuilt = buildSystemPromptLayers({
+      messages: history,
+      systemPrompt,
+      chatId: currentChatId,
+      memoryEnabled,
+      config: contextConfig,
+      handleSkillEvent,
+    });
+
+    if (initialBuilt.usedMemoryIds.length > 0 || initialBuilt.usedImageMemoryIds.length > 0) {
+      markMemoriesUsed(initialBuilt.usedMemoryIds, initialBuilt.usedImageMemoryIds, currentChatId || undefined);
     }
 
-    // DeepThink Pass 1 — если включён, анализируем сначала
-    let effectiveSystemPrompt = systemPrompt;
-    if (memoryPrompt) {
-      effectiveSystemPrompt = memoryPrompt + '\n\n' + systemPrompt;
-    }
+    let effectiveSystemPrompt = initialBuilt.baseBeforeDeepThink;
+    let deepThinkEnhancedForRequest: string | null = null;
+
     let finalAnalysis: DeepThinkAnalysis | null = null;
     
-    if (deepThinkState.enabled && !customAnalysis) {
+    // Получаем текущее сообщение для возможного восстановления промпта при isAppending
+    const targetMsg = history.find(m => m.id === targetMessageId);
+
+    if (deepThinkState.enabled && !customAnalysis && !prebuiltSystemPrompt && !isAppending) {
+      // Путь 1: DeepThink enabled, нет customAnalysis, нет prebuiltSystemPrompt, это не продолжение
+      // Сохраняем исходный prompt ДО DeepThink для diff в Insights
+      const originalPromptBeforeDeepThink = effectiveSystemPrompt;
+      
       // Показываем визуально, что идет анализ - создаем пустое сообщение с deepThinking
       setMessages(prev => prev.map(m =>
         m.id !== targetMessageId ? m : {
@@ -415,11 +569,21 @@ export default function Home() {
         }
       ));
 
+      // Вычисляем правильный ключ и модель для DeepThink
+      // Если настроен кастомный провайдер — берём из него, иначе используем текущий
+      const dtProviderId = deepThinkProviderId || effectiveProviderId;
+      const dtKeys = apiKeys[dtProviderId] || currentProviderKeys;
+      const dtKeyIndex = deepThinkProviderId ? deepThinkApiKeyIndex : currentKeyIndex;
+      const dtKey = dtKeys[dtKeyIndex]?.key || key;
+      const dtModel = deepThinkModelId || model;
+
+      const dtProvider = providers.find(p => p.id === dtProviderId) || providers.find(p => p.isBuiltin);
+      const sceneStateConfig = loadSceneStateConfig();
       const dtResult = await deepThinkAnalyze(
         history,
         effectiveSystemPrompt, // Передаём с памятью!
-        key,
-        model,
+        dtKey,
+        dtModel,
         deepThinkSystemPrompt,
         (thinking: string) => {
           setMessages(prev => prev.map(m =>
@@ -429,24 +593,49 @@ export default function Home() {
               isStreaming: true,
             }
           ));
-        }
+        },
+        0,
+        sceneStateConfig,
+        dtProvider?.baseUrl || 'https://generativelanguage.googleapis.com/v1beta',
+        dtProvider?.type === 'gemini' ? 'gemini' : dtProvider?.type === 'openai' ? 'openai' : 'gemini'
       );
 
       effectiveSystemPrompt = dtResult.enhancedPrompt;
+      deepThinkEnhancedForRequest = dtResult.enhancedPrompt || null;
       finalAnalysis = dtResult.analysis;
       
+      // Сохранить enhancedPrompt и originalPrompt на сообщение для последующего переиспользования
+      if (dtResult.enhancedPrompt && !dtResult.error) {
+        setMessages(prev => prev.map(m =>
+          m.id !== targetMessageId ? m : {
+            ...m,
+            deepThinkEnhancedPrompt: dtResult.enhancedPrompt,
+            deepThinkOriginalPrompt: originalPromptBeforeDeepThink,
+          }
+        ));
+      }
+      
       if (dtResult.error) {
-        // Записываем ошибку прямо в сообщение
+        // DeepThink прерван - НЕ останавливаем генерацию, продолжаем с оригинальным промптом
         setMessages(prev => prev.map(m =>
           m.id !== targetMessageId ? m : {
             ...m,
             deepThinkError: dtResult.error || 'DeepThink failed',
+            deepThinkInterrupted: true,
+            isStreaming: true, // ← НЕ останавливаем
           }
         ));
-        setError(`DeepThink Error: ${dtResult.error}`);
-      }
-
-      if (finalAnalysis) {
+        
+        // Логируем ошибку, но НЕ показываем пользователю (не блокируем UI)
+        console.warn('[DeepThink] Error occurred, falling back to original prompt:', dtResult.error);
+        
+        // Продолжаем с оригинальным системным промптом (fallback)
+        effectiveSystemPrompt = originalPromptBeforeDeepThink;
+        deepThinkEnhancedForRequest = null;
+        
+        // НЕ вызываем setIsStreaming(false) и return — продолжаем генерацию
+      } else if (finalAnalysis) {
+        // DeepThink успешен — используем улучшенный промпт
         setMessages(prev => prev.map(m =>
           m.id !== targetMessageId ? m : {
             ...m,
@@ -456,9 +645,10 @@ export default function Home() {
         ));
       }
     } else if (customAnalysis) {
-      // Используем кастомный анализ после редактирования
+      // Путь 2: Используем кастомный анализ после редактирования
       finalAnalysis = customAnalysis;
       effectiveSystemPrompt = buildEnhancedPromptFromAnalysis(customAnalysis);
+      deepThinkEnhancedForRequest = effectiveSystemPrompt;
       
       // Обновляем анализ в сообщении
       setMessages(prev => prev.map(m =>
@@ -470,72 +660,284 @@ export default function Home() {
           isStreaming: true,
         }
       ));
+    } else if (prebuiltSystemPrompt) {
+      // Путь 3: Готовый prompt (регенерация текста без DeepThink)
+      effectiveSystemPrompt = prebuiltSystemPrompt;
+      deepThinkEnhancedForRequest = prebuiltSystemPrompt;
+      // DeepThink НЕ запускается, deepThinking на сообщении НЕ трогается
+    } else if (isAppending && targetMsg) {
+      // Путь 4: Продолжение разорванной генерации (реюз старого промпта)
+      if (targetMsg.deepThinkEnhancedPrompt) {
+        effectiveSystemPrompt = targetMsg.deepThinkEnhancedPrompt;
+        deepThinkEnhancedForRequest = targetMsg.deepThinkEnhancedPrompt;
+      }
     }
 
+    // Cleanup tracker для таймеров
+    const cleanupTimers: ReturnType<typeof setTimeout>[] = [];
+    
     try {
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       // Tool loop — поддерживает несколько раундов memory tool calls
       // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       
-      // Накапливаем toolCalls/toolResponses между раундами
-      let accumulatedToolCalls: any[] = [];
-      let accumulatedToolResponses: any[] = [];
+      // Накапливаем раунды tool calls/responses
+      const completedRounds: Array<{ calls: any[]; responses: any[] }> = [];
       let memoryCallsThisTurn = 0;
-      const MAX_MEMORY_CALLS = 3;
+      const MAX_MEMORY_CALLS_LOCAL = maxMemoryCalls; // Из настроек UI
+      const MAX_TOOL_ROUNDS_LOCAL = maxToolRounds; // Из настроек UI
+      let toolRoundCount = 0;
       let shouldContinueLoop = true;
-      
+
+      // ── File Editor: force tool use so model doesn't paste whole file into chat ──
+      const {
+        resolveEditorChatId,
+        openEditableAttachments,
+        hasOpenEditorFiles,
+        buildFileEditorForceInstruction,
+        FILE_EDITOR_TOOL_NAMES,
+        isEditableFile,
+      } = await import('@/lib/file-editor-bridge');
+      const editorChatId = fileEditorChatKey || resolveEditorChatId(currentChatId);
+
+      // Ensure skill is active + editable attachments are open before first request
+      try {
+        const { isSkillActive, installSkill } = await import('@/lib/skills/registry');
+        if (!isSkillActive('file-editor')) installSkill('file-editor');
+      } catch { /* ignore */ }
+
+      const historyFiles = history
+        .filter(m => m.role === 'user' && m.files?.length)
+        .flatMap(m => m.files || [])
+        .filter(f => isEditableFile(f.mimeType, f.name));
+      if (historyFiles.length > 0) {
+        try {
+          await openEditableAttachments(
+            editorChatId,
+            historyFiles.map(f => ({
+              id: f.id,
+              name: f.name,
+              mimeType: f.mimeType,
+              data: f.data,
+            }))
+          );
+        } catch (e) {
+          console.error('[File Editor] pre-open failed:', e);
+        }
+      }
+
+      // Force tools until at least one successful file-editor mutation this generation
+      let forceFileEditorTools = hasOpenEditorFiles(editorChatId);
+      let fileEditorMutated = false;
+
+      // ── Ghost Nudge Protocol ──
+      const activeProviderInfo = providers.find(p => p.id === (activeModel?.providerId || ''));
+      const gnpEnabled = ghostNudgeEnabled && activeProviderInfo?.type !== 'openai' && activeProviderInfo?.type !== 'anthropic';
+      const MAX_GHOST_RETRIES = ghostNudgeMaxRetries;
+      let ghostRetryCount = 0;
+      let ghostNudgePending = false;
+      // Флаги умного продолжения GNP v2
+      let gnpSmartMode = false;       // true = это умное продолжение (не просто retry пустого)
+      let gnpOriginalText = '';       // текст до обрыва
+      let gnpTailWords = '';          // 3 последних слова для инъекции
+      let gnpContinuationAcc = '';    // накопленный текст continuation
+      // Локальные флаги для детекции ответа (сбрасываются каждую итерацию)
+      let localAccText = '';
+      let localHadToolCalls = false;
+      let localHadError = false;
+      let localWasBlocked = false;
+      let localFinishReason: string | null = null; // последний finishReason из стрима
+
       while (shouldContinueLoop) {
+        // ЗАЩИТА: ограничиваем максимальное количество раундов
+        if (toolRoundCount >= MAX_TOOL_ROUNDS_LOCAL) {
+          console.warn(`[TOOL LOOP] Превышен лимит раундов (${MAX_TOOL_ROUNDS_LOCAL}), цикл остановлен`);
+          break;
+        }
+        toolRoundCount++;
+        memoryCallsThisTurn = 0; // Сбрасываем счётчик memory calls для нового раунда
+
         shouldContinueLoop = false; // по умолчанию — выходим после одного прохода
-        
-        // Строим историю с накопленными tool calls/responses от предыдущих раундов
-        const messagesForRequest = buildChatRequestMessages(history);
-        
-        // Если есть накопленные tool responses — добавляем их как отдельный turn
-        // (assistant turn с functionCall + user turn с functionResponse)
+
+        // ── Сброс локальных флагов GNP ──
+        localAccText = '';
+        localHadToolCalls = false;
+        localHadError = false;
+        localWasBlocked = false;
+        localFinishReason = null;
+        // Сброс continuation аккумулятора для нового раунда GNP
+        if (gnpSmartMode) gnpContinuationAcc = '';
+
+        // Строим историю
+        const historyForRequest = gnpSmartMode 
+          ? history.filter(m => m.id !== targetMessageId) 
+          : history;
+        const messagesForRequest = buildChatRequestMessages(historyForRequest, messageFilters);
+
+        // Если есть завершённые раунды — добавляем их как отдельные model/user turns
         let contentsForRequest = messagesForRequest;
-        if (accumulatedToolCalls.length > 0 && accumulatedToolResponses.length > 0) {
-          // Добавляем assistant turn с functionCalls (включая thoughtSignature из оригинального вызова)
-          contentsForRequest = [
-            ...messagesForRequest,
-            {
+        if (completedRounds.length > 0) {
+          for (const round of completedRounds) {
+            // Добавляем model turn с functionCalls этого раунда
+            contentsForRequest.push({
               role: 'model',
-              parts: accumulatedToolCalls.map(tc => ({
+              parts: round.calls.map(tc => ({
                 functionCall: { id: tc.id, name: tc.name, args: tc.args },
                 ...(tc.thoughtSignature ? { thoughtSignature: tc.thoughtSignature } : {}),
               })),
-            },
-            {
+            });
+
+            // Добавляем user turn с functionResponses + extraParts этого раунда
+            contentsForRequest.push({
               role: 'user',
-              parts: accumulatedToolResponses.map(tr => ({
-                functionResponse: {
-                  id: tr.toolCallId,
-                  name: tr.name,
-                  response: tr.response,
-                },
-              })),
-            },
-          ];
+              parts: [
+                ...round.responses.map(tr => ({
+                  functionResponse: {
+                    id: tr.toolCallId,
+                    name: tr.name,
+                    response: tr.response,
+                  },
+                })),
+                // extraParts (recalled images) — в тот же turn
+                ...round.responses.flatMap(tr => tr.extraParts || []),
+              ],
+            });
+          }
+        }
+
+        // ── Ghost Nudge инъекция (если pending) ──
+        if (ghostNudgePending) {
+          ghostNudgePending = false;
+          if (gnpSmartMode && gnpTailWords) {
+            // ✨ Умное продолжение: инъекция ghost turns
+            console.log(`👻 [GNP] Smart continuation (attempt ${ghostRetryCount}/${MAX_GHOST_RETRIES}), tail: "${gnpTailWords}"`);
+            
+            // Сначала добавляем саму неоконченную реплику ассистента как model turn
+            contentsForRequest.push({ role: 'model', parts: [{ text: gnpOriginalText }] });
+            
+            // Добавляем ghost user turn (нудж) и ghost model turn (хвост)
+            contentsForRequest.push({ role: 'user', parts: [{ text: '.' }] });
+            contentsForRequest.push({ role: 'model', parts: [{ text: gnpTailWords }] });
+          } else {
+            // Простой retry (пустой ответ)
+            console.log(`👻 [GNP] Retrying empty response (attempt ${ghostRetryCount}/${MAX_GHOST_RETRIES})`);
+          }
+        }
+
+        // Собираем skill tools (file-editor must be present if files open)
+        let skillTools = collectSkillTools();
+        if (forceFileEditorTools || hasOpenEditorFiles(editorChatId)) {
+          const names = new Set(skillTools.map((t: any) => t.name));
+          if (!FILE_EDITOR_TOOL_NAMES.some(n => names.has(n))) {
+            // Skill tools missing — re-collect after forced install
+            try {
+              const { installSkill } = await import('@/lib/skills/registry');
+              installSkill('file-editor');
+            } catch { /* ignore */ }
+            skillTools = collectSkillTools();
+          }
         }
         
-        const response = await fetch('/api/chat', {
+        // Пересобираем промпт внутри цикла (image context обновляется после zoom)
+        // chatId = editorChatId so OPEN FILES section matches bridge storage
+        const loopBuilt = buildSystemPromptLayers({
+          messages: history,
+          systemPrompt,
+          chatId: editorChatId,
+          memoryEnabled,
+          config: contextConfig,
+          handleSkillEvent,
+          deepThinkEnhancedPrompt: deepThinkEnhancedForRequest,
+        });
+        const effectiveSystemPromptWithImages = loopBuilt.text;
+
+        // Inject mandatory tool-use block into the ORIGINAL user turn only (not tool-response turns)
+        let messagesForApi = contentsForRequest;
+        const forceInstr =
+          forceFileEditorTools && toolRoundCount === 0
+            ? buildFileEditorForceInstruction(editorChatId)
+            : '';
+        if (forceInstr) {
+          // First user message in this request that still has text/inlineData (not pure functionResponse)
+          let injected = false;
+          messagesForApi = contentsForRequest.map((m: any) => {
+            if (injected || m.role !== 'user') return m;
+            const parts = Array.isArray(m.parts) ? m.parts : [];
+            const isToolResponseTurn = parts.some((p: any) => p && 'functionResponse' in p);
+            if (isToolResponseTurn) return m;
+            injected = true;
+            return {
+              ...m,
+              parts: [{ text: forceInstr + '\n\n' }, ...parts],
+            };
+          });
+        }
+        
+        // Определяем endpoint и параметры в зависимости от типа провайдера
+        const endpoint = activeProvider?.type === 'openai'
+          ? '/api/openai-chat'
+          : activeProvider?.type === 'anthropic'
+          ? '/api/anthropic-chat'
+          : '/api/chat';
+        const requestBody: any = {
+          messages: messagesForApi,
+          model: activeModel?.modelId || model,
+          systemInstruction: effectiveSystemPromptWithImages,
+          tools: tools,
+          memoryTools: [
+            ...(memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS_LOCAL ? MEMORY_TOOLS : []),
+            ...(memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS_LOCAL ? IMAGE_MEMORY_TOOLS : []),
+            ...skillTools,
+          ],
+          temperature,
+          apiKey: key,
+          maxOutputTokens,
+          includeThoughts: deepThinkState.enabled === true,
+        };
+
+        // Force function calling while file needs editing
+        if (forceFileEditorTools && !fileEditorMutated) {
+          if (activeProvider?.type === 'openai') {
+            requestBody.toolChoice = 'required';
+          } else if (activeProvider?.type === 'anthropic') {
+            requestBody.toolChoice = { type: 'any' };
+          } else {
+            requestBody.toolConfig = {
+              functionCallingConfig: {
+                mode: 'ANY',
+                allowedFunctionNames: [...FILE_EDITOR_TOOL_NAMES],
+              },
+            };
+          }
+        }
+        
+        // Для OpenAI/Anthropic-провайдеров добавляем baseUrl
+        if (activeProvider?.type === 'openai' || activeProvider?.type === 'anthropic') {
+          requestBody.baseUrl = activeProvider.baseUrl;
+          requestBody.includeThoughts = false;
+        } else {
+          // Только для Gemini
+          requestBody.thinkingBudget = thinkingBudget;
+        }
+        
+        const _logTs = Date.now();
+        const _logProvider = activeProvider?.type === 'openai' ? 'openai' : activeProvider?.type === 'anthropic' ? 'anthropic' : 'gemini';
+        const _logModel = activeModel?.modelId || model;
+
+        const response = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: abortControllerRef.current!.signal,
-          body: JSON.stringify({
-            messages: contentsForRequest,
-            model,
-            systemInstruction: effectiveSystemPrompt,
-            tools: tools,
-            // После MAX_MEMORY_CALLS — отключаем memory tools чтобы не зациклиться
-            memoryTools: (memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS) ? MEMORY_TOOLS : [],
-            temperature,
-            apiKey: key,
-            thinkingBudget,
-            includeThoughts: deepThinkState.enabled === true,
-          }),
+          body: JSON.stringify(requestBody),
         });
 
+        // Debug: проверяем что IMAGE_MEMORY_TOOLS отправляются
+        if (memoryEnabled && memoryCallsThisTurn < MAX_MEMORY_CALLS_LOCAL) {
+          console.log('[DEBUG] Sending IMAGE_MEMORY_TOOLS:', IMAGE_MEMORY_TOOLS.map(t => t.name));
+        }
+
         if (!response.ok) {
+          addLogEntry({ type: 'stream_error', source: 'chat', provider: _logProvider, model: _logModel, status: 'error', statusCode: response.status, durationMs: Date.now() - _logTs, error: `HTTP ${response.status}`, chatId: currentChatId || undefined, messageId: targetMessageId });
           setError(`API error: ${response.status}`);
           return;
         }
@@ -547,9 +949,44 @@ export default function Home() {
         let pendingText = '';
         let pendingThinking = '';
         let flushScheduled = false;
+
+        // Создаём imageAliases map для image memory tools
+        const imageInfos = collectImages(history);
+        const imageAliases = new Map<string, string>();
+        imageInfos.forEach(info => {
+          imageAliases.set(info.alias, info.id);
+        });
         
-        // tool calls собранные в этом раунде
+        // attachedFiles для доступа к файлам
+        // ВАЖНО: history уже включает текущее user-сообщение с файлами
+        const attachedFiles = history
+          .filter(m => m.role === 'user' && m.files && m.files.length > 0)
+          .flatMap(m => m.files!)
+          .map(f => ({
+            id: f.id,
+            name: f.name,
+            mimeType: f.mimeType,
+            size: f.size,
+            getData: async () => {
+              // ФИКС: Сначала проверяем f.data (может быть в памяти)
+              if (f.data) return f.data;
+              // Загрузить из IndexedDB если нет в памяти
+              const { loadFileData } = await import('@/lib/fileStorage');
+              const loaded = await loadFileData(f.id);
+              if (!loaded) {
+                console.error(`[attachedFiles] Failed to load file data for ${f.id}`);
+              }
+              return loaded || '';
+            }
+          }));
+
+        // streaming HTML в canvas
+        let htmlAccumulator = '';
+        let isInsideHtmlBlock = false;
+        
+        // tool calls и responses собранные в этом раунде
         const roundToolCalls: any[] = [];
+        const roundToolResponses: any[] = [];
 
         const flush = () => {
           flushScheduled = false;
@@ -568,6 +1005,43 @@ export default function Home() {
           }
 
           if (textChunk) {
+            const chunk = textChunk;
+            
+            // 🔥 LIVE HTML STREAMING PARSER
+            // Детектируем ```html блоки и обновляем preview в реальном времени
+            const fullText = (htmlAccumulator + chunk);
+            
+            // Начало HTML блока
+            if (!isInsideHtmlBlock && fullText.includes('```html')) {
+              isInsideHtmlBlock = true;
+              setShowLiveCanvas(true); // Автооткрытие canvas
+            }
+            
+            if (isInsideHtmlBlock) {
+              htmlAccumulator += chunk;
+              
+              // Конец блока
+              const endMarkers = ['```\n', '```\r', '```\r\n', '``` ', '```<'];
+              if (endMarkers.some(marker => htmlAccumulator.includes(marker))) {
+                isInsideHtmlBlock = false;
+              }
+              
+              // Извлекаем HTML (всё между ```html и ```)
+              const htmlMatch = htmlAccumulator.match(/```(?:html)[\s\n]+([\s\S]*?)(?:```|$)/i);
+              if (htmlMatch && htmlMatch[1]) {
+                const partialHTML = htmlMatch[1];
+                
+                // Throttle: обновляем не чаще 80ms (оптимально для плавности)
+                const timer = setTimeout(() => {
+                  // Only update when we have meaningful HTML (at least has <body> tag or 200+ chars)
+                  if (partialHTML.length > 200 || partialHTML.includes('<body')) {
+                    setLiveCode(partialHTML);
+                  }
+                }, 80);
+                cleanupTimers.push(timer);
+              }
+            }
+
             setMessages(prev => prev.map(m => {
               if (m.id !== targetMessageId) return m;
               const hasTextPart = m.parts.some(p => 'text' in p);
@@ -592,6 +1066,27 @@ export default function Home() {
           requestAnimationFrame(flush);
         };
 
+        // GNP: особый flush — заменяет ВЕСЬ текст сообщения (для сшивки continuation)
+        const gnpFlushFull = () => {
+          if (!pendingText) return;
+          const fullText = pendingText;
+          pendingText = '';
+          setMessages(prev => prev.map(m => {
+            if (m.id !== targetMessageId) return m;
+            const hasTextPart = m.parts.some(p => 'text' in p && !('thought' in p));
+            if (hasTextPart) {
+              return {
+                ...m,
+                parts: m.parts.map(p =>
+                  'text' in p && !('thought' in p) ? { text: fullText } : p
+                ),
+                isStreaming: true,
+              };
+            }
+            return { ...m, parts: [...m.parts, { text: fullText }], isStreaming: true };
+          }));
+        };
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -611,6 +1106,7 @@ export default function Home() {
 
             // Ошибка (Gemini / сеть / quota / invalid key ...)
             if (parsed.error) {
+              localHadError = true;  // GNP flag
               const errMsg = String(parsed.error || 'Gemini API error');
               const isRl = Boolean(parsed.isRateLimit) || isRateLimitError(errMsg);
               const errType = (parsed.errorType as Message['errorType']) || (isRl ? 'rate_limit' : 'unknown');
@@ -646,6 +1142,7 @@ export default function Home() {
 
             // Контент заблокирован
             if (parsed.isBlocked) {
+              localWasBlocked = true;  // GNP flag
               setMessages(prev => prev.map(m =>
                 m.id !== targetMessageId ? m : {
                   ...m,
@@ -656,6 +1153,29 @@ export default function Home() {
                 }
               ));
               continue;
+            }
+
+            // Обработка прерываний из-за лимита токенов
+            if (parsed.finishReason === 'MAX_TOKENS') {
+              setMessages(prev => prev.map(m =>
+                m.id !== targetMessageId ? m : {
+                  ...m,
+                  finishReason: parsed.finishReason,
+                  isPartial: true,
+                  interruptedChunk: {
+                    type: 'chat',
+                    messageId: m.id,
+                    partialContent: getVisibleMessageText(m.parts),
+                    interruptedAt: Date.now(),
+                    reason: 'unknown' // or 'max_tokens' if added to the type InterruptReason 
+                  }
+                }
+              ));
+            }
+
+            // GNP: трекаем finishReason для детекции обрыва
+            if (parsed.finishReason) {
+              localFinishReason = parsed.finishReason;
             }
 
             // Размышления
@@ -669,6 +1189,111 @@ export default function Home() {
               const { name, args } = parsed.functionCall;
               const callId = parsed.functionCall.id || generateToolCallId(name, args);
               
+              // ── SKILL TOOL CALL ──────────────────────────────────────────
+              if (isSkillToolCall(name)) {
+                const skillResult = await executeSkillToolCall(
+                  name,
+                  args as Record<string, unknown>,
+                  editorChatId || fileEditorChatKey || currentChatId || '',
+                  history, // Используем history вместо messages — актуальный массив с текущим user сообщением
+                  handleSkillEvent
+                );
+
+                // After a successful file mutation, stop forcing tools so model can reply briefly
+                if (
+                  (name === 'edit_file' || name === 'replace_lines' || name === 'create_file') &&
+                  skillResult.functionResponse &&
+                  typeof skillResult.functionResponse === 'object' &&
+                  (skillResult.functionResponse as any).success
+                ) {
+                  fileEditorMutated = true;
+                  forceFileEditorTools = false;
+                }
+                
+                // Добавляем артефакты в сообщение
+                if (skillResult.artifacts.length > 0) {
+                  setMessages(prev => prev.map(m => {
+                    if (m.id !== targetMessageId) return m;
+                    return {
+                      ...m,
+                      skillArtifacts: [...(m.skillArtifacts || []), ...skillResult.artifacts] as SkillArtifact[],
+                    };
+                  }));
+                }
+                
+                if (skillResult.functionResponse !== null) {
+                  // mode: 'respond' — добавляем toolResponse для следующего раунда
+                  roundToolCalls.push({
+                    id: callId,
+                    name,
+                    args,
+                    thoughtSignature: parsed.thoughtSignature,
+                  });
+                  roundToolResponses.push({
+                    toolCallId: callId,
+                    name,
+                    response: skillResult.functionResponse,
+                    extraParts: skillResult.responseParts, // sibling parts для Gemini 2.x
+                    hidden: true, // не показываем в UI как обычный tool call
+                  });
+                  
+                  // 🌐 Извлекаем website_type из set_website_meta
+                  if (name === 'set_website_meta' && typeof skillResult.functionResponse === 'object' && skillResult.functionResponse !== null) {
+                    const response = skillResult.functionResponse as any;
+                    if (response.website_type) {
+                      setWebsiteType(response.website_type as WebsiteType);
+                    }
+                  }
+                  
+                  // Добавляем в skillToolCalls для отображения в UI
+                  setMessages(prev => prev.map(m => {
+                    if (m.id !== targetMessageId) return m;
+                    return {
+                      ...m,
+                      skillToolCalls: [...(m.skillToolCalls || []), {
+                        name,
+                        args: args as Record<string, unknown>,
+                        result: skillResult.functionResponse,
+                      }],
+                    };
+                  }));
+                  
+                  // После стрима сделаем ещё один раунд
+                  shouldContinueLoop = true;
+                } else {
+                  // mode: 'fire_and_forget' — отправляем пустой ответ чтобы Gemini продолжил
+                  roundToolCalls.push({
+                    id: callId,
+                    name,
+                    args,
+                    thoughtSignature: parsed.thoughtSignature,
+                  });
+                  roundToolResponses.push({
+                    toolCallId: callId,
+                    name,
+                    response: { status: 'acknowledged' },
+                    hidden: true,
+                  });
+                  
+                  // БАГ #3 FIX: Добавляем в skillToolCalls для отображения в UI
+                  setMessages(prev => prev.map(m => {
+                    if (m.id !== targetMessageId) return m;
+                    return {
+                      ...m,
+                      skillToolCalls: [...(m.skillToolCalls || []), {
+                        name,
+                        args: args as Record<string, unknown>,
+                        result: { status: 'acknowledged' },
+                      }],
+                    };
+                  }));
+                  
+                  shouldContinueLoop = true;
+                }
+                continue; // не обрабатываем как обычный tool
+              }
+              // ─────────────────────────────────────────────────────────────
+              
               // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
               // Обработка инструментов памяти - выполняем молча, добавляем скрытый functionResponse
               // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -676,11 +1301,11 @@ export default function Home() {
               
               if (isMemoryTool) {
                 // Лимит вызовов за turn
-                if (memoryCallsThisTurn >= MAX_MEMORY_CALLS) continue;
+                if (memoryCallsThisTurn >= MAX_MEMORY_CALLS_LOCAL) continue;
                 memoryCallsThisTurn++;
-                
+
                 let memoryResult: { success: boolean; id?: string; error?: string } = { success: false };
-                
+
                 if (name === 'save_memory') {
                   try {
                     const memory = saveMemory(
@@ -787,13 +1412,339 @@ export default function Home() {
                   args,
                   thoughtSignature: parsed.thoughtSignature, // Сохраняем для отправки обратно
                 });
-                accumulatedToolResponses.push({
+                roundToolResponses.push({
                   toolCallId: callId,
                   name,
                   response: { success: memoryResult.success, id: memoryResult.id },
                 });
                 
                 // После стрима сделаем ещё один раунд
+                shouldContinueLoop = true;
+              } 
+              else if (memoryEnabled && (name === 'save_image_memory' || name === 'search_image_memories' || name === 'recall_image_memory')) {
+                // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                // Обработка инструментов визуальной памяти
+                // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                console.log('[IMAGE MEMORY] Tool called:', name, 'args:', args);
+                // Лимит вызовов за turn
+                if (memoryCallsThisTurn >= MAX_MEMORY_CALLS_LOCAL) continue;
+                memoryCallsThisTurn++;
+                
+                let imageMemoryResult: any = { success: false };
+                
+                if (name === 'save_image_memory') {
+                  try {
+                    // Найти изображение по image_id
+                    const imageId = args.image_id;
+                    const fileId = imageAliases.get(imageId) || imageId;
+                    
+                    console.log('[save_image_memory] Looking for image:', { imageId, fileId, availableFiles: attachedFiles.map(f => f.id) });
+                    
+                    // Получить файл из attachedFiles
+                    const file = attachedFiles.find(f => f.id === fileId);
+                    let base64: string;
+                    let mimeType: string;
+                    let width: number;
+                    let height: number;
+                    
+                    if (!file) {
+                      // Fallback: загрузить из universal image store
+                      const { loadUniversalImage } = await import('@/lib/universal-image-store');
+                      const universalImg = await loadUniversalImage(fileId);
+                      
+                      if (universalImg) {
+                        base64 = universalImg.base64;
+                        mimeType = universalImg.image.mimeType;
+                        width = universalImg.image.width;
+                        height = universalImg.image.height;
+                        console.log('[save_image_memory] Loaded from universal store:', fileId);
+                      } else {
+                        console.error('[save_image_memory] Image not found:', { imageId, fileId, availableFiles: attachedFiles.map(f => f.id) });
+                        imageMemoryResult = { success: false, error: `Image not found: ${imageId}. Available: ${attachedFiles.map(f => f.id).join(', ')}` };
+                        continue;
+                      }
+                    } else {
+                      base64 = await file.getData();
+                      mimeType = file.mimeType;
+                      
+                      // Получить размеры изображения
+                      const dimensions = await getImageDimensions(base64, mimeType);
+                      width = dimensions.width;
+                      height = dimensions.height;
+                    }
+                    
+                    // Получить контекст из последних сообщений
+                    const messageContext = history
+                      .slice(-3)
+                      .map(m => getVisibleMessageText(m.parts))
+                      .join(' ')
+                      .slice(-200);
+                    
+                    // Сохранить в память
+                    const memory = await saveImageMemory({
+                      base64,
+                      mimeType,
+                      width,
+                      height,
+                      description: args.description,
+                      tags: args.tags || [],
+                      entities: args.entities || [],
+                      scope: args.scope,
+                      chatId: currentChatId || '',
+                      messageContext,
+                      // TODO: получить текущие аннотации из состояния если args.save_annotations === true
+                      annotations: args.save_annotations ? [] : undefined,
+                      relatedMemoryIds: args.related_memory_ids || []
+                    });
+                    
+                    // Если нужно сохранить кропы
+                    if (args.save_crops && Array.isArray(args.save_crops) && args.save_crops.length > 0) {
+                      for (const crop of args.save_crops) {
+                        if (crop.separate_memory) {
+                          // Создать кроп через cropAndScale
+                          const cropResult = await cropAndScale(
+                            base64,
+                            mimeType,
+                            crop.region,
+                            1 // без масштабирования
+                          );
+                          
+                          // Сохранить как отдельное image memory
+                          await saveImageMemory({
+                            base64: cropResult.base64,
+                            mimeType: cropResult.mimeType,
+                            width: cropResult.cropSize.width,
+                            height: cropResult.cropSize.height,
+                            description: `${crop.label} (кроп из: ${args.description})`,
+                            tags: [...(args.tags || []), 'crop'],
+                            entities: args.entities || [],
+                            scope: args.scope,
+                            chatId: currentChatId || '',
+                            messageContext,
+                            sourceImageMemoryId: memory.id,
+                            cropRegion: crop.region
+                          });
+                        }
+                      }
+                    }
+                    
+                    imageMemoryResult = { success: true, id: memory.id };
+                    console.log('[image-memory] Saved:', memory.id);
+                    
+                    // Добавляем memory operation для отображения в чате
+                    const memoryOp: import('@/types').MemoryOperation = {
+                      type: 'save_image',
+                      scope: memory.scope,
+                      description: memory.description,
+                      tags: memory.tags,
+                      entities: memory.entities,
+                      thumbnailBase64: memory.thumbnailBase64,
+                      memoryId: memory.id,
+                    };
+                    
+                    // Добавляем к текущему сообщению модели
+                    setMessages(prev => prev.map(m => 
+                      m.id === targetMessageId
+                        ? { ...m, memoryOperations: [...(m.memoryOperations || []), memoryOp] }
+                        : m
+                    ));
+                    
+                    // Диспатчим событие для обновления UI
+                    window.dispatchEvent(new CustomEvent('imageMemorySaved', { 
+                      detail: { id: memory.id, scope: memory.scope } 
+                    }));
+                  } catch (e) {
+                    console.error('[image-memory] Save error:', e);
+                    imageMemoryResult = { success: false, error: String(e) };
+                  }
+                } else if (name === 'search_image_memories') {
+                  try {
+                    const results = searchImageMemories(
+                      args.query,
+                      args.scope,
+                      args.limit || 10
+                    );
+                    
+                    imageMemoryResult = {
+                      success: true,
+                      found: results.length,
+                      results: results.map(r => ({
+                        id: r.id,
+                        description: r.description,
+                        tags: r.tags,
+                        entities: r.entities,
+                        mentions: r.mentions,
+                        created_at: new Date(r.created_at).toLocaleDateString('ru-RU')
+                      }))
+                    };
+                    
+                    // Добавляем memory operation для отображения в чате (с thumbnails для UI)
+                    const memoryOp: import('@/types').MemoryOperation = {
+                      type: 'search_image',
+                      query: args.query,
+                      scope: args.scope,
+                      results: results.map(r => ({
+                        id: r.id,
+                        description: r.description,
+                        tags: r.tags,
+                        entities: r.entities,
+                        thumbnailBase64: r.thumbnailBase64,
+                      })),
+                    };
+                    
+                    setMessages(prev => prev.map(m => 
+                      m.id === targetMessageId
+                        ? { ...m, memoryOperations: [...(m.memoryOperations || []), memoryOp] }
+                        : m
+                    ));
+                  } catch (e) {
+                    console.error('[image-memory] Search error:', e);
+                    imageMemoryResult = { success: false, error: String(e) };
+                  }
+                } else if (name === 'recall_image_memory') {
+                  try {
+                    const memory = await getImageMemory(args.image_memory_id);
+                    
+                    if (memory) {
+                      const base64 = await loadImageMemoryData(memory.id);
+                      
+                      // Инкрементим mentions
+                      incrementImageMemoryMentions([memory.id]);
+                      
+                      imageMemoryResult = {
+                        success: true,
+                        id: memory.id,
+                        description: memory.description,
+                        tags: memory.tags,
+                        entities: memory.entities,
+                        size: `${memory.originalWidth}×${memory.originalHeight}`,
+                        recalled: true
+                      };
+                      
+                      // Добавляем изображение в responseParts для Gemini
+                      if (base64) {
+                        // Проверяем размер изображения (Gemini имеет лимиты)
+                        const imageSizeBytes = base64.length * 0.75; // base64 -> bytes
+                        const maxSizeMB = 20; // Gemini лимит ~20MB
+                        
+                        if (imageSizeBytes > maxSizeMB * 1024 * 1024) {
+                          console.warn(`[recall_image_memory] Image too large: ${(imageSizeBytes / 1024 / 1024).toFixed(2)}MB`);
+                          imageMemoryResult = { 
+                            success: false, 
+                            error: `Image too large (${(imageSizeBytes / 1024 / 1024).toFixed(2)}MB). Maximum ${maxSizeMB}MB.` 
+                          };
+                        } else {
+                          // Сохраняем recalled изображение в universal store для доступа skill tools
+                          const { saveUniversalImage } = await import('@/lib/universal-image-store');
+                          const recalledImageId = memory.id; // Используем ID памяти как ID изображения
+                          
+                          await saveUniversalImage({
+                            id: recalledImageId,
+                            source: 'recalled',
+                            base64,
+                            mimeType: memory.mimeType,
+                            width: memory.originalWidth,
+                            height: memory.originalHeight,
+                            chatId: currentChatId || undefined,
+                            messageId: targetMessageId,
+                            metadata: {
+                              description: memory.description,
+                              tags: memory.tags,
+                              scope: memory.scope,
+                            },
+                          });
+                          
+                          // Генерируем короткий alias для модели
+                          const shortAlias = generateImageId();
+                          imageAliases.set(shortAlias, recalledImageId);
+                          
+                          console.log(`[recall_image_memory] Saved to universal store: ${recalledImageId}, alias: ${shortAlias}`);
+                          
+                          // Обновляем imageMemoryResult с alias для модели
+                          imageMemoryResult = {
+                            ...imageMemoryResult,
+                            image_id: shortAlias, // Короткий ID для использования в следующих tool calls
+                          };
+                          
+                          // Создаем артефакт для UI
+                          const recallArtifact: import('@/types').SkillArtifact = {
+                            id: `recall_${memory.id}`,
+                            type: 'image',
+                            label: `🧠 Recalled: ${memory.description}`,
+                            data: { 
+                              kind: 'base64', 
+                              mimeType: memory.mimeType, 
+                              base64 
+                            },
+                            downloadable: true,
+                            filename: `recalled_${memory.id}.${memory.mimeType.split('/')[1]}`,
+                          };
+                          
+                          // Добавляем memory operation для отображения в чате
+                          const memoryOp: import('@/types').MemoryOperation = {
+                            type: 'recall_image',
+                            memoryId: memory.id,
+                            description: memory.description,
+                            tags: memory.tags,
+                            thumbnailBase64: memory.thumbnailBase64,
+                            scope: memory.scope,
+                          };
+                          
+                          roundToolResponses.push({
+                            toolCallId: callId,
+                            name,
+                            response: imageMemoryResult,
+                            extraParts: [{
+                              inlineData: {
+                                mimeType: memory.mimeType,
+                                data: base64
+                              }
+                            }],
+                            artifacts: [recallArtifact],
+                            hidden: true,
+                          });
+                          
+                          // Добавляем memory operation к сообщению
+                          setMessages(prev => prev.map(m => 
+                            m.id === targetMessageId
+                              ? { ...m, memoryOperations: [...(m.memoryOperations || []), memoryOp] }
+                              : m
+                          ));
+                          
+                          roundToolCalls.push({ 
+                            id: callId, 
+                            name, 
+                            args,
+                            thoughtSignature: parsed.thoughtSignature,
+                          });
+                          
+                          shouldContinueLoop = true;
+                          continue; // Пропускаем обычную обработку ниже
+                        }
+                      }
+                    } else {
+                      imageMemoryResult = { success: false, error: 'Image memory not found' };
+                    }
+                  } catch (e) {
+                    console.error('[image-memory] Recall error:', e);
+                    imageMemoryResult = { success: false, error: String(e) };
+                  }
+                }
+                
+                // Накапливаем для следующего раунда
+                roundToolCalls.push({ 
+                  id: callId, 
+                  name, 
+                  args,
+                  thoughtSignature: parsed.thoughtSignature,
+                });
+                roundToolResponses.push({
+                  toolCallId: callId,
+                  name,
+                  response: imageMemoryResult,
+                  hidden: true,
+                });
+                
                 shouldContinueLoop = true;
                 
               } else {
@@ -833,55 +1784,257 @@ export default function Home() {
 
             // Текст ответа
             if (parsed.text) {
-              pendingText += parsed.text;
-              scheduleFlush();
+              localAccText += parsed.text;  // GNP: трекаем для детекции пустого ответа
+              if (gnpSmartMode) {
+                // GNP умное продолжение: накапливаем continuation отдельно
+                gnpContinuationAcc += parsed.text;
+                // Показываем юзеру сшитый текст в реальном времени
+                const trimmedSoFar = gnpTrimContinuation(gnpContinuationAcc, gnpTailWords);
+                const stitchedSoFar = gnpOriginalText + trimmedSoFar;
+                pendingText = stitchedSoFar; // перезаписываем, не накапливаем
+                // Особый flush: заменяем весь текст, а не накапливаем
+                gnpFlushFull();
+              } else {
+                pendingText += parsed.text;
+                scheduleFlush();
+              }
             }
           } catch {}
         }
 
-        }
-
         // Flush any buffered chunks before finishing.
         flush();
+        addLogEntry({ type: 'stream_done', source: 'chat', provider: _logProvider, model: _logModel, status: 'ok', statusCode: 200, durationMs: Date.now() - _logTs, chatId: currentChatId || undefined, messageId: targetMessageId });
 
-        // Если были memory tool calls в этом раунде — накапливаем их для следующего
+        // GNP: отмечаем если были tool calls
         if (roundToolCalls.length > 0) {
-          accumulatedToolCalls = [...accumulatedToolCalls, ...roundToolCalls];
-          // Сбрасываем текст в сообщении чтобы модель дописала с чистого листа
-          setMessages(prev => prev.map(m =>
-            m.id !== targetMessageId ? m : { ...m, parts: [{ text: '' }], isStreaming: true }
-          ));
+          localHadToolCalls = true;
         }
-      }
+
+        // Если были tool calls в этом раунде — сохраняем раунд для следующей итерации
+        if (roundToolCalls.length > 0 && roundToolResponses.length > 0) {
+          completedRounds.push({
+            calls: roundToolCalls,
+            responses: roundToolResponses,
+          });
+          
+          // НЕ сбрасываем текст если он уже есть — сохраняем накопленный контент
+          setMessages(prev => prev.map(m => {
+            if (m.id !== targetMessageId) return m;
+            const textPart = m.parts.find(p => 'text' in p && !('thought' in p));
+            const currentText = textPart && 'text' in textPart ? textPart.text : '';
+            // Сбрасываем только если текста ещё нет
+            if (!currentText) {
+              return { ...m, parts: [{ text: '' }], isStreaming: true };
+            }
+            return { ...m, isStreaming: true };
+          }));
+        }
+
+        // ── Ghost Nudge Protocol v2 ──
+
+        // Случай 1: Пустой ответ — простой retry
+        if (
+          gnpEnabled &&
+          !localAccText.trim() &&
+          !localHadToolCalls &&
+          !localHadError &&
+          !localWasBlocked &&
+          !gnpSmartMode && // не повторяем retry если уже в smart mode
+          !shouldContinueLoop
+        ) {
+          if (ghostRetryCount < MAX_GHOST_RETRIES) {
+            ghostRetryCount++;
+            console.log(`👻 [GNP] Empty response — retry ${ghostRetryCount}/${MAX_GHOST_RETRIES}`);
+            ghostNudgePending = true;
+            gnpSmartMode = false;
+            shouldContinueLoop = true;
+
+            // Показываем индикатор перегенерации
+            setMessages(prev => prev.map(m =>
+              m.id === targetMessageId ? {
+                ...m,
+                isStreaming: true,
+                ghostRetrying: true,
+                ghostRetryAttempt: ghostRetryCount,
+                ghostRetryMax: MAX_GHOST_RETRIES,
+              } : m
+            ));
+          } else {
+            console.warn(`👻 [GNP] All ${MAX_GHOST_RETRIES} retries exhausted`);
+            setMessages(prev => prev.map(m =>
+              m.id === targetMessageId ? {
+                ...m,
+                ghostRetrying: false,
+                ghostRetryFailed: true,
+                isStreaming: false,
+                error: 'Gemini не смог сгенерировать ответ после нескольких попыток',
+                errorType: 'unknown' as const,
+              } : m
+            ));
+          }
+        }
+
+        // Случай 2: Умное продолжение — обрыв генерации (есть текст, но finishReason ≠ STOP)
+        else if (
+          gnpEnabled &&
+          localAccText.trim() &&
+          !localHadToolCalls &&
+          !localHadError &&
+          !localWasBlocked &&
+          !shouldContinueLoop &&
+          localFinishReason !== null &&
+          localFinishReason !== 'STOP'
+        ) {
+          if (ghostRetryCount < MAX_GHOST_RETRIES) {
+            ghostRetryCount++;
+            gnpSmartMode = true;
+
+            // Если уже был smart mode — сшиваем предыдущий результат в gnpOriginalText
+            if (gnpOriginalText) {
+              const trimmedPrev = gnpTrimContinuation(localAccText, gnpTailWords);
+              gnpOriginalText = gnpOriginalText + trimmedPrev;
+            } else {
+              // Первый раз: сохраняем весь текст до обрыва
+              gnpOriginalText = localAccText;
+            }
+
+            // Берём последние 3 слова как хвост для инъекции
+            gnpTailWords = gnpGetTailWords(gnpOriginalText, 3);
+
+            console.log(`👻 [GNP] Smart continuation — truncated at ${localFinishReason}, attempt ${ghostRetryCount}/${MAX_GHOST_RETRIES}`);
+            console.log(`👻 [GNP] Original tail: "${gnpTailWords}"`);
+
+            ghostNudgePending = true;
+            shouldContinueLoop = true;
+
+            // Показываем юзеру спец. индикатор Ghost Protocol (не обычный retry)
+            setMessages(prev => prev.map(m =>
+              m.id === targetMessageId ? {
+                ...m,
+                isStreaming: true,
+                ghostNudgeActive: true,
+                ghostRetrying: false,
+                // Сбрасываем isPartial — GNP возьмёт на себя продолжение
+                isPartial: false,
+                interruptedChunk: undefined,
+              } : m
+            ));
+          } else {
+            console.warn(`👻 [GNP] Smart continuation exhausted all ${MAX_GHOST_RETRIES} retries`);
+            // Оставляем что есть — финальный сшитый текст уже показан
+            setMessages(prev => prev.map(m =>
+              m.id === targetMessageId ? {
+                ...m,
+                ghostNudgeActive: false,
+                ghostRetrying: false,
+                isStreaming: false,
+              } : m
+            ));
+          }
+        }
+
+        // Случай 3: Умное продолжение завершилось корректно (STOP)
+        else if (gnpSmartMode && localFinishReason === 'STOP') {
+          // Финальная сшивка
+          const trimmedFinal = gnpTrimContinuation(localAccText, gnpTailWords);
+          const stitchedFinal = gnpOriginalText + trimmedFinal;
+          console.log(`👻 [GNP] Smart continuation complete. Stitched ${gnpOriginalText.length} + ${trimmedFinal.length} chars`);
+
+          // Устанавливаем финальный сшитый текст
+          setMessages(prev => prev.map(m => {
+            if (m.id !== targetMessageId) return m;
+            return {
+              ...m,
+              parts: m.parts.map(p =>
+                'text' in p && !('thought' in p)
+                  ? { text: stitchedFinal }
+                  : p
+              ),
+              ghostNudgeActive: false,
+              isStreaming: true, // will be set to false in finally
+            };
+          }));
+          gnpSmartMode = false;
+        }
+      } // конец while (shouldContinueLoop)
+    } // конец try
 
     } catch (e: any) {
-      if (e.name !== 'AbortError') {
+      if (e.name === 'AbortError') {
+        addLogEntry({ type: 'stream_aborted', source: 'chat', provider: (activeProvider?.type === 'openai' ? 'openai' : activeProvider?.type === 'anthropic' ? 'anthropic' : 'gemini'), model: activeModel?.modelId || model, status: 'aborted', durationMs: 0, chatId: currentChatId || undefined, messageId: targetMessageId });
+      } else {
+        addLogEntry({ type: 'stream_error', source: 'chat', provider: (activeProvider?.type === 'openai' ? 'openai' : activeProvider?.type === 'anthropic' ? 'anthropic' : 'gemini'), model: activeModel?.modelId || model, status: 'error', durationMs: 0, error: e.message || 'Ошибка стриминга', chatId: currentChatId || undefined, messageId: targetMessageId });
         setError(e.message || 'Ошибка стриминга');
       }
     } finally {
+      // Cleanup всех таймеров
+      cleanupTimers.forEach(timer => clearTimeout(timer));
+      
       setIsStreaming(false);
       setStreamingId(null);
       abortControllerRef.current = null;
+      
+      // Помечаем сообщение завершённым
       setMessages(prev => prev.map(m =>
-        m.id === targetMessageId ? { ...m, isStreaming: false } : m
+        m.id === targetMessageId ? { ...m, isStreaming: false, ghostRetrying: false, ghostNudgeActive: false } : m
       ));
+      
+      // Небольшая задержка чтобы дать React время обновить messagesRef
+      // после последнего flush() перед вызовом onMessageComplete
+      setTimeout(() => {
+        // Используем messagesRef для гарантированного доступа к актуальному состоянию
+        // (избегаем проблемы с React batching где finalMessageSnapshot может быть null)
+        const finalMessage = messagesRef.current.find(m => m.id === targetMessageId);
+        
+        if (finalMessage) {
+          notifySkillsMessageComplete(
+            finalMessage,
+            currentChatId || '',
+            messagesRef.current,
+            handleSkillEvent
+          ).then(newArtifacts => {
+            if (newArtifacts.length > 0) {
+              setMessages(prev => prev.map(m =>
+                m.id === targetMessageId
+                  ? { ...m, skillArtifacts: [...(m.skillArtifacts ?? []), ...newArtifacts] }
+                  : m
+              ));
+            }
+          }).catch(console.error);
+        }
+      }, 100); // 100ms достаточно для React batching
     }
-  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, memoryEnabled]);
+  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, fileEditorChatKey, memoryEnabled, activeProvider, maxOutputTokens, handleSkillEvent, maxToolRounds, maxMemoryCalls, gnpGetTailWords, gnpTrimContinuation]);
+
+  // Auto-open sheet for ai_interactive sites when streaming ends
+  useEffect(() => {
+    if (!isStreaming && isMobile && showLiveCanvas && websiteType === 'ai_interactive' && mobileCanvasState === 'hidden') {
+      setMobileCanvasState('sheet');
+    }
+  }, [isStreaming, isMobile, showLiveCanvas, websiteType, mobileCanvasState]);
 
   // ============ HANDLERS ============
-  const handleSend = useCallback(async (text: string, files: AttachedFile[]) => {
+  const handleSend = useCallback(async (text: string, files: AttachedFile[], annotationRefs?: import('@/types').AnnotationReference[]) => {
     if (!selectedApiKey || !model || isStreaming) return;
 
     setError('');
+    
+    // Текст остается как есть, аннотации сохраняем отдельно
     const userParts: Part[] = [];
     if (text) userParts.push({ text });
-    files.forEach(f => userParts.push({ inlineData: { mimeType: f.mimeType, data: f.data } }));
+    
+    // Добавляем файлы (они уже в base64 после обработки в ChatInput)
+    files.forEach(f => {
+      userParts.push({ inlineData: { mimeType: f.mimeType, data: f.data } });
+    });
 
     const userMsg: Message = {
       id: generateId(),
       role: 'user',
       parts: userParts,
       files: files.length > 0 ? files : undefined,
+      annotationRefs: annotationRefs && annotationRefs.length > 0 ? annotationRefs : undefined,
     };
 
     const assistantMsgId = generateId();
@@ -897,13 +2050,33 @@ export default function Home() {
     const newMessages = [...messages, userMsg, assistantMsg];
     setMessages(newMessages);
 
+    // File Editor: сразу открываем txt/code в панели (мост skill↔UI)
+    if (files.length > 0) {
+      try {
+        await checkFilesForEditor(files);
+      } catch (e) {
+        console.error('[File Editor] auto-open failed:', e);
+      }
+    }
+
+    addLogEntry({
+      type: 'send', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId: userMsg.id, after: serializeMessage(userMsg),
+    });
+    addLogEntry({
+      type: 'stream_start', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId: assistantMsgId, after: serializeMessage(assistantMsg),
+    });
+
     const historyToSend = [...messages, userMsg];
     await streamGeneration(historyToSend, assistantMsgId, false);
-  }, [selectedApiKey, model, isStreaming, messages, streamGeneration, selectedApiKeySuffix]);
+  }, [selectedApiKey, model, isStreaming, messages, streamGeneration, selectedApiKeySuffix, activeModel, currentChatId, checkFilesForEditor]);
 
   const handleRegenerate = useCallback(async () => {
     if (isStreaming || messages.length === 0) return;
-    
+
     const lastMsg = messages[messages.length - 1];
 
     // Если последнее сообщение от пользователя — генерируем ответ на него
@@ -918,6 +2091,11 @@ export default function Home() {
         apiKeySuffix: selectedApiKeySuffix || undefined,
       };
       setMessages([...messages, assistantMsg]);
+      addLogEntry({
+        type: 'regenerate', source: 'chat',
+        chatId: currentChatId || undefined,
+        messageId: newMsgId, after: serializeMessage(assistantMsg),
+      });
       await streamGeneration(messages, newMsgId, false);
       return;
     }
@@ -926,21 +2104,38 @@ export default function Home() {
     const lastModelIdx = [...messages].reverse().findIndex(m => m.role === 'model');
     if (lastModelIdx === -1) return;
     const actualIdx = messages.length - 1 - lastModelIdx;
+    const oldMsg = messages[actualIdx];
     const newMsgId = generateId();
     const newMessages = [
       ...messages.slice(0, actualIdx),
       { id: newMsgId, role: 'model' as const, parts: [{ text: '' }], isStreaming: true, modelName: model, apiKeySuffix: selectedApiKeySuffix || undefined },
     ];
     setMessages(newMessages);
+    addLogEntry({
+      type: 'regenerate', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId: newMsgId, before: serializeMessage(oldMsg),
+    });
     await streamGeneration(messages.slice(0, actualIdx), newMsgId, false);
-  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
+  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix, currentChatId]);
 
-  const handleContinue = useCallback(async () => {
+  const handleContinue = useCallback(async (chunk?: import('@/types').InterruptedChunk) => {
     if (isStreaming) return;
     const lastMsg = messages[messages.length - 1];
     if (!lastMsg || lastMsg.role !== 'model') return;
 
-    const lastText = (lastMsg.parts.find(p => 'text' in p) as any)?.text || '';
+    const lastText = getVisibleMessageText(lastMsg.parts);
+
+    // Очищаем флаги прерывания перед продолжением
+    setMessages(prev => prev.map((m, i) => {
+      if (i === prev.length - 1) {
+        const resetMsg = { ...m };
+        delete resetMsg.isPartial;
+        delete resetMsg.interruptedChunk;
+        return resetMsg;
+      }
+      return m;
+    }));
 
     // Если последнее сообщение модели — это DeepThink без финального текста,
     // создаём новое сообщение модели (обычная генерация)
@@ -956,13 +2151,341 @@ export default function Home() {
       };
       // История: всё до DeepThink-сообщения включительно, кроме него
       const historyUpTo = messages.slice(0, messages.length - 1);
-      setMessages([...messages, assistantMsg]);
+      setMessages(prev => [...prev, assistantMsg]);
       await streamGeneration(historyUpTo, newMsgId, false);
       return;
     }
 
     await streamGeneration(messages, lastMsg.id, true);
   }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
+
+  // ============ RPG FEEDBACK + F-LOVE ============
+  const handleFeedback = useCallback((
+    messageId: string,
+    rating: 'like' | 'dislike',
+    comment?: string
+  ) => {
+    const msg = messages.find(m => m.id === messageId);
+    if (!msg) return;
+
+    const isToggleOff = msg.feedback?.rating === rating;
+
+    if (!isToggleOff) {
+      const excerpt = getVisibleMessageText(msg.parts).slice(0, 200);
+      addFeedbackEntry({
+        rating,
+        comment: comment || '',
+        excerpt,
+        timestamp: Date.now()
+      });
+      // F-Love profile (primary style learner)
+      try {
+        recordStyleFeedback({ rating, comment, excerpt, source: 'thumb' });
+      } catch { /* ignore */ }
+    }
+
+    addLogEntry({
+      type: 'feedback', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId,
+      before: serializeMessage(msg),
+      after: serializeMessage(
+        isToggleOff
+          ? { ...msg, feedback: undefined }
+          : { ...msg, feedback: { rating, comment, timestamp: Date.now() } }
+      ),
+    });
+
+    setMessages(prev => prev.map(m =>
+      m.id !== messageId ? m :
+      isToggleOff
+        ? { ...m, feedback: undefined }
+        : { ...m, feedback: { rating, comment, timestamp: Date.now() } }
+    ));
+  }, [messages, currentChatId]);
+
+  const handleRememberStyle = useCallback((messageId: string) => {
+    const msg = messages.find(m => m.id === messageId);
+    if (!msg || msg.role !== 'model') return;
+    const text = getVisibleMessageText(msg.parts);
+    try {
+      recordStyleFeedback({
+        rating: 'like',
+        comment: 'Эталон стиля (кнопка «Стиль»)',
+        excerpt: text.slice(0, 200),
+        source: 'edit',
+      });
+      if (text.length < 400) addCustomRule('Эталонные ответы — короткие (до ~400 символов, если контекст позволяет).');
+      if (!/\*[^*\n]+\*/.test(text)) addCustomRule('Не использовать *действия* в звёздочках (эталон без них).');
+      if (!/\*\*/.test(text)) addCustomRule('Без **markdown** жирного, если не просили.');
+    } catch (e) {
+      console.error('[F-Love] remember style', e);
+    }
+    handleFeedback(messageId, 'like', 'Запомненный стиль');
+  }, [messages, handleFeedback]);
+
+  const handleShorter = useCallback(async (messageId: string) => {
+    if (isStreaming) return;
+    const msgIdx = messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+    const badMessage = messages[msgIdx];
+    const historyBefore = messages.slice(0, msgIdx);
+    recordStyleFeedback({
+      rating: 'dislike',
+      comment: 'Слишком длинно — нужна короче',
+      excerpt: getVisibleMessageText(badMessage.parts).slice(0, 120),
+      source: 'shorter',
+    });
+
+    const hint: Message = {
+      id: generateId(),
+      role: 'user',
+      parts: [{ text: SHORTER_HINT }],
+      kind: 'bridge_data',
+    };
+    const newMsgId = generateId();
+    setMessages([
+      ...historyBefore,
+      { ...badMessage, kind: 'regenerated_hidden' },
+      hint,
+      {
+        id: newMsgId,
+        role: 'model',
+        parts: [{ text: '' }],
+        isStreaming: true,
+        modelName: model,
+        apiKeySuffix: selectedApiKeySuffix || undefined,
+      },
+    ]);
+    await streamGeneration([...historyBefore, hint], newMsgId, false);
+  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
+
+  const handleContinueFromCursor = useCallback(async (messageId: string) => {
+    if (isStreaming) return;
+    const msg = messages.find(m => m.id === messageId);
+    if (!msg || msg.role !== 'model') return;
+    // Append-mode continue from current text (after manual edit / stop)
+    await streamGeneration(messages, messageId, true);
+  }, [isStreaming, messages, streamGeneration]);
+
+  const handleRegenerateWithFeedback = useCallback(async (
+    messageId: string,
+    dislikeComment: string
+  ) => {
+    if (isStreaming) return;
+
+    // 1. Найти индекс плохого сообщения
+    const msgIdx = messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+
+    const badMessage = messages[msgIdx];
+    const badText = getVisibleMessageText(badMessage.parts).slice(0, 400);
+
+    // 2. История ДО плохого сообщения
+    const historyBefore = messages.slice(0, msgIdx);
+
+    // 3. Сформировать скрытый хинт-сообщение
+    const feedbackHint: Message = {
+      id: generateId(),
+      role: 'user',
+      parts: [{
+        text: `[SYSTEM FEEDBACK - не упоминай это в ответе] Твой предыдущий ответ был: "${badText}${badText.length === 400 ? '...' : ''}"
+
+Пользователь поставил дизлайк.${dislikeComment ? `\nПричина: "${dislikeComment}"` : ''}
+
+Напиши принципиально иначе. Учти замечание.`,
+      }],
+      kind: 'bridge_data', // переиспользуем существующий механизм скрытия
+    };
+
+    // 4. Сохранить оригинальное сообщение с дизлайком как скрытое (для аналитики)
+    const hiddenBadMessage: Message = {
+      ...badMessage,
+      kind: 'regenerated_hidden', // скрытое, но доступное для аналитики
+      feedback: { ...badMessage.feedback!, appliedToRegeneration: true }
+    };
+
+    // 5. Создать новое пустое сообщение модели
+    const newMsgId = generateId();
+    const newMessages = [
+      ...historyBefore,
+      hiddenBadMessage, // ← СОХРАНЯЕМ оригинал для аналитики
+      feedbackHint,
+      { 
+        id: newMsgId, 
+        role: 'model' as const, 
+        parts: [{ text: '' }], 
+        isStreaming: true, 
+        modelName: model, 
+        apiKeySuffix: selectedApiKeySuffix || undefined 
+      },
+    ];
+    setMessages(newMessages);
+
+    addLogEntry({
+      type: 'branch', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId: newMsgId,
+      before: serializeMessage(badMessage),
+      affectedMessageIds: [messageId, newMsgId],
+    });
+
+    // 6. Стримить. История для API: всё до плохого + хинт (БЕЗ hiddenBadMessage)
+    await streamGeneration([...historyBefore, feedbackHint], newMsgId, false);
+  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix, currentChatId]);
+
+  // ============ DEEPTHINK IMPROVEMENTS ============
+  
+  // Регенерация только текста без повторного DeepThink
+  const handleRegenerateTextOnly = useCallback(async (messageId: string) => {
+    if (isStreaming) return;
+
+    const msgIdx = messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+
+    const existingMsg = messages[msgIdx];
+    const historyBefore = messages.slice(0, msgIdx);
+
+    // Сбросить только основной текст и ошибки — сохранить deepThinking, deepThinkAnalysis
+    setMessages(prev => prev.map(m =>
+      m.id !== messageId ? m : {
+        ...m,
+        parts: [{ text: '' }],
+        thinking: undefined,
+        error: undefined,
+        errorType: undefined,
+        errorCode: undefined,
+        errorStatus: undefined,
+        errorRetryAfterMs: undefined,
+        isBlocked: false,
+        blockReason: undefined,
+        finishReason: undefined,
+        isStreaming: true,
+      }
+    ));
+
+    addLogEntry({
+      type: 'regenerate', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId,
+      before: serializeMessage(existingMsg),
+    });
+
+    // Передать сохранённый enhanced prompt через новый параметр
+    await streamGeneration(
+      historyBefore,
+      messageId,
+      false,
+      undefined,                                // customAnalysis
+      existingMsg.deepThinkEnhancedPrompt,      // prebuiltSystemPrompt
+    );
+  }, [isStreaming, messages, streamGeneration, currentChatId]);
+
+  // Редактирование DeepThink размышлений
+  const extractEnhancedPromptFromThinking = (thinking: string): string => {
+    const marker = '---СИСТЕМНЫЙ ПРОМПТ---';
+    const idx = thinking.indexOf(marker);
+    return idx !== -1
+      ? thinking.slice(idx + marker.length).trim()
+      : thinking.trim();
+  };
+
+  const handleEditDeepThinking = useCallback((messageId: string, newThinking: string) => {
+    setMessages(prev => prev.map(m => {
+      if (m.id !== messageId) return m;
+      const newEnhancedPrompt = extractEnhancedPromptFromThinking(newThinking);
+      return {
+        ...m,
+        deepThinking: newThinking,
+        deepThinkEnhancedPrompt: newEnhancedPrompt || m.deepThinkEnhancedPrompt,
+      };
+    }));
+  }, []);
+
+  // Скрыть blocked state
+  const handleDismissBlocked = useCallback((messageId: string) => {
+    setMessages(prev => prev.map(m =>
+      m.id !== messageId ? m : { ...m, isBlocked: false, blockReason: undefined }
+    ));
+  }, []);
+
+  // Продолжить DeepThink после прерывания
+  const handleContinueDeepThink = useCallback(async (messageId: string) => {
+    if (isStreaming) return;
+    
+    const msgIdx = messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+    
+    const historyBefore = messages.slice(0, msgIdx);
+    
+    // Сбросить флаг interrupted и запустить заново
+    setMessages(prev => prev.map(m =>
+      m.id !== messageId ? m : {
+        ...m,
+        deepThinkInterrupted: false,
+        deepThinkError: undefined,
+        isStreaming: true,
+      }
+    ));
+    
+    // Запустить streamGeneration заново с DeepThink
+    await streamGeneration(historyBefore, messageId, false);
+  }, [isStreaming, messages, streamGeneration]);
+
+  // Пропустить DeepThink и начать генерацию текста
+  const handleSkipDeepThink = useCallback(async (messageId: string) => {
+    if (isStreaming) return;
+    
+    const msgIdx = messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+    
+    const historyBefore = messages.slice(0, msgIdx);
+    
+    // Сбросить флаг interrupted и начать генерацию без DeepThink
+    setMessages(prev => prev.map(m =>
+      m.id !== messageId ? m : {
+        ...m,
+        deepThinkInterrupted: false,
+        deepThinkError: undefined,
+        isStreaming: true,
+      }
+    ));
+    
+    // Запустить streamGeneration без DeepThink (используя базовый systemPrompt)
+    await streamGeneration(historyBefore, messageId, false, undefined, systemPrompt);
+  }, [isStreaming, messages, streamGeneration, systemPrompt]);
+
+  const handleBranch = useCallback((messageId: string) => {
+    if (isStreaming || (appMode === 'arena' && arena.isStreaming)) return;
+    
+    if (appMode === 'arena') {
+      arena.branchSession(messageId);
+      return;
+    }
+    
+    const msgIdx = messages.findIndex(m => m.id === messageId);
+    if (msgIdx === -1) return;
+    
+    if (messages.length > 0) {
+      saveCurrentChat(messages).catch(console.error);
+    }
+    
+    const branchMessages = messages.slice(0, msgIdx + 1).map(m => ({ ...m }));
+    const newChatId = generateId();
+    setCurrentChatId(newChatId);
+    setActiveChatId(newChatId);
+    setMessages(branchMessages);
+    setChatTitle(chatTitle ? `${chatTitle} (Ветка)` : 'Новая ветка');
+    setUnsaved(true);
+
+    addLogEntry({
+      type: 'branch', source: 'chat',
+      chatId: newChatId,
+      messageId,
+      affectedMessageIds: branchMessages.map(m => m.id),
+      messageCount: branchMessages.length,
+    });
+  }, [isStreaming, appMode, arena, messages, chatTitle, saveCurrentChat]);
 
   const handleSubmitToolResults = useCallback(async (
     modelMessageId: string,
@@ -1020,13 +2543,41 @@ export default function Home() {
 
     const nextMessages = [...updatedMessages, userToolMessage, assistantMsg];
     setMessages(nextMessages);
+
+    addLogEntry({
+      type: 'send', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId: userToolMessage.id,
+      after: serializeMessage(userToolMessage),
+      affectedMessageIds: [modelMessageId, userToolMessage.id, assistantMsgId],
+    });
+
     await streamGeneration([...updatedMessages, userToolMessage], assistantMsgId, false);
-  }, [isStreaming, messages, model, selectedApiKeySuffix, streamGeneration]);
+  }, [isStreaming, messages, model, selectedApiKeySuffix, streamGeneration, currentChatId]);
 
   const handleEdit = useCallback((id: string, newParts: Part[]) => {
     const msgIdx = messages.findIndex(m => m.id === id);
     if (msgIdx === -1) return;
     const msg = messages[msgIdx];
+    const before = serializeMessage(msg);
+    const after = serializeMessage({ ...msg, parts: newParts });
+    addLogEntry({
+      type: 'edit_message', source: 'chat',
+      chatId: currentChatId || undefined,
+      messageId: id, before, after,
+    });
+
+    // F-Love: учимся на правках model-сообщений
+    if (msg.role === 'model') {
+      try {
+        const beforeText = before.text || getVisibleMessageText(msg.parts);
+        const afterText = after.text || getVisibleMessageText(newParts);
+        recordStyleEdit({ messageId: id, before: beforeText, after: afterText });
+      } catch (e) {
+        console.error('[F-Love] record edit failed', e);
+      }
+    }
+
     if (msg.role === 'user') {
       setMessages(prev => prev.map(m =>
         m.id === id ? { ...m, parts: newParts, forceEdit: false } : m
@@ -1036,7 +2587,7 @@ export default function Home() {
         m.id === id ? { ...m, parts: newParts, isBlocked: false, error: undefined, errorType: undefined, errorCode: undefined, errorStatus: undefined } : m
       ));
     }
-  }, [messages]);
+  }, [messages, currentChatId]);
 
   const forceEditPreviousUserMessage = useCallback((modelMessageId: string) => {
     setMessages(prev => {
@@ -1060,6 +2611,14 @@ export default function Home() {
 
   // Удаляет строго одно сообщение по ID — никакого каскада
   const handleDelete = useCallback((id: string) => {
+    const msg = messages.find(m => m.id === id);
+    if (msg) {
+      addLogEntry({
+        type: 'delete_message', source: 'chat',
+        chatId: currentChatId || undefined,
+        messageId: id, before: serializeMessage(msg),
+      });
+    }
     setMessages(prev => {
       const idx = prev.findIndex(m => m.id === id);
       if (idx === -1) return prev;
@@ -1067,9 +2626,45 @@ export default function Home() {
       next.splice(idx, 1);
       return next;
     });
-  }, []);
+  }, [messages, currentChatId]);
 
-  const handleEditDeepThinkAnalysis = useCallback((id: string, analysis: DeepThinkAnalysis) => {
+  // ============ FILE EDITOR HANDLERS (bridge) ============
+  const handleAcceptEdits = useCallback((fileId: string) => {
+    acceptFileEditorEdits(fileId);
+  }, [acceptFileEditorEdits]);
+
+  const handleRejectEdits = useCallback((fileId: string) => {
+    rejectFileEditorEdits(fileId);
+  }, [rejectFileEditorEdits]);
+
+  const handleManualEdit = useCallback((fileId: string, newContent: string) => {
+    manualFileEditorEdit(fileId, newContent);
+  }, [manualFileEditorEdit]);
+
+  const handleDownloadFile = useCallback((fileId: string) => {
+    const file = openFiles.find(f => f.id === fileId);
+    if (!file) return;
+
+    const blob = new Blob([file.content], { type: file.mimeType || 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [openFiles]);
+
+  const handleRevertFile = useCallback((fileId: string) => {
+    revertFileEditorFile(fileId);
+  }, [revertFileEditorFile]);
+
+  const handleCloseFile = useCallback((fileId: string) => {
+    closeFileEditorFile(fileId);
+  }, [closeFileEditorFile]);
+
+  const handleEditDeepThinkAnalysis = useCallback(async (id: string, analysis: DeepThinkAnalysis) => {
     // Найти сообщение и перегенерировать с новым анализом
     const msgIdx = messages.findIndex(m => m.id === id);
     if (msgIdx === -1) return;
@@ -1078,20 +2673,153 @@ export default function Home() {
     const historyUpTo = messages.slice(0, msgIdx);
     
     // Перегенерировать с кастомным анализом
-    streamGeneration(historyUpTo, id, false, analysis);
+    await streamGeneration(historyUpTo, id, false, analysis);
   }, [messages, streamGeneration]);
 
   const handleStop = useCallback(() => {
+    // Abort-as-accept: partial model text is treated as accepted style signal
+    try {
+      const streaming = messagesRef.current.find(m => m.isStreaming && m.role === 'model');
+      const partial = streaming ? getVisibleMessageText(streaming.parts) : '';
+      if (partial.trim().length > 20) {
+        recordAbortAccepted(partial);
+        if (streaming) {
+          setMessages(prev => prev.map(m =>
+            m.id === streaming.id
+              ? {
+                  ...m,
+                  isPartial: true,
+                  feedback: m.feedback || { rating: 'like' as const, comment: 'Стоп = принять', timestamp: Date.now() },
+                }
+              : m
+          ));
+        }
+      }
+    } catch (e) {
+      console.error('[F-Love] abort-accept', e);
+    }
+
     abortControllerRef.current?.abort();
-  }, []);
+    abortDeepThink();
+    if (currentExecutor) {
+      currentExecutor.cancel();
+      setCurrentExecutor(null);
+    }
+  }, [abortDeepThink, currentExecutor]);
 
-  const handleAddUserMessage = useCallback(() => {
-    const msg: Message = { id: generateId(), role: 'user', parts: [{ text: '' }] };
+  const handleAgentSend = useCallback(async (text: string, files: AttachedFile[]) => {
+    if (!activeAgentId || isStreaming) return;
+    
+    const graph = getGraphById(activeAgentId);
+    if (!graph) {
+      setError('Agent graph not found');
+      return;
+    }
+
+    setError('');
+    setIsStreaming(true);
+    setAgentTrace([]);
+    
+    // 1. Создаем ID чата если его нет
+    const chatId = currentChatId || `agent_chat_${activeAgentId}_${Date.now()}`;
+    if (!currentChatId) {
+      setCurrentChatId(chatId);
+      setActiveChatId(chatId);
+    }
+
+    // 2. Добавляем сообщение пользователя
+    const userMsg: Message = {
+      id: generateId(),
+      role: 'user',
+      parts: [{ text }],
+      files: files.length > 0 ? files : undefined,
+    };
+    
+    // 3. Создаем пустое сообщение агента для стриминга
+    const assistantMsgId = generateId();
+    const assistantMsg: Message = {
+      id: assistantMsgId,
+      role: 'model',
+      parts: [{ text: '' }],
+      isStreaming: true,
+      modelName: 'Agent Graph',
+    };
+
+    const newMessages = [...messages, userMsg, assistantMsg];
+    setMessages(newMessages);
+
+    // 4. Запускаем Executor
+    const executor = new GraphExecutor(graph, {
+      chatId: chatId,
+      onNodeStart: (nodeId, nodeName) => {
+        setAgentTrace(prev => [...prev, { id: nodeId, name: nodeName, status: 'running', startTime: Date.now() }]);
+      },
+      onNodeComplete: (nodeId, output) => {
+        setAgentTrace(prev => prev.map(t => t.id === nodeId ? { ...t, status: 'success', duration: Date.now() - t.startTime } : t));
+      },
+      onNodeError: (nodeId, error) => {
+        setAgentTrace(prev => prev.map(t => t.id === nodeId ? { ...t, status: 'error' } : t));
+        setError(`Error in node ${nodeId}: ${error}`);
+      },
+      onNodeStream: (nodeId, chunk) => {
+        setMessages(prev => prev.map(m => {
+          if (m.id !== assistantMsgId) return m;
+          const textPart = m.parts.find(p => 'text' in p);
+          if (textPart) {
+            return {
+              ...m,
+              parts: m.parts.map(p => 'text' in p ? { text: (p as any).text + chunk } : p)
+            };
+          }
+          return { ...m, parts: [...m.parts, { text: chunk }] };
+        }));
+      },
+      onChatInputRequest: async (source, options) => {
+        // Human-in-the-loop: ставим на паузу и ждем ввода
+        setIsStreaming(false);
+        return new Promise((resolve) => {
+          setAgentInputRequest({ source, context: options, resolve });
+        });
+      }
+    });
+
+    setCurrentExecutor(executor);
+    
+    try {
+      const run = await executor.run(text);
+      // Финальное сохранение чата
+      saveCurrentChat([...messages, userMsg, { ...assistantMsg, isStreaming: false }]);
+    } catch (e: any) {
+      console.error('Agent execution failed:', e);
+      setError(e.message || 'Agent execution failed');
+    } finally {
+      setIsStreaming(false);
+      setStreamingId(null);
+      setCurrentExecutor(null);
+    }
+  }, [activeAgentId, isStreaming, messages, currentChatId, saveCurrentChat]);
+
+  /** Пустой ход модели — для ручного ввода/правки ответа ассистента (не user). */
+  const handleAddModelMessage = useCallback(() => {
+    const msg: Message = {
+      id: generateId(),
+      role: 'model',
+      parts: [{ text: '' }],
+      modelName: model || undefined,
+      apiKeySuffix: selectedApiKeySuffix || undefined,
+    };
     setMessages(prev => [...prev, msg]);
-  }, []);
+    setUnsaved(true);
+  }, [model, selectedApiKeySuffix]);
 
-  const handleClearChat = useCallback(() => {
-    if (isStreaming) return;
+  const clearChatState = useCallback(() => {
+    if (messages.length > 0) {
+      addLogEntry({
+        type: 'clear_chat', source: 'chat',
+        chatId: currentChatId || undefined,
+        messageCount: messages.length,
+      });
+    }
     setMessages([]);
     setTokenCount(0);
     setError('');
@@ -1099,7 +2827,18 @@ export default function Home() {
     setChatTitle('');
     setUnsaved(false);
     setActiveChatId(null);
-  }, [isStreaming]);
+  }, [messages, currentChatId]);
+
+  const handleClearChat = useCallback(() => {
+    if (isStreaming) return;
+    
+    // Подтверждение перед очисткой
+    if (messages.length > 0 && !confirm('Очистить текущий чат? Несохранённые изменения будут потеряны.')) {
+      return;
+    }
+    
+    clearChatState();
+  }, [isStreaming, messages.length, clearChatState]);
 
   const handleNewChat = useCallback(() => {
     if (isStreaming) return;
@@ -1107,72 +2846,23 @@ export default function Home() {
     if (messages.length > 0) {
       saveCurrentChat(messages, undefined, false).catch(console.error);
     }
-    // Сразу очищаем чат
-    handleClearChat();
+    addLogEntry({ type: 'new_chat', source: 'chat', chatId: currentChatId || undefined });
+    // Сразу очищаем чат БЕЗ подтверждения (это новый чат, не удаление)
+    clearChatState();
     setSystemPrompt('');
     setDeepThinkSystemPrompt(loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
     setTools([]);
-  }, [isStreaming, messages, saveCurrentChat, handleClearChat]);
+    // 🔥 Сбрасываем canvas
+    setLiveCode('');
+    setWebsiteType(null);
+    setShowLiveCanvas(false);
+  }, [isStreaming, messages, saveCurrentChat, clearChatState, currentChatId]);
 
-  const handleLoadChat = useCallback((chat: SavedChat) => {
-    if (isStreaming) return;
-    if (messages.length > 0 && unsaved) {
-      saveCurrentChat(messages);
-    }
-    setMessages(chat.messages);
-    setCurrentChatId(chat.id);
-    setChatTitle(chat.title);
-    setModel(chat.model);
-    setSystemPrompt(chat.systemPrompt || '');
-    setDeepThinkSystemPrompt(chat.deepThinkSystemPrompt || loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
-    setTools(chat.tools || []);
-    setTemperature(chat.temperature ?? 1.0);
-    setActiveChatId(chat.id);
-    setUnsaved(false);
-    setError('');
-  }, [isStreaming, messages, unsaved, saveCurrentChat]);
-
-  const handleDeleteSavedChat = useCallback(async (id: string) => {
-    await deleteChatFromStorage(id);
-    const updated = await loadSavedChats();
-    setSavedChats(updated);
-    if (currentChatId === id) {
-      handleClearChat();
-    }
-  }, [currentChatId, handleClearChat]);
-
-  const handleSavedChatsChange = useCallback(async (chats: SavedChat[]) => {
-    setSavedChats(chats);
-    for (const c of chats) {
-      await saveChatToStorage(c);
-    }
-  }, []);
-
-  const handleApiKeysChange = useCallback((keys: ApiKeyEntry[]) => {
-    const sanitized = sanitizeApiKeys(keys);
-    setApiKeys(sanitized);
-    saveApiKeys(sanitized);
-  }, []);
-
-  // Auto-save when streaming stops
-  useEffect(() => {
-    if (!isStreaming && messages.length > 0 && unsaved) {
-      const lastMsg = messages[messages.length - 1];
-      // Сохраняем только если получили реальный ответ
-      const lastText = getVisibleMessageText(lastMsg.parts);
-      if (lastMsg.role === 'model' && (lastText || lastMsg.isBlocked || (lastMsg.toolCalls?.length || 0) > 0)) {
-        saveCurrentChat(messages);
-      }
-    }
-  }, [isStreaming]);
-
-  const hasKeys = !!selectedApiKeyEntry;
-  const hasApiAndModel = hasKeys && !!model;
-  const lastMessage = messages[messages.length - 1];
-  const lastIsModel = lastMessage?.role === 'model';
+  // Visible messages (filtered for display)
   const visibleMessages = useMemo(
     () => messages.filter(message => {
       if (message.kind === 'tool_response') return false;
+      if (message.kind === 'bridge_data') return false;
       if (
         message.role === 'user' &&
         (message.toolResponses?.length || 0) > 0 &&
@@ -1185,6 +2875,189 @@ export default function Home() {
     }),
     [messages]
   );
+
+  // Windowed rendering: only render a subset of messages for performance
+  const {
+    renderedMessages,
+    hasMoreAbove,
+    loadMoreAbove,
+    resetWindow: resetMessageWindow,
+    topSentinelRef,
+    isAutoLoading,
+  } = useWindowedMessages({
+    messages: visibleMessages,
+    initialWindowSize: 50,
+    loadMoreCount: 30,
+  });
+
+  const handleLoadChat = useCallback((chat: SavedChat) => {
+    if (isStreaming) return;
+    if (messages.length > 0 && unsaved) {
+      saveCurrentChat(messages).catch(err => {
+        console.error('Failed to save current chat before loading:', err);
+        // TODO: показать toast пользователю
+      });
+    }
+    setMessages(chat.messages);
+    setCurrentChatId(chat.id);
+    setChatTitle(chat.title);
+    const loadModel = allModels.find(m => m.id === chat.model);
+    if (loadModel) {
+      setActiveProviderIdState(loadModel.providerId);
+      setActiveModelState({ providerId: loadModel.providerId, modelId: loadModel.id });
+    } else {
+      setActiveModelState({ providerId: 'google', modelId: chat.model });
+    }
+    setSystemPrompt(chat.systemPrompt || '');
+    setDeepThinkSystemPrompt(chat.deepThinkSystemPrompt || loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
+    setTools(chat.tools || []);
+    setTemperature(chat.temperature ?? 1.0);
+    setActiveChatId(chat.id);
+    setUnsaved(false);
+    setError('');
+
+    addLogEntry({
+      type: 'load_chat', source: 'chat',
+      chatId: chat.id,
+      messageCount: chat.messages.length,
+    });
+
+    // Reset windowed messages and scroll to bottom immediately
+    resetMessageWindow();
+    requestAnimationFrame(() => {
+      scrollToBottomImmediate();
+    });
+  }, [isStreaming, messages, unsaved, saveCurrentChat, allModels, resetMessageWindow, scrollToBottomImmediate]);
+
+  const handleOpenAgent = useCallback((agentId: string, parentChatId?: string) => {
+    if (isStreaming) return;
+    
+    // Автосохранение текущего чата
+    if (messages.length > 0) {
+      saveCurrentChat(messages, undefined, false).catch(console.error);
+    }
+    
+    // Загружаем агента
+    const agent = getAgents().find(a => a.id === agentId);
+    if (!agent) {
+      console.error('Agent not found:', agentId);
+      return;
+    }
+    
+    // Создаём новый подчат
+    const subChatId = generateId();
+    const newChat: SavedChat = {
+      id: subChatId,
+      title: agent.name,
+      messages: [],
+      model: agent.model,
+      systemPrompt: agent.systemPrompt,
+      deepThinkSystemPrompt: loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT,
+      tools: [],
+      temperature: agent.temperature,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      parentChatId: parentChatId || currentChatId || undefined,
+      agentId: agent.id,
+      isSubChat: true,
+    };
+    
+    // Сохраняем подчат
+    saveChatToStorage(newChat).then(() => {
+      // Обновляем список чатов
+      loadSavedChats().then(chats => {
+        setSavedChats(chats);
+      });
+    });
+    
+    // Очищаем текущий чат и загружаем подчат
+    clearChatState();
+    setMessages([]);
+    setCurrentChatId(subChatId);
+    setChatTitle(agent.name);
+    
+    // Устанавливаем модель агента
+    const agentModel = allModels.find(m => m.id === agent.model);
+    if (agentModel) {
+      setActiveProviderIdState(agentModel.providerId);
+      setActiveModelState({ providerId: agentModel.providerId, modelId: agentModel.id });
+    } else {
+      setActiveModelState({ providerId: 'google', modelId: agent.model });
+    }
+    
+    setSystemPrompt(agent.systemPrompt);
+    setTemperature(agent.temperature);
+    setActiveChatId(subChatId);
+    setUnsaved(false);
+    
+    // Сбрасываем canvas
+    setLiveCode('');
+    setWebsiteType(null);
+    setShowLiveCanvas(false);
+    
+    // TODO: Загрузить референсные изображения из image memory если есть
+    // TODO: Активировать скиллы агента
+    
+  }, [isStreaming, messages, saveCurrentChat, clearChatState, allModels, currentChatId, generateId, loadSavedChats, setSavedChats]);
+
+  const handleDeleteSavedChat = useCallback(async (id: string) => {
+    // Получаем чат перед удалением для очистки URL
+    const chat = savedChats.find(c => c.id === id);
+    if (chat) {
+      // Собираем все id файлов из сообщений
+      const fileIds: string[] = [];
+      chat.messages.forEach(msg => {
+        if (msg.files) {
+          msg.files.forEach(file => {
+            fileIds.push(file.id);
+          });
+        }
+      });
+      // Очищаем Object URLs
+      if (fileIds.length > 0) {
+        revokePreviewUrls(fileIds);
+      }
+    }
+    
+    await deleteChatFromStorage(id);
+    
+    // Оптимизация: удаляем из state локально вместо перезагрузки
+    setSavedChats((prev: SavedChat[]) => prev.filter((c: SavedChat) => c.id !== id));
+    
+    if (currentChatId === id) {
+      handleClearChat();
+    }
+  }, [currentChatId, handleClearChat, savedChats]);
+
+  const handleSavedChatsChange = useCallback(async (chats: SavedChat[]) => {
+    // Оптимизация: сохраняем только изменённые чаты
+    // Предполагаем что chats — это новый порядок, сохраняем всё
+    setSavedChats(chats);
+    
+    // Сохраняем параллельно вместо последовательно
+    await Promise.all(chats.map(c => saveChatToStorage(c)));
+  }, []);
+
+  // Auto-save when streaming stops
+  useEffect(() => {
+    if (!isStreaming && messages.length > 0 && unsaved) {
+      const lastMsg = messages[messages.length - 1];
+      // Сохраняем только если получили реальный ответ
+      const lastText = getVisibleMessageText(lastMsg.parts);
+      if (lastMsg.role === 'model' && (lastText || lastMsg.isBlocked || (lastMsg.toolCalls?.length || 0) > 0)) {
+        saveCurrentChat(messages).catch(err => {
+          console.error('Auto-save failed:', err);
+          // TODO: показать toast пользователю
+        });
+      }
+    }
+  }, [isStreaming, messages, unsaved, saveCurrentChat]);
+
+  const hasKeys = !!selectedApiKeyEntry;
+  const hasApiAndModel = hasKeys && !!model;
+  const lastMessage = messages[messages.length - 1];
+  const lastIsModel = lastMessage?.role === 'model';
+
   const canContinue = lastIsModel && !isStreaming && (
     getVisibleMessageText(lastMessage?.parts || []).length > 0 ||
     !!lastMessage?.deepThinkAnalysis
@@ -1234,53 +3107,42 @@ export default function Home() {
     };
   }, [isMobile, settingsSidebarOpen]);
 
-  const settingsSidebarProps = {
-    apiKeys,
-    onApiKeysChange: handleApiKeysChange,
-    activeKeyIndex,
-    onActiveKeyIndexChange: setActiveKeyIndex,
-    model,
-    onModelChange: setModel,
-    models,
-    onModelsLoad: setModels,
-    systemPrompt,
-    onSystemPromptChange: setSystemPrompt,
-    tools,
-    onToolsChange: setTools,
-    onOpenToolBuilder: (tool?: ChatTool) => {
-      setEditingTool(tool || null);
-      setShowToolBuilder(true);
-    },
-    onOpenSavePromptDialog: () => {
-      setNewPromptName('');
-      setShowSavePromptDialog(true);
-    },
-    onOpenDeepThinkDialog: () => {
-      setShowDeepThinkDialog(true);
-    },
-    onOpenMemoryModal: () => {
-      setShowMemoryModal(true);
-    },
-    deepThinkSystemPrompt,
-    onDeepThinkSystemPromptChange: setDeepThinkSystemPrompt,
-    temperature,
-    onTemperatureChange: setTemperature,
-    thinkingBudget,
-    onThinkingBudgetChange: setThinkingBudget,
-    tokenCount,
-    isStreaming,
-    savedChats,
-    onSavedChatsChange: handleSavedChatsChange,
-    currentChatId,
-    onLoadChat: handleLoadChat,
-    onNewChat: handleNewChat,
-    onDeleteChat: handleDeleteSavedChat,
-    memoryEnabled,
-    onMemoryEnabledChange: setMemoryEnabled,
-  };
+  // Connect handlers to sidebar props
+  settingsSidebarProps.onLoadChat = handleLoadChat;
+  settingsSidebarProps.onNewChat = handleNewChat;
+  settingsSidebarProps.onDeleteChat = handleDeleteSavedChat;
+  settingsSidebarProps.onOpenRPGProfileModal = () => setShowRPGProfileModal(true);
+
+  // Messages to display: in arena mode use arena session messages
+  const displayMessages = appMode === 'arena'
+    ? (arena.activeSession?.messages ?? [])
+    : messages;
+
+  const arenaVisibleMessages = useMemo(
+    () => displayMessages.filter(message => {
+      if (message.kind === 'tool_response') return false;
+      return true;
+    }),
+    [displayMessages]
+  );
+
+  // Windowed rendering for arena mode
+  const {
+    renderedMessages: arenaRenderedMessages,
+    hasMoreAbove: arenaHasMoreAbove,
+    loadMoreAbove: arenaLoadMoreAbove,
+    topSentinelRef: arenaTopSentinelRef,
+    isAutoLoading: arenaIsAutoLoading,
+  } = useWindowedMessages({
+    messages: arenaVisibleMessages,
+    initialWindowSize: 50,
+    loadMoreCount: 30,
+  });
 
   return (
     <div className="fixed inset-0 flex overflow-hidden bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.06),transparent_24%),var(--surface-0)]">
+      {/* Storage Warning Banner */}
+      <StorageWarningBanner />
 
       {isMobile && chatSidebarOpen && (
         <div className="sidebar-mobile-overlay" onClick={(e) => { if (e.target === e.currentTarget) setChatSidebarOpen(false); }}>
@@ -1293,6 +3155,7 @@ export default function Home() {
               onNewChat={handleNewChat}
               onDeleteChat={handleDeleteSavedChat}
               onClose={() => setChatSidebarOpen(false)}
+              {...chatSidebarArenaPropsWithAgent}
             />
           </div>
         </div>
@@ -1302,16 +3165,34 @@ export default function Home() {
         <div className="sidebar-mobile-overlay sidebar-mobile-overlay-right" onClick={(e) => { if (e.target === e.currentTarget) setSettingsSidebarOpen(false); }}>
           <div className="sidebar-backdrop" />
           <div className="sidebar-panel">
-            <SettingsSidebar
-              {...settingsSidebarProps}
-              onClose={() => setSettingsSidebarOpen(false)}
-            />
+            {appMode === 'arena' ? (
+              <ArenaAgentsSidebar
+                session={arena.activeSession}
+                models={allModels}
+                providers={providers}
+                globalApiKeys={apiKeys}
+                savedChats={savedChats}
+                onUpdateAgent={arena.updateAgent}
+                onAddAgent={arena.addAgent}
+                onRemoveAgent={arena.removeAgent}
+                responseMode={arena.activeSession?.responseMode ?? 'auto'}
+                onToggleMode={arena.toggleResponseMode}
+                onImportChat={arena.importChatAsSession}
+                onUpdateSessionPrompt={arena.updateSessionSystemPrompt}
+                onClose={() => setSettingsSidebarOpen(false)}
+              />
+            ) : (
+              <SettingsSidebar
+                {...settingsSidebarProps}
+                onClose={() => setSettingsSidebarOpen(false)}
+              />
+            )}
           </div>
         </div>
       )}
 
       {!isMobile && (
-        <div className="flex-shrink-0 overflow-hidden border-r border-[var(--border-subtle)] transition-[width,opacity] duration-300 ease-out" style={chatSidebarStyle}>
+        <div className="flex-shrink-0 overflow-hidden border-r border-[var(--border-subtle)] transition-[width,opacity] duration-[350ms] ease-[cubic-bezier(0.16,1,0.3,1)]" style={chatSidebarStyle}>
           <div className="h-full w-[320px]">
             <ChatSidebar
               savedChats={savedChats}
@@ -1319,13 +3200,50 @@ export default function Home() {
               onLoadChat={handleLoadChat}
               onNewChat={handleNewChat}
               onDeleteChat={handleDeleteSavedChat}
+              {...chatSidebarArenaPropsWithAgent}
             />
           </div>
         </div>
       )}
 
-      {/* Main Chat Area */}
-      <div className="flex-1 flex min-w-0 flex-col overflow-hidden">
+      {/* Mobile: Bottom Sheet для ai_interactive или Tab Switcher для static */}
+      {isMobile && showLiveCanvas && websiteType === 'static' && (
+        <div className="flex-shrink-0 flex bg-[var(--surface-1)] border-b border-[var(--border-subtle)] px-4 py-2">
+          <div className="flex bg-[var(--surface-3)] p-1 rounded-lg w-full">
+            <button 
+              onClick={() => setMobileCanvasState('hidden')} 
+              className={`flex-1 text-center py-1.5 text-[13px] font-semibold rounded-md transition-colors ${
+                mobileCanvasState === 'hidden' ? 'bg-[var(--surface-4)] text-[var(--accent)] shadow-sm' : 'text-[var(--text-dim)] hover:text-[var(--text-muted)]'
+              }`}
+            >
+              Чат
+            </button>
+            <button 
+              onClick={() => setMobileCanvasState('fullscreen')} 
+              className={`flex-1 text-center py-1.5 text-[13px] font-semibold rounded-md transition-colors ${
+                mobileCanvasState === 'fullscreen' ? 'bg-[var(--surface-4)] text-[var(--accent)] shadow-sm' : 'text-[var(--text-dim)] hover:text-[var(--text-muted)]'
+              }`}
+            >
+              Live Preview
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main Area with optional Live Canvas */}
+      <PanelGroup direction={isMobile ? "vertical" : "horizontal"} className="flex-1 min-w-0 overflow-hidden">
+        
+        {/* Chat Panel */}
+        <Panel 
+           defaultSize={showLiveCanvas && !isMobile ? 50 : 100} 
+           minSize={30} 
+           className={`flex flex-col min-w-0 overflow-hidden relative ${
+             isMobile && showLiveCanvas && (
+               (websiteType === 'static' && mobileCanvasState === 'fullscreen') ||
+               (websiteType === 'ai_interactive' && mobileCanvasState === 'fullscreen')
+             ) ? '!hidden' : ''
+           }`}
+        >
 
         {/* Top bar */}
         <div className="flex flex-shrink-0 items-center justify-between border-b border-[var(--border-subtle)] bg-[rgba(10,10,10,0.86)] px-3 py-2.5 backdrop-blur-xl">
@@ -1340,8 +3258,29 @@ export default function Home() {
             >
               <PanelLeft size={15} />
             </button>
-            <div className="flex items-center gap-2 min-w-0">
-              {chatTitle ? (
+            <div className="hidden md:flex items-center gap-1 mx-2 bg-[var(--surface-2)] p-0.5 rounded-lg border border-[var(--border)]">
+              <button onClick={() => setAppMode('chat')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'chat' ? 'bg-[var(--surface-4)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Chat</button>
+              <button onClick={() => setAppMode('arena')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'arena' ? 'bg-amber-400/20 text-amber-400 shadow-sm border border-amber-400/30' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Arena</button>
+              <button onClick={() => setAppMode('agents')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors flex items-center gap-1 ${appMode === 'agents' ? 'bg-indigo-500/20 text-indigo-400 shadow-sm border border-indigo-500/30' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>
+                <Zap size={11} className={appMode === 'agents' ? 'fill-indigo-400/20' : ''} />
+                Agents
+              </button>
+            </div>            <div className="flex items-center gap-2 min-w-0">
+              {appMode === 'arena' && (
+                <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-full flex-shrink-0">
+                  <Zap size={9} />
+                  Arena
+                </span>
+              )}
+              {appMode === 'arena' ? (
+                <span className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px] md:max-w-xs">
+                  {arena.activeSession?.title || 'Новая арена'}
+                </span>
+              ) : appMode === 'agents' && agentChatAgentId ? (
+                <span id="agent-thread-title" className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px]">
+                  Агентный чат
+                </span>
+              ) : chatTitle ? (
                 <span className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px] md:max-w-xs">
                   {chatTitle}
                 </span>
@@ -1368,19 +3307,50 @@ export default function Home() {
           </div>
 
           <div className="flex items-center gap-1">
-            <button
-              onClick={toggleSettingsSidebar}
-              className={`flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-all ${
-                settingsSidebarOpen
-                  ? 'border-[var(--border-strong)] bg-[var(--surface-3)] text-[var(--text-primary)]'
-                  : 'border-transparent text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
-              }`}
-              title="Настройки"
-            >
-              <SlidersHorizontal size={13} />
-              <span className="hidden md:block">Настройки</span>
-            </button>
-            <div className="w-[1px] h-4 bg-[var(--border)] mx-1 hidden sm:block" />
+            {appMode === 'agents' && agentChatAgentId && (
+              <>
+                <button
+                  onClick={() => window.dispatchEvent(new CustomEvent('agent-chat-new-thread'))}
+                  className="flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-xs text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)] transition-all"
+                >
+                  <MessageSquarePlus size={11} />
+                  <span className="hidden md:block">Новый чат</span>
+                </button>
+                <button
+                  onClick={() => setAgentChatAgentId(null)}
+                  className="flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-xs text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)] transition-all"
+                >
+                  <X size={11} />
+                  <span className="hidden md:block">К списку</span>
+                </button>
+              </>
+            )}
+            {appMode === 'agents' && (
+              <button
+                onClick={() => window.location.href = '/agents'}
+                className="flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-xs text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)] transition-all"
+                title="Редактор графов"
+              >
+                <Pencil size={11} />
+                <span className="hidden md:block">Редактор</span>
+              </button>
+            )}
+            {appMode !== 'agents' && (
+              <button
+                onClick={toggleSettingsSidebar}
+                className={`flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-all ${
+                  settingsSidebarOpen
+                    ? appMode === 'arena'
+                      ? 'border-amber-400/30 bg-amber-400/10 text-amber-400'
+                      : 'border-[var(--border-strong)] bg-[var(--surface-3)] text-[var(--text-primary)]'
+                    : 'border-transparent text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
+                }`}
+                title={appMode === 'arena' ? 'Агенты' : 'Настройки'}
+              >
+                {appMode === 'arena' ? <Zap size={13} /> : <SlidersHorizontal size={13} />}
+                <span className="hidden md:block">{appMode === 'arena' ? 'Агенты' : 'Настройки'}</span>
+              </button>
+            )}
             
             {messages.length > 0 && (
               <button
@@ -1393,13 +3363,34 @@ export default function Home() {
               </button>
             )}
             <button
-              onClick={handleNewChat}
-              disabled={isStreaming}
-              className="flex items-center gap-1.5 px-2.5 h-7 text-xs text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] border border-transparent hover:border-[var(--border)] rounded-lg transition-all disabled:opacity-50"
+              onClick={() => setShowLiveCanvas(prev => !prev)}
+              className={`flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-all ${
+                showLiveCanvas
+                  ? 'border-[var(--border-strong)] bg-[var(--surface-3)] text-[var(--text-primary)]'
+                  : 'border-transparent text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
+              }`}
+              title="Live Canvas"
             >
-              <MessageSquarePlus size={13} />
-              <span className="hidden md:block">Новый</span>
+              <MonitorPlay size={13} />
+              <span className="hidden md:block">Canvas</span>
             </button>
+            {openFiles.length > 0 && (
+              <button
+                onClick={() => setShowFileEditor(prev => !prev)}
+                className={`flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-all ${
+                  showFileEditor
+                    ? 'border-[var(--border-strong)] bg-[var(--surface-3)] text-[var(--text-primary)]'
+                    : 'border-transparent text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
+                }`}
+                title="File Editor"
+              >
+                <FilePen size={13} />
+                <span className="hidden md:block">Editor</span>
+                {openFiles.some(f => f.isDirty) && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
+                )}
+              </button>
+            )}
           </div>
         </div>
 
@@ -1416,42 +3407,190 @@ export default function Home() {
 
         {/* Messages */}
         <div 
-          className="flex-1 overflow-y-auto chat-messages-area px-4 py-6 relative"
+          ref={setScrollContainer}
+          className="flex-1 overflow-y-auto chat-messages-area px-6 py-8 relative"
           onScroll={handleScroll}
         >
-          {messages.length === 0 ? (
-            <EmptyState 
-              hasApiKey={hasKeys} 
-              hasModel={!!model} 
-              apiKeysCount={apiKeys.length} 
-              onSuggestionClick={(text) => handleSend(text, [])}
+          {appMode === 'agents' ? (
+            agentChatAgentId ? (
+              <AgentChatPage
+                key={agentChatRenderKey}
+                agentConfigId={agentChatAgentId}
+                threadId={agentChatThreadId || undefined}
+                onBack={() => {
+                  setAgentChatAgentId(null);
+                  setAgentChatThreadId(null);
+                  setAgentChatRenderKey(prev => prev + 1);
+                }}
+              />
+            ) : (
+              <AgentChatList
+                onSelectAgent={(configId) => {
+                  setAgentChatAgentId(configId);
+                  setAgentChatThreadId(null);
+                  setAgentChatRenderKey(prev => prev + 1); // Принудительный ре-рендер
+                }}
+              />
+            )
+          ) : showLiveCanvas ? (
+            <LivePreviewPanel
+              code={liveCode}
+              onClose={() => setShowLiveCanvas(false)}
+              websiteType={websiteType}
             />
+          ) : (appMode === 'arena' ? (arena.activeSession?.messages ?? []) : messages).length === 0 ? (
+            appMode === 'arena' ? (
+              <ArenaEmptyState
+                hasSession={!!arena.activeSession}
+                agentCount={arena.activeSession?.agents.length ?? 0}
+                onCreateSession={arena.createSession}
+              />
+            ) : (
+              <EmptyState 
+                hasApiKey={hasKeys} 
+                hasModel={!!model} 
+                apiKeysCount={Object.values(apiKeys).flat().length} 
+                onSuggestionClick={(text) => handleSend(text, [])}
+              />
+            )
           ) : (
-            <div className="max-w-3xl mx-auto space-y-5">
-              {visibleMessages.map((message, idx) => (
-                <ChatMessage
-                  key={message.id}
-                  message={message}
-                  index={idx}
-                  isLast={idx === visibleMessages.length - 1}
-                  isStreaming={isStreaming && message.id === streamingId}
-                  canRegenerate={hasApiAndModel && !isStreaming}
-                  onEdit={handleEdit}
-                  onDelete={handleDelete}
-                  onRegenerate={handleRegenerate}
-                  onContinue={handleContinue}
-                  onSubmitToolResults={handleSubmitToolResults}
-                  onEditPreviousUserMessage={forceEditPreviousUserMessage}
-                  onClearForceEdit={clearForceEdit}
-                  onEditDeepThinkAnalysis={handleEditDeepThinkAnalysis}
-                />
-              ))}
+            <div className="max-w-3xl mx-auto space-y-6">
+              {/* Load more indicator for chat mode */}
+              {appMode === 'chat' && hasMoreAbove && (
+                <div ref={topSentinelRef as any} className="flex justify-center py-3">
+                  <button
+                    onClick={loadMoreAbove}
+                    disabled={isAutoLoading}
+                    className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] border border-[var(--border)] rounded-lg transition-all disabled:opacity-50"
+                  >
+                    {isAutoLoading ? (
+                      <>
+                        <Loader2 size={12} className="animate-spin" />
+                        Загрузка...
+                      </>
+                    ) : (
+                      <>
+                        <ChevronUp size={12} />
+                        ЗагрузитьEarlier сообщения
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+              {/* Load more indicator for arena mode */}
+              {appMode === 'arena' && arenaHasMoreAbove && (
+                <div ref={arenaTopSentinelRef as any} className="flex justify-center py-3">
+                  <button
+                    onClick={arenaLoadMoreAbove}
+                    disabled={arenaIsAutoLoading}
+                    className="flex items-center gap-2 px-4 py-2 text-xs text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] border border-[var(--border)] rounded-lg transition-all disabled:opacity-50"
+                  >
+                    {arenaIsAutoLoading ? (
+                      <>
+                        <Loader2 size={12} className="animate-spin" />
+                        Загрузка...
+                      </>
+                    ) : (
+                      <>
+                        <ChevronUp size={12} />
+                        ЗагрузитьEarlier сообщения
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+              {(appMode === 'arena' ? arenaRenderedMessages : renderedMessages).map((message, idx) => {
+                const msgList = appMode === 'arena' ? arenaRenderedMessages : renderedMessages;
+                const isLastMessage = idx === msgList.length - 1;
+                return (
+                  <div key={message.id} className={isLastMessage ? 'animate-message-appear' : ''}>
+                    {/* Arena: agent header above model messages */}
+                    {appMode === 'arena' && message.role === 'model' && message.arenaAgentId && (
+                      <AgentMessageHeader
+                        agent={arena.activeSession?.agents.find(a => a.id === message.arenaAgentId)}
+                      />
+                    )}
+                    <ChatMessage
+                      message={message}
+                      index={idx}
+                      isLast={idx === msgList.length - 1}
+                      isStreaming={appMode === 'arena'
+                        ? (arena.isStreaming && message.isStreaming === true)
+                        : (isStreaming && message.id === streamingId)
+                      }
+                      canRegenerate={appMode === 'arena' ? (!isStreaming && !!arena.activeSession && arena.activeSession.messages.some(m => m.role === 'model' && !m.isStreaming)) : (hasApiAndModel && !isStreaming)}
+                      onEdit={appMode === 'arena'
+                        ? (id: string, newParts: Part[]) => arena.editMessage(id, newParts)
+                        : handleEdit
+                      }
+                      onDelete={appMode === 'arena'
+                        ? (id: string) => arena.deleteMessage(id)
+                        : handleDelete
+                      }
+                      onRegenerate={appMode === 'arena' ? () => {
+                        // Regenerate last model message
+                        const lastModelMsg = [...(arena.activeSession?.messages || [])].reverse().find(m => m.role === 'model');
+                        if (lastModelMsg) arena.regenerateAgentResponse(lastModelMsg.id);
+                      } : handleRegenerate}
+                      onContinue={appMode === 'arena' ? () => arena.continueAgentStream(message.id) : handleContinue}
+                      onBranch={() => handleBranch(message.id)}
+                      onSubmitToolResults={appMode === 'arena' ? () => {} : handleSubmitToolResults}
+                      onEditPreviousUserMessage={appMode === 'arena' ? () => {} : forceEditPreviousUserMessage}
+                      onClearForceEdit={appMode === 'arena' ? () => {} : clearForceEdit}
+                      onEditDeepThinkAnalysis={appMode === 'arena' ? () => {} : handleEditDeepThinkAnalysis}
+                      onPlayHTML={(html) => {
+                        setLiveCode(html);
+                        setShowLiveCanvas(true);
+                      }}
+                      onAnnotationClick={(annotation) => {
+                        const imageFile = message.files?.find(f => f.mimeType.startsWith('image/'));
+                        if (!imageFile) return;
+                        
+                        const annotationColors: Record<string, string> = {
+                          highlight: '#FBBF24',
+                          pointer: '#60A5FA',
+                          warning: '#F87171',
+                          success: '#4ADE80',
+                          info: '#A78BFA'
+                        };
+                        
+                        const annotationRef: import('@/types').AnnotationReference = {
+                          id: Math.random().toString(36).slice(2),
+                          imageId: imageFile.id,
+                          imageName: imageFile.name,
+                          annotation: annotation,
+                          color: annotationColors[annotation.type] || '#60A5FA'
+                        };
+                        
+                        if ((window as any).__chatInputAddAnnotation) {
+                          (window as any).__chatInputAddAnnotation(annotationRef);
+                        }
+                      }}
+                      onOpenAgentChat={(agentId) => handleOpenAgent(agentId, currentChatId || undefined)}
+                      onFeedback={appMode === 'arena' ? undefined : handleFeedback}
+                      onRegenerateWithFeedback={appMode === 'arena' ? undefined : handleRegenerateWithFeedback}
+                      onRememberStyle={appMode === 'arena' ? undefined : handleRememberStyle}
+                      onShorter={appMode === 'arena' ? undefined : handleShorter}
+                      onContinueFromCursor={appMode === 'arena' ? undefined : handleContinueFromCursor}
+                      onRegenerateTextOnly={appMode === 'arena' ? undefined : handleRegenerateTextOnly}
+                      onDismissBlocked={appMode === 'arena' ? undefined : handleDismissBlocked}
+                      onEditDeepThinking={appMode === 'arena' ? undefined : handleEditDeepThinking}
+                      onContinueDeepThink={appMode === 'arena' ? undefined : handleContinueDeepThink}
+                      onSkipDeepThink={appMode === 'arena' ? undefined : handleSkipDeepThink}
+                      onSceneStateSettingsOpen={() => setIsSceneStateSettingsOpen(true)}
+                      isSceneStatePinned={isSceneStatePinned}
+                      onToggleSceneStatePin={handleToggleSceneStatePin}
+                      onRequestSceneCategory={handleRequestSceneCategory}
+                    />
+                  </div>
+                );
+              })}
               <div ref={chatEndRef} />
             </div>
           )}
-
+          
           {/* Плавающая кнопка скролла вниз */}
-          {showScrollBottom && messages.length > 0 && (
+          {showScrollBottom && messages.length > 0 && appMode !== 'agents' && (
             <button
               onClick={scrollToBottom}
               className="fixed bottom-24 p-2.5 bg-[var(--surface-3)] text-[var(--text-primary)] border border-[var(--border)] rounded-full shadow-glow-sm hover:bg-[var(--surface-4)] transition-all animate-fade-in z-20"
@@ -1461,34 +3600,352 @@ export default function Home() {
               <ArrowDown size={18} />
             </button>
           )}
+
+          {/* Floating button для открытия preview на мобилках */}
+          {isMobile && showLiveCanvas && mobileCanvasState === 'hidden' && (
+            <button
+              onClick={() => setMobileCanvasState(websiteType === 'ai_interactive' ? 'sheet' : 'fullscreen')}
+              className="fixed bottom-24 right-4 p-3 bg-indigo-600 text-white rounded-full shadow-lg hover:bg-indigo-700 transition-all z-20"
+              title="Открыть превью"
+            >
+              <MonitorPlay size={20} />
+            </button>
+          )}
         </div>
 
         {/* Input */}
-        <div className="flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper">
-          <div className="px-4 mb-2 flex items-center justify-end">
-            <DeepThinkToggle
-              state={deepThinkState}
-              onToggle={toggleDeepThink}
+        <div className={`flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper ${appMode === 'agents' && !agentChatAgentId ? 'hidden' : ''}`}>
+          {appMode === 'chat' && (
+            <div className="px-4 mb-2 flex items-center justify-end gap-2">
+              <DeepThinkToggle
+                state={deepThinkState}
+                onToggle={toggleDeepThink}
+              />
+              <button
+                onClick={() => setShowInsights(v => !v)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all border ${
+                  showInsights
+                    ? 'bg-[var(--gem-teal)]/15 border-[var(--gem-teal)]/40 text-[var(--gem-teal)]'
+                    : 'bg-transparent border-[var(--border)] text-white/40 hover:text-white/60'
+                }`}
+              >
+                <BarChart2 size={13} />
+                Insights
+              </button>
+            </div>
+          )}
+          <ChatInput
+            onSend={appMode === 'arena'
+              ? (text, files) => arena.sendUserMessage(text, files)
+              : appMode === 'agents'
+              ? (text: string) => window.dispatchEvent(new CustomEvent('agent-chat-send', { detail: text }))
+              : handleSend
+            }
+            onStop={appMode === 'arena' ? arena.stopStreaming : appMode === 'agents' ? () => window.dispatchEvent(new CustomEvent('agent-chat-stop')) : handleStop}
+            onAddUserMessage={appMode === 'arena' ? () => {} : handleAddModelMessage}
+            isStreaming={appMode === 'arena' ? arena.isStreaming : appMode === 'agents' ? isAgentRunning : isStreaming}
+            disabled={appMode === 'arena' ? !arena.activeSession : appMode === 'agents' ? !agentChatAgentId : !hasApiAndModel}
+            canContinue={appMode === 'arena' ? (
+              arena.activeSession?.messages.some(m => m.role === 'model' && !m.isStreaming && m.parts.some(p => 'text' in p && (p as {text:string}).text.length > 0)) ?? false
+            ) : canContinue}
+            onContinue={appMode === 'arena' ? () => {
+              // Continue the last incomplete model message
+              const lastModelMsg = [...(arena.activeSession?.messages || [])].reverse().find(m => m.role === 'model' && !m.isStreaming);
+              if (lastModelMsg) arena.continueAgentStream(lastModelMsg.id);
+            } : handleContinue}
+            canRun={appMode === 'arena' ? (
+              !!arena.activeSession && arena.activeSession.messages.length > 0 && !arena.isStreaming
+            ) : (messages.length > 0 && !isStreaming && hasApiAndModel)}
+            onRun={appMode === 'arena' ? () => {
+              // Regenerate all agent responses from the last user message
+              const lastUserMsg = [...(arena.activeSession?.messages || [])].reverse().find(m => m.role === 'user');
+              if (lastUserMsg) {
+                arena.regenerateFromMessage(lastUserMsg.id);
+              }
+            } : handleRegenerate}
+            pendingCanvasElement={pendingCanvasElement}
+            onCanvasElementConsumed={() => setPendingCanvasElement(null)}
+            onAnnotationClick={() => {}}
+            deepThinkEnabled={appMode === 'arena' ? false : deepThinkState.enabled}
+            onDeepThinkToggle={appMode === 'arena' ? () => {} : toggleDeepThink}
+            maxUploadSizeMB={app.maxUploadSizeMB}
+          />
+          {/* Arena Input Bar */}
+          {appMode === 'arena' && arena.activeSession && (
+            <ArenaInputBar
+              agents={arena.activeSession.agents}
+              isStreaming={arena.isStreaming}
+              streamingAgentId={arena.streamingAgentId}
+              responseMode={arena.activeSession.responseMode}
+              onTriggerAgent={arena.triggerAgent}
+              onToggleMode={arena.toggleResponseMode}
+            />
+          )}
+        </div>
+        </Panel>
+
+        {!isMobile && showLiveCanvas && (
+           <PanelResizeHandle className="w-1 bg-[var(--border-subtle)] hover:bg-[var(--border-strong)] transition-colors cursor-col-resize z-10" />
+        )}
+
+        {/* Desktop: обычная панель */}
+        {!isMobile && (showLiveCanvas || showFileEditor) && (
+          <Panel 
+             defaultSize={50} 
+             minSize={30} 
+             className="flex flex-col min-w-0 border-l border-[var(--border)] overflow-hidden bg-[var(--surface-1)]"
+          >
+            {/* Вертикальный split для LivePreview и FileEditor */}
+            <PanelGroup direction="vertical" className="h-full">
+              {showLiveCanvas && (
+                <>
+                  <Panel defaultSize={showFileEditor ? 50 : 100} minSize={30}>
+                    <LivePreviewPanel 
+                      ref={livePreviewRef}
+                      code={liveCode}
+                      websiteType={websiteType}
+                      isStreaming={isStreaming}
+                      onClose={() => setShowLiveCanvas(false)} 
+                      onElementSelected={(element) => {
+                        setPendingCanvasElement(element);
+                      }}
+                      onAIDataReceived={async (bridgeData) => {
+                        // 🔥 GEMINI BRIDGE — данные от сайта → AI
+                        
+                        // Создаем красивое сообщение с bridgeData
+                        const newUserMsg: Message = {
+                          id: generateId(),
+                          role: 'user',
+                          kind: 'bridge_data',
+                          parts: [{ text: `Данные от сайта (${bridgeData.eventType})` }],
+                          bridgeData: bridgeData,
+                        };
+                        
+                        setMessages(prev => [...prev, newUserMsg]);
+                        
+                        // Отправляем в AI
+                        const assistantMsg: Message = {
+                          id: generateId(),
+                          role: 'model',
+                          parts: [],
+                          isStreaming: true,
+                        };
+                        
+                        setMessages(prev => [...prev, assistantMsg]);
+                        
+                        // Вызываем streamGeneration с актуальной историей из ref (избегаем stale closure)
+                        await streamGeneration([...messagesRef.current, newUserMsg], assistantMsg.id, false);
+                      }}
+                    />
+                  </Panel>
+                  {showFileEditor && (
+                    <PanelResizeHandle className="h-1 bg-[var(--border-subtle)] hover:bg-[var(--border-strong)] transition-colors cursor-row-resize" />
+                  )}
+                </>
+              )}
+              
+              {showFileEditor && (
+                <Panel defaultSize={showLiveCanvas ? 50 : 100} minSize={30}>
+                  <FileEditorCanvas
+                    openFiles={openFiles}
+                    activeFileId={activeFileId}
+                    pendingEdits={pendingEdits}
+                    onAccept={handleAcceptEdits}
+                    onReject={handleRejectEdits}
+                    onManualEdit={handleManualEdit}
+                    onFileSelect={setActiveFileId}
+                    onDownload={handleDownloadFile}
+                    onRevert={handleRevertFile}
+                    onClose={handleCloseFile}
+                  />
+                </Panel>
+              )}
+            </PanelGroup>
+          </Panel>
+        )}
+
+        {/* Insights Panel - Desktop */}
+        {!isMobile && showInsights && (
+          <>
+            <PanelResizeHandle className="w-1 bg-[var(--border-subtle)] hover:bg-[var(--border-strong)] transition-colors cursor-col-resize z-10" />
+            <Panel
+              defaultSize={38}
+              minSize={28}
+              maxSize={55}
+              className="flex flex-col min-w-0 border-l border-[var(--border)] overflow-hidden bg-[var(--surface-1)]"
+            >
+              <InsightsPanel
+                messages={messages}
+                chatId={currentChatId || ''}
+                onClose={() => setShowInsights(false)}
+              />
+            </Panel>
+          </>
+        )}
+
+        {/* Mobile: Bottom Sheet для ai_interactive или fullscreen для static */}
+        {isMobile && showLiveCanvas && mobileCanvasState !== 'hidden' && (
+          <div 
+            className={`fixed inset-x-0 bg-[var(--surface-1)] border-t border-[var(--border)] z-50 transition-all duration-300 ease-out ${
+              mobileCanvasState === 'sheet' 
+                ? 'bottom-0 top-[45%] rounded-t-2xl shadow-2xl' 
+                : 'bottom-0 top-0'
+            }`}
+            onTouchStart={(e) => {
+              const touch = e.touches[0];
+              const startY = touch.clientY;
+              const startState = mobileCanvasState;
+              
+              const handleTouchMove = (e: TouchEvent) => {
+                const currentY = e.touches[0].clientY;
+                const diff = currentY - startY;
+                
+                // Свайп вниз из fullscreen → sheet
+                if (startState === 'fullscreen' && diff > 100) {
+                  setMobileCanvasState('sheet');
+                  document.removeEventListener('touchmove', handleTouchMove);
+                  document.removeEventListener('touchend', handleTouchEnd);
+                }
+                // Свайп вниз из sheet → hidden
+                else if (startState === 'sheet' && diff > 100) {
+                  setMobileCanvasState('hidden');
+                  document.removeEventListener('touchmove', handleTouchMove);
+                  document.removeEventListener('touchend', handleTouchEnd);
+                }
+                // Свайп вверх из sheet → fullscreen
+                else if (startState === 'sheet' && diff < -100) {
+                  setMobileCanvasState('fullscreen');
+                  document.removeEventListener('touchmove', handleTouchMove);
+                  document.removeEventListener('touchend', handleTouchEnd);
+                }
+              };
+              
+              const handleTouchEnd = () => {
+                document.removeEventListener('touchmove', handleTouchMove);
+                document.removeEventListener('touchend', handleTouchEnd);
+              };
+              
+              document.addEventListener('touchmove', handleTouchMove);
+              document.addEventListener('touchend', handleTouchEnd);
+            }}
+          >
+            {/* Drag handle для sheet */}
+            {mobileCanvasState === 'sheet' && (
+              <div className="flex justify-center py-2 cursor-grab active:cursor-grabbing">
+                <div className="w-12 h-1 bg-white/20 rounded-full" />
+              </div>
+            )}
+            
+            <div className="h-full flex flex-col overflow-hidden">
+              <LivePreviewPanel 
+                ref={livePreviewRef}
+                code={liveCode}
+                websiteType={websiteType}
+                isStreaming={isStreaming}
+                onClose={() => {
+                  setShowLiveCanvas(false);
+                  setMobileCanvasState('hidden');
+                }} 
+                onElementSelected={(element) => {
+                  setPendingCanvasElement(element);
+                  setMobileCanvasState('hidden'); // Возвращаемся к чату
+                }}
+                onAIDataReceived={async (bridgeData) => {
+                  // 🔥 GEMINI BRIDGE — данные от сайта → AI
+                  
+                  // Создаем красивое сообщение с bridgeData
+                  const newUserMsg: Message = {
+                    id: generateId(),
+                    role: 'user',
+                    kind: 'bridge_data',
+                    parts: [{ text: `Данные от сайта (${bridgeData.eventType})` }],
+                    bridgeData: bridgeData,
+                  };
+                  
+                  setMessages(prev => [...prev, newUserMsg]);
+                  
+                  // Отправляем в AI
+                  const assistantMsg: Message = {
+                    id: generateId(),
+                    role: 'model',
+                    parts: [],
+                    isStreaming: true,
+                  };
+                  
+                  setMessages(prev => [...prev, assistantMsg]);
+                  
+                  // Вызываем streamGeneration с актуальной историей из ref (избегаем stale closure)
+                  await streamGeneration([...messagesRef.current, newUserMsg], assistantMsg.id, false);
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Insights Panel - Mobile Bottom Sheet */}
+        {isMobile && showInsights && (
+          <div
+            className="fixed inset-x-0 bottom-0 z-40 flex flex-col bg-[var(--surface-1)] border-t border-[var(--border)] rounded-t-2xl shadow-2xl"
+            style={{ height: '72vh', touchAction: 'none' }}
+            onTouchStart={(e) => {
+              const touch = e.touches[0];
+              const startY = touch.clientY;
+              
+              const handleTouchMove = (e: TouchEvent) => {
+                const currentY = e.touches[0].clientY;
+                const diff = currentY - startY;
+                
+                // Свайп вниз на 80px+ = закрыть
+                if (diff > 80) {
+                  setShowInsights(false);
+                  document.removeEventListener('touchmove', handleTouchMove);
+                  document.removeEventListener('touchend', handleTouchEnd);
+                }
+              };
+              
+              const handleTouchEnd = () => {
+                document.removeEventListener('touchmove', handleTouchMove);
+                document.removeEventListener('touchend', handleTouchEnd);
+              };
+              
+              document.addEventListener('touchmove', handleTouchMove);
+              document.addEventListener('touchend', handleTouchEnd);
+            }}
+          >
+            {/* Drag handle */}
+            <div className="flex justify-center pt-3 pb-1 flex-shrink-0">
+              <div className="w-10 h-1 rounded-full bg-[var(--border-strong)]" />
+            </div>
+            <InsightsPanel
+              messages={messages}
+              chatId={currentChatId || ''}
+              onClose={() => setShowInsights(false)}
             />
           </div>
-          <ChatInput
-            onSend={handleSend}
-            onStop={handleStop}
-            onAddUserMessage={handleAddUserMessage}
-            isStreaming={isStreaming}
-            disabled={!hasApiAndModel}
-            canContinue={canContinue}
-            onContinue={handleContinue}
-            canRun={messages.length > 0 && !isStreaming && hasApiAndModel}
-            onRun={handleRegenerate}
-          />
-        </div>
-      </div>
+        )}
+      </PanelGroup>
 
       {!isMobile && (
-        <div className="flex-shrink-0 overflow-hidden border-l border-[var(--border-subtle)] transition-[width,opacity] duration-300 ease-out" style={settingsSidebarStyle}>
+        <div className="flex-shrink-0 overflow-hidden border-l border-[var(--border-subtle)] transition-[width,opacity] duration-[350ms] ease-[cubic-bezier(0.16,1,0.3,1)]" style={settingsSidebarStyle}>
           <div className="h-full w-[360px]">
-            <SettingsSidebar {...settingsSidebarProps} />
+            {appMode === 'arena' ? (
+              <ArenaAgentsSidebar
+                session={arena.activeSession}
+                models={allModels}
+                providers={providers}
+                globalApiKeys={apiKeys}
+                savedChats={savedChats}
+                onUpdateAgent={arena.updateAgent}
+                onAddAgent={arena.addAgent}
+                onRemoveAgent={arena.removeAgent}
+                responseMode={arena.activeSession?.responseMode ?? 'auto'}
+                onToggleMode={arena.toggleResponseMode}
+                onImportChat={arena.importChatAsSession}
+                onUpdateSessionPrompt={arena.updateSessionSystemPrompt}
+              />
+            ) : (
+              <SettingsSidebar {...settingsSidebarProps} />
+            )}
           </div>
         </div>
       )}
@@ -1590,68 +4047,26 @@ export default function Home() {
 
       {/* DeepThink Dialog */}
       {showDeepThinkDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-full max-w-2xl rounded-3xl border border-[var(--border-strong)] bg-[var(--surface-1)] shadow-2xl">
-            <div className="border-b border-[var(--border)] px-6 py-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold text-[var(--text-primary)]">DeepThink системный промпт</h3>
-                  <p className="mt-1 text-xs text-[var(--text-muted)]">
-                    Промпт для анализа контекста перед генерацией ответа
-                  </p>
-                </div>
-                <button
-                  onClick={() => setShowDeepThinkDialog(false)}
-                  className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            </div>
-
-            <div className="p-6">
-              <textarea
-                value={deepThinkDraft}
-                onChange={e => setDeepThinkDraft(e.target.value)}
-                placeholder="Введите системный промпт для DeepThink..."
-                rows={12}
-                className="w-full rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-sm leading-relaxed text-[var(--text-primary)] placeholder:text-[var(--text-dim)] focus:border-[var(--border-strong)] focus:outline-none"
-                style={{ minHeight: '300px', maxHeight: '500px', resize: 'vertical' }}
-              />
-
-              <div className="mt-4 flex items-center justify-between gap-3">
-                <button
-                  onClick={() => {
-                    setDeepThinkDraft(DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
-                  }}
-                  className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
-                >
-                  <RefreshCw size={12} />
-                  Сбросить
-                </button>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setShowDeepThinkDialog(false)}
-                    className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2 text-sm text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
-                  >
-                    Отмена
-                  </button>
-                  <button
-                    onClick={() => {
-                      const nextValue = deepThinkDraft.trim() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT;
-                      setDeepThinkSystemPrompt(nextValue);
-                      saveDeepThinkSystemPrompt(nextValue);
-                      setShowDeepThinkDialog(false);
-                    }}
-                    className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90"
-                  >
-                    Сохранить
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <DeepThinkSettingsDialog
+          open={showDeepThinkDialog}
+          onClose={() => setShowDeepThinkDialog(false)}
+          deepThinkDraft={deepThinkDraft}
+          setDeepThinkDraft={setDeepThinkDraft}
+          deepThinkSystemPrompt={deepThinkSystemPrompt}
+          setDeepThinkSystemPrompt={setDeepThinkSystemPrompt}
+          deepThinkProviderId={deepThinkProviderId}
+          setDeepThinkProviderId={setDeepThinkProviderId}
+          deepThinkModelId={deepThinkModelId}
+          setDeepThinkModelId={setDeepThinkModelId}
+          deepThinkApiKeyIndex={deepThinkApiKeyIndex}
+          setDeepThinkApiKeyIndex={setDeepThinkApiKeyIndex}
+          providers={providers}
+          apiKeys={apiKeys}
+          allModels={allModels}
+          currentProviderId={effectiveProviderId}
+          currentModel={model}
+          currentApiKey={selectedApiKey}
+        />
       )}
 
       {/* Memory Modal */}
@@ -1660,11 +4075,121 @@ export default function Home() {
         onClose={() => setShowMemoryModal(false)}
         chatId={currentChatId || undefined}
       />
+
+      {/* RPG Profile Modal */}
+      <RPGProfileModal
+        open={showRPGProfileModal}
+        onClose={() => setShowRPGProfileModal(false)}
+        onNavigateToChat={(chatId) => {
+          const chat = savedChats.find(c => c.id === chatId);
+          if (chat) handleLoadChat(chat);
+        }}
+      />
+
+      {/* Skills Market Modal */}
+      <SkillsMarket
+        open={showSkillsMarket}
+        onClose={() => setShowSkillsMarket(false)}
+        chatId={currentChatId || ''}
+        messages={messages}
+        onUIEvent={handleSkillEvent}
+        onSkillsChanged={() => setSkillsRevision(r => r + 1)}
+      />
+
+      {/* HF Spaces Manager Modal */}
+      <HFSpaceManager
+        open={showHFSpaces}
+        onClose={() => setShowHFSpaces(false)}
+        onSpacesChanged={() => {
+          reloadHFSpaceSkills();
+          setSkillsRevision(r => r + 1);
+        }}
+      />
+
+      {/* Command Palette */}
+      <CommandPalette
+        savedChats={savedChats}
+        onNewChat={handleNewChat}
+        onLoadChat={(id) => {
+          const chat = savedChats.find(c => c.id === id);
+          if (chat) handleLoadChat(chat);
+        }}
+        onOpenSettings={() => setSettingsSidebarOpen(true)}
+        onOpenMemory={() => setShowMemoryModal(true)}
+        onOpenContextInspector={() => setShowContextInspector(true)}
+        onToggleCanvas={() => setShowLiveCanvas(prev => !prev)}
+      />
+
+      <SceneStateSettingsModal 
+        isOpen={isSceneStateSettingsOpen}
+        onClose={() => setIsSceneStateSettingsOpen(false)}
+      />
+
+      <ContextInspectorModal
+        open={showContextInspector}
+        onClose={() => {
+          setShowContextInspector(false);
+          setSkillsRevision(r => r + 1);
+        }}
+        messages={messages}
+        systemPrompt={systemPrompt}
+        chatId={currentChatId}
+        memoryEnabled={memoryEnabled}
+        onMemoryEnabledChange={setMemoryEnabled}
+        onSystemPromptChange={setSystemPrompt}
+        handleSkillEvent={handleSkillEvent}
+        deepThinkEnhancedPrompt={
+          messages.filter(m => m.role === 'model').slice(-1)[0]?.deepThinkEnhancedPrompt || null
+        }
+        onOpenMemory={() => setShowMemoryModal(true)}
+        onOpenSkills={() => setShowSkillsMarket(true)}
+        onOpenRPG={() => setShowRPGProfileModal(true)}
+        onOpenDeepThink={() => setShowDeepThinkDialog(true)}
+        onOpenSystem={() => setSettingsSidebarOpen(true)}
+      />
+
+      {/* Selection Toolbar */}
+      <SelectionToolbar
+        onQuote={(text) => {
+          const quoted = `> ${text.split('\n').join('\n> ')}\n\n`;
+          window.dispatchEvent(new CustomEvent('append-to-input', { detail: quoted }));
+        }}
+        onAsk={(text) => {
+          handleSend(text, []);
+        }}
+      />
     </div>
   );
 }
 
 function EmptyState({ hasApiKey, hasModel, apiKeysCount, onSuggestionClick }: { hasApiKey: boolean; hasModel: boolean; apiKeysCount: number; onSuggestionClick: (text: string) => void }) {
+  const [activePool, setActivePool] = useState(0);
+  const [fading, setFading] = useState(false);
+
+  const SUGGESTION_POOLS = [
+    // Группа 1: Код
+    ['Напиши REST API на TypeScript', 'Объясни разницу между useMemo и useCallback', 'Как работает event loop в Node.js?', 'Создай алгоритм бинарного поиска'],
+    // Группа 2: Анализ
+    ['Проанализируй этот текст на предмет логических ошибок', 'Составь SWOT-анализ для стартапа', 'Помоги структурировать мои мысли', 'Найди противоречия в этом аргументе'],
+    // Группа 3: Творчество
+    ['Придумай название для продукта', 'Напиши метафору для объяснения квантовой механики', 'Создай необычный персонаж для истории', 'Предложи 5 способов улучшить презентацию'],
+    // Группа 4: Факты
+    ['Объясни как работает TCP/IP', 'Что такое теорема Гёделя о неполноте?', 'Как устроен нейрон?', 'Расскажи историю интернета кратко'],
+  ];
+
+  useEffect(() => {
+    if (!hasApiKey || !hasModel) return;
+    
+    const interval = setInterval(() => {
+      setFading(true);
+      setTimeout(() => {
+        setActivePool(prev => (prev + 1) % SUGGESTION_POOLS.length);
+        setFading(false);
+      }, 200);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [hasApiKey, hasModel]);
+
   return (
     <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-center px-4">
       <div className="w-14 h-14 rounded-2xl bg-white flex items-center justify-center mb-6">
@@ -1695,16 +4220,57 @@ function EmptyState({ hasApiKey, hasModel, apiKeysCount, onSuggestionClick }: { 
       )}
 
       {hasApiKey && hasModel && (
+        <div className={`mt-8 grid grid-cols-2 gap-2 max-w-sm w-full transition-opacity duration-200 ${fading ? 'opacity-0' : 'opacity-100'}`}>
+          {SUGGESTION_POOLS[activePool].map((suggestion, i) => (
+            <button
+              key={`${activePool}-${i}`}
+              onClick={() => onSuggestionClick(suggestion)}
+              disabled={fading}
+              className="text-left px-3 py-2.5 rounded-xl border border-[var(--border)] bg-[var(--surface-1)] text-xs text-[var(--text-muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text-primary)] hover:border-[var(--border-strong)] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {suggestion}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ArenaEmptyState({ hasSession, agentCount, onCreateSession }: { hasSession: boolean; agentCount: number; onCreateSession: () => void }) {
+  return (
+    <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-center px-4">
+      <div className="w-14 h-14 rounded-2xl bg-[linear-gradient(135deg,#fbbf24,#f59e0b)] flex items-center justify-center mb-6">
+        <Zap size={24} className="text-black" />
+      </div>
+
+      <h2 className="text-2xl font-semibold text-white mb-2 tracking-tight">Multi-AI Arena</h2>
+      <p className="text-[var(--text-muted)] max-w-sm leading-relaxed text-sm">
+        {!hasSession
+          ? 'Создайте сессию, чтобы начать мультиагентное обсуждение'
+          : `${agentCount} агентов готовы к обсуждению. Напишите сообщение для начала.`
+        }
+      </p>
+
+      {!hasSession && (
+        <button
+          onClick={onCreateSession}
+          className="mt-6 flex items-center gap-2 px-5 py-2.5 bg-[linear-gradient(135deg,#fbbf24,#f59e0b)] text-black text-sm font-semibold rounded-xl hover:opacity-90 transition-opacity"
+        >
+          <Zap size={16} />
+          Создать сессию
+        </button>
+      )}
+
+      {hasSession && (
         <div className="mt-8 grid grid-cols-1 gap-2 max-w-sm w-full">
           {[
-            { label: '💬 Начать разговор', text: 'Привет! Что умеешь делать?' },
-            { label: '💻 Ревью кода', text: 'Посмотри этот код и предложи улучшения:' },
-            { label: '✍️ Написать текст', text: 'Напиши короткий рассказ о космическом путешествии.' },
-            { label: '🧠 Объяснить тему', text: 'Объясни квантовую запутанность простыми словами.' },
+            { label: '🎯 Дебаты', text: 'Обсудите плюсы и минусы удалённой работы.' },
+            { label: '🧠 Мозговой штурм', text: 'Предложите идеи для мобильного приложения.' },
+            { label: '📊 Анализ', text: 'Какие технологии будут доминировать через 5 лет?' },
           ].map(s => (
             <div key={s.label}
-              onClick={() => onSuggestionClick(s.text)}
-              className="text-left text-sm text-[var(--text-dim)] bg-[var(--surface-2)] border border-[var(--border)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] rounded-xl px-4 py-3 cursor-pointer transition-all group shadow-sm hover:shadow-glow-sm"
+              className="text-left text-sm text-[var(--text-dim)] bg-[var(--surface-2)] border border-amber-400/15 hover:border-amber-400/30 hover:text-[var(--text-primary)] rounded-xl px-4 py-3 cursor-default transition-all group"
             >
               <span className="font-medium text-[var(--text-muted)] group-hover:text-[var(--text-primary)] transition-colors">{s.label}</span>
               <p className="mt-0.5 text-[var(--text-dim)] group-hover:text-[var(--text-muted)] transition-colors text-xs">{s.text}</p>
@@ -1715,8 +4281,6 @@ function EmptyState({ hasApiKey, hasModel, apiKeysCount, onSuggestionClick }: { 
     </div>
   );
 }
-
-
 
 
 

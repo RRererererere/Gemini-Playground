@@ -1,7 +1,9 @@
-import type { SavedChat, SavedSystemPrompt, AttachedFile, InlineDataPart, Message, Part } from '@/types';
+import type { SavedChat, SavedSystemPrompt, AttachedFile, InlineDataPart, Message, Part, SkillArtifact } from '@/types';
 import { saveFiles, loadFiles } from './fileStorage';
 
 // ====================== FILE HELPERS ======================
+
+const ARTIFACT_SIZE_THRESHOLD = 100 * 1024; // 100KB
 
 // Extract file IDs from messages
 function extractFileIds(messages: Message[]): string[] {
@@ -10,6 +12,12 @@ function extractFileIds(messages: Message[]): string[] {
     if (msg.files) {
       for (const file of msg.files) {
         ids.push(file.id);
+      }
+    }
+    // Добавляем ID артефактов
+    if (msg.skillArtifacts) {
+      for (const artifact of msg.skillArtifacts) {
+        ids.push(`artifact_${artifact.id}`);
       }
     }
   }
@@ -21,19 +29,47 @@ async function stripFileData(messages: Message[]): Promise<Message[]> {
   const filesToSave: Array<{ id: string; data: string }> = [];
   
   const stripped = messages.map(msg => {
-    if (!msg.files || msg.files.length === 0) return msg;
+    let strippedFiles = msg.files;
+    let strippedArtifacts = msg.skillArtifacts;
     
-    const strippedFiles = msg.files.map(file => {
-      if (file.data) {
-        filesToSave.push({ id: file.id, data: file.data });
-      }
-      // Keep metadata, remove data
-      return { ...file, data: '', previewUrl: undefined };
-    });
+    // Strip file data
+    if (msg.files && msg.files.length > 0) {
+      strippedFiles = msg.files.map(file => {
+        if (file.data) {
+          filesToSave.push({ id: file.id, data: file.data });
+        }
+        // Keep metadata, remove data
+        return { ...file, data: '', previewUrl: undefined };
+      });
+    }
+
+    // Strip large artifact data
+    if (msg.skillArtifacts && msg.skillArtifacts.length > 0) {
+      strippedArtifacts = msg.skillArtifacts.map(artifact => {
+        if (artifact.data.kind === 'base64') {
+          const size = artifact.data.base64.length;
+          if (size > ARTIFACT_SIZE_THRESHOLD) {
+            // Сохраняем в IndexedDB
+            filesToSave.push({ id: `artifact_${artifact.id}`, data: artifact.data.base64 });
+            // Заменяем на stored reference
+            return {
+              ...artifact,
+              data: { kind: 'stored' as const, stored: 'idb' as const }
+            };
+          }
+        }
+        return artifact;
+      });
+    }
 
     const strippedParts = msg.parts.filter(part => !('inlineData' in part));
 
-    return { ...msg, files: strippedFiles, parts: strippedParts };
+    return { 
+      ...msg, 
+      files: strippedFiles, 
+      skillArtifacts: strippedArtifacts,
+      parts: strippedParts 
+    };
   });
   
   // Save file data to IndexedDB
@@ -56,14 +92,40 @@ async function restoreFileData(messages: Message[]): Promise<Message[]> {
   const fileDataMap = await loadFiles(fileIds);
   
   return messages.map(msg => {
-    if (!msg.files || msg.files.length === 0) return msg;
+    let restoredFiles = msg.files;
+    let restoredArtifacts = msg.skillArtifacts;
     
-    const restoredFiles = msg.files.map(file => {
-      const data = fileDataMap.get(file.id) || '';
-      return restoreFilePreviewUrl({ ...file, data });
-    });
+    // Restore files
+    if (msg.files && msg.files.length > 0) {
+      restoredFiles = msg.files.map(file => {
+        const data = fileDataMap.get(file.id) || '';
+        return restoreFilePreviewUrl({ ...file, data });
+      });
+    }
 
-    const inlineParts: InlineDataPart[] = restoredFiles
+    // Restore artifacts
+    if (msg.skillArtifacts && msg.skillArtifacts.length > 0) {
+      restoredArtifacts = msg.skillArtifacts.map(artifact => {
+        if (artifact.data.kind === 'stored') {
+          const base64 = fileDataMap.get(`artifact_${artifact.id}`) || '';
+          if (base64) {
+            // Восстанавливаем mimeType из типа артефакта
+            let mimeType = 'application/octet-stream';
+            if (artifact.type === 'image') mimeType = 'image/png';
+            else if (artifact.type === 'video') mimeType = 'video/mp4';
+            else if (artifact.type === 'audio') mimeType = 'audio/mpeg';
+            
+            return {
+              ...artifact,
+              data: { kind: 'base64' as const, mimeType, base64 }
+            };
+          }
+        }
+        return artifact;
+      });
+    }
+
+    const inlineParts: InlineDataPart[] = (restoredFiles || [])
       .filter(file => file.data)
       .map(file => ({
         inlineData: {
@@ -77,12 +139,17 @@ async function restoreFileData(messages: Message[]): Promise<Message[]> {
     return {
       ...msg,
       files: restoredFiles,
+      skillArtifacts: restoredArtifacts,
       parts: [...textAndOtherParts, ...inlineParts] as Part[],
     };
   });
 }
 
 // Restore previewUrl (object URL) for previewable files from base64 data
+// Кэш для Object URLs с LRU eviction для предотвращения утечек памяти
+const previewUrlCache = new Map<string, string>();
+const MAX_CACHE_SIZE = 50; // Лимит кэша
+
 function restoreFilePreviewUrl(file: AttachedFile): AttachedFile {
   const canPreviewInline =
     file.mimeType.startsWith('image/') ||
@@ -90,13 +157,50 @@ function restoreFilePreviewUrl(file: AttachedFile): AttachedFile {
 
   if (canPreviewInline && file.data && !file.previewUrl) {
     try {
+      // Проверяем кэш по уникальному ключу (id или hash данных)
+      const cacheKey = file.id || file.data.slice(0, 100);
+      
+      if (previewUrlCache.has(cacheKey)) {
+        // LRU: переместить в конец (удалить и добавить снова)
+        const url = previewUrlCache.get(cacheKey)!;
+        previewUrlCache.delete(cacheKey);
+        previewUrlCache.set(cacheKey, url);
+        return { ...file, previewUrl: url };
+      }
+      
+      // Если кэш переполнен — удалить самый старый (первый)
+      if (previewUrlCache.size >= MAX_CACHE_SIZE) {
+        const firstKey = previewUrlCache.keys().next().value;
+        if (firstKey) {
+          const oldUrl = previewUrlCache.get(firstKey);
+          if (oldUrl) {
+            URL.revokeObjectURL(oldUrl);
+            previewUrlCache.delete(firstKey);
+          }
+        }
+      }
+      
       const blob = base64ToBlob(file.data, file.mimeType);
-      return { ...file, previewUrl: URL.createObjectURL(blob) };
+      const url = URL.createObjectURL(blob);
+      previewUrlCache.set(cacheKey, url);
+      
+      return { ...file, previewUrl: url };
     } catch {
       return file;
     }
   }
   return file;
+}
+
+// Функция для очистки неиспользуемых URL (вызывать при удалении чата)
+export function revokePreviewUrls(fileIds: string[]) {
+  fileIds.forEach(id => {
+    const url = previewUrlCache.get(id);
+    if (url) {
+      URL.revokeObjectURL(url);
+      previewUrlCache.delete(id);
+    }
+  });
 }
 
 function base64ToBlob(base64: string, mimeType: string): Blob {
@@ -135,6 +239,44 @@ export async function loadSavedChats(): Promise<SavedChat[]> {
   }
 }
 
+// Возвращает 'ok' | 'quota'
+function trySetItem(key: string, value: string): 'ok' | 'quota' {
+  try {
+    localStorage.setItem(key, value);
+    return 'ok';
+  } catch (e: any) {
+    if (e?.name === 'QuotaExceededError' || e?.code === 22) return 'quota';
+    throw e; // другие ошибки пробрасываем
+  }
+}
+
+// Обрезает messages у самых старых чатов, кроме текущего
+function evictOldMessages(chats: SavedChat[], keepId: string): SavedChat[] {
+  return chats.map((c, i) => {
+    if (c.id === keepId || i < 3) return c; // защищаем 3 самых новых
+    return { ...c, messages: c.messages.slice(-3) }; // оставляем 3 последних сообщения
+  });
+}
+
+// Удаляет старые чаты, оставляя keepCount самых новых + текущий
+function evictOldChats(chats: SavedChat[], keepId: string, keepCount: number): SavedChat[] {
+  const current = chats.find(c => c.id === keepId);
+  const others = chats.filter(c => c.id !== keepId).slice(0, keepCount);
+  return current ? [current, ...others] : others;
+}
+
+// Storage warning — через sessionStorage (не localStorage, чтобы не зациклиться)
+const STORAGE_WARNING_KEY = 'gp_storage_warning';
+function setStorageWarning(msg: string) {
+  try { sessionStorage.setItem(STORAGE_WARNING_KEY, msg); } catch {}
+}
+export function getStorageWarning(): string | null {
+  try { return sessionStorage.getItem(STORAGE_WARNING_KEY); } catch { return null; }
+}
+export function clearStorageWarning() {
+  try { sessionStorage.removeItem(STORAGE_WARNING_KEY); } catch {}
+}
+
 export async function saveChatToStorage(chat: SavedChat): Promise<void> {
   if (typeof window === 'undefined') return;
   
@@ -149,7 +291,28 @@ export async function saveChatToStorage(chat: SavedChat): Promise<void> {
   } else {
     chats.unshift(strippedChat);
   }
-  localStorage.setItem(CHATS_KEY, JSON.stringify(chats));
+  
+  const result = trySetItem(CHATS_KEY, JSON.stringify(chats));
+  if (result === 'ok') return;
+
+  // Стратегия 1: обрезать сообщения в старых чатах (оставить только заголовок+метадату)
+  const evicted1 = evictOldMessages(chats, chat.id);
+  if (trySetItem(CHATS_KEY, JSON.stringify(evicted1)) === 'ok') return;
+
+  // Стратегия 2: удалить самые старые чаты полностью
+  const evicted2 = evictOldChats(evicted1, chat.id, 5);
+  if (trySetItem(CHATS_KEY, JSON.stringify(evicted2)) === 'ok') return;
+
+  // Стратегия 3: сохранить только текущий чат
+  if (trySetItem(CHATS_KEY, JSON.stringify([strippedChat])) === 'ok') {
+    setStorageWarning('Хранилище переполнено. Старые чаты были удалены для сохранения текущего.');
+    return;
+  }
+
+  // Стратегия 4: сохранить только метадату (без messages)
+  const skeleton = { ...strippedChat, messages: [] };
+  trySetItem(CHATS_KEY, JSON.stringify([skeleton]));
+  setStorageWarning('critical');
 }
 
 // Sync version without file data restoration (for internal use)
@@ -179,7 +342,7 @@ export async function deleteChatFromStorage(id: string): Promise<void> {
   }
   
   const filtered = chats.filter(c => c.id !== id);
-  localStorage.setItem(CHATS_KEY, JSON.stringify(filtered));
+  trySetItem(CHATS_KEY, JSON.stringify(filtered));
 }
 
 export function getActiveChatId(): string | null {
@@ -248,7 +411,75 @@ export async function importChatsFromFile(file: File): Promise<SavedChat[]> {
   });
 }
 
-// ====================== ИМПОРТ GOOGLE AI STUDIO ======================
+// ====================== ИМПОРТ ПРОСТОГО ФОРМАТА ======================
+// Поддерживает: {"role": "user"/"assistant", "message": "..."} или "content"
+
+export function importFromSimpleFormat(file: File): Promise<Partial<SavedChat>> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const raw = JSON.parse(e.target?.result as string);
+
+        // Normalize to array
+        const items: any[] = Array.isArray(raw) ? raw : raw.messages ?? raw.conversation ?? raw.history ?? null;
+        if (!Array.isArray(items)) {
+          reject(new Error('Ожидается массив сообщений или объект с полем messages/conversation/history'));
+          return;
+        }
+
+        const messages: import('@/types').Message[] = [];
+        let _counter = 0;
+        const uid = () => `simple_${Date.now()}_${++_counter}`;
+
+        for (const item of items) {
+          if (!item || typeof item !== 'object') continue;
+
+          const rawRole = (item.role ?? item.from ?? '').toLowerCase();
+          const role: 'user' | 'model' =
+            rawRole === 'user' ? 'user' :
+            rawRole === 'assistant' || rawRole === 'model' ? 'model' :
+            null as any;
+
+          if (!role) continue;
+
+          // Support "message", "content", or "text" as the message body
+          const text: string = item.message ?? item.content ?? item.text ?? '';
+          if (typeof text !== 'string') continue;
+
+          messages.push({
+            id: uid(),
+            role,
+            parts: [{ text }],
+          });
+        }
+
+        if (messages.length === 0) {
+          reject(new Error('Не найдено ни одного подходящего сообщения'));
+          return;
+        }
+
+        resolve({
+          id: `simple_${Date.now()}`,
+          title: file.name.replace(/\.[^/.]+$/, '') || 'Импортированный чат',
+          messages,
+          model: '',
+          systemPrompt: '',
+          tools: [],
+          temperature: 1.0,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      } catch (err: any) {
+        reject(new Error('Не удалось разобрать JSON: ' + (err.message || 'неверный формат')));
+      }
+    };
+    reader.onerror = () => reject(new Error('Ошибка чтения файла'));
+    reader.readAsText(file, 'utf-8');
+  });
+}
+
+
 
 interface GeminiStudioChunk {
   text?: string;
@@ -387,7 +618,7 @@ export function loadSystemPrompts(): SavedSystemPrompt[] {
 
 export function saveSystemPrompts(prompts: SavedSystemPrompt[]): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(SYSTEM_PROMPTS_KEY, JSON.stringify(prompts));
+  trySetItem(SYSTEM_PROMPTS_KEY, JSON.stringify(prompts));
 }
 
 export function createSystemPrompt(name: string, content: string): SavedSystemPrompt {
@@ -417,15 +648,19 @@ export function loadDeepThinkSystemPrompt(): string {
 
 export function saveDeepThinkSystemPrompt(prompt: string): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(DEEPTHINK_SYSTEM_PROMPT_KEY, prompt);
+  trySetItem(DEEPTHINK_SYSTEM_PROMPT_KEY, prompt);
 }
 
 // ====================== ПОЛНЫЙ ЭКСПОРТ/ИМПОРТ НАСТРОЕК ======================
 
-export function exportAllSettings(): void {
+export async function exportAllSettings(): Promise<void> {
   if (typeof window === 'undefined') return;
+
+  // Импортируем функцию экспорта памяти
+  const { exportAllMemories } = await import('./memory-store');
+
   const data = {
-    version: 1,
+    version: 2, // bump версии
     exportedAt: Date.now(),
     keys: localStorage.getItem('gemini_api_keys') || '[]',
     chats: localStorage.getItem(CHATS_KEY) || '[]',
@@ -434,6 +669,27 @@ export function exportAllSettings(): void {
     temperature: localStorage.getItem('gemini_temperature') || '1',
     thinkingBudget: localStorage.getItem('gemini_thinking_budget') || '-1',
     systemPrompt: localStorage.getItem('gemini_sys_prompt') || '',
+
+    // ↓ НОВЫЕ ПОЛЯ для Arena
+    arenaSessions: localStorage.getItem('arena_sessions') || '[]',
+    arenaActiveSession: localStorage.getItem('arena_active_session_id') || '',
+
+    // ↓ НОВЫЕ ПОЛЯ для Memory
+    memories: exportAllMemories(),
+
+    // ↓ НОВЫЕ ПОЛЯ для Agents
+    agents: localStorage.getItem('gemini_agents') || '[]',
+
+    // ↓ НОВЫЕ ПОЛЯ для Skills
+    skillPrompts: localStorage.getItem('gemini_skill_prompts') || '{}',
+    deepThinkPrompt: localStorage.getItem('gemini_deepthink_system_prompt') || '',
+
+    // ↓ НОВЫЕ ПОЛЯ для Ghost Nudge Protocol
+    ghostNudgeEnabled: localStorage.getItem(GNP_ENABLED_KEY) || String(GNP_ENABLED_DEFAULT),
+    ghostNudgeMaxRetries: localStorage.getItem(GNP_MAX_RETRIES_KEY) || String(GNP_MAX_RETRIES_DEFAULT),
+    
+    // ↓ НОВЫЕ ПОЛЯ для Max Upload Size
+    maxUploadSizeMB: localStorage.getItem(MAX_UPLOAD_SIZE_KEY) || String(DEFAULT_MAX_UPLOAD_SIZE_MB),
   };
   
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -452,6 +708,9 @@ export async function importAllSettings(file: File): Promise<void> {
       try {
         const raw = JSON.parse(e.target?.result as string);
         if (raw.version && raw.exportedAt) {
+          // Импортируем функцию импорта памяти
+          const { importAllMemories } = await import('./memory-store');
+          
           if (raw.keys) localStorage.setItem('gemini_api_keys', raw.keys);
           if (raw.chats) {
             // Restore file data before saving
@@ -477,6 +736,27 @@ export async function importAllSettings(file: File): Promise<void> {
           if (raw.thinkingBudget) localStorage.setItem('gemini_thinking_budget', raw.thinkingBudget);
           if (raw.systemPrompt) localStorage.setItem('gemini_sys_prompt', raw.systemPrompt);
           
+          // ↓ НОВЫЕ ПОЛЯ для Arena
+          if (raw.arenaSessions) localStorage.setItem('arena_sessions', raw.arenaSessions);
+          if (raw.arenaActiveSession) localStorage.setItem('arena_active_session_id', raw.arenaActiveSession);
+          
+          // ↓ НОВЫЕ ПОЛЯ для Memory
+          if (raw.memories) importAllMemories(raw.memories);
+          
+          // ↓ НОВЫЕ ПОЛЯ для Agents
+          if (raw.agents) localStorage.setItem('gemini_agents', raw.agents);
+          
+          // ↓ НОВЫЕ ПОЛЯ для Skills
+          if (raw.skillPrompts) localStorage.setItem('gemini_skill_prompts', raw.skillPrompts);
+          if (raw.deepThinkPrompt) localStorage.setItem('gemini_deepthink_system_prompt', raw.deepThinkPrompt);
+
+          // ↓ НОВЫЕ ПОЛЯ для Ghost Nudge Protocol
+          if (raw.ghostNudgeEnabled !== undefined) localStorage.setItem(GNP_ENABLED_KEY, String(raw.ghostNudgeEnabled));
+          if (raw.ghostNudgeMaxRetries !== undefined) localStorage.setItem(GNP_MAX_RETRIES_KEY, String(raw.ghostNudgeMaxRetries));
+
+          // ↓ НОВЫЕ ПОЛЯ для Max Upload Size
+          if (raw.maxUploadSizeMB !== undefined) trySetItem(MAX_UPLOAD_SIZE_KEY, String(raw.maxUploadSizeMB));
+
           window.location.reload();
           resolve();
         } else {
@@ -489,4 +769,185 @@ export async function importAllSettings(file: File): Promise<void> {
     reader.onerror = () => reject(new Error('Ошибка чтения файла'));
     reader.readAsText(file, 'utf-8');
   });
+}
+
+// ====================== SKILL PROMPTS ======================
+
+const SKILL_PROMPTS_KEY = 'gemini_skill_prompts';
+
+// Ghost Nudge Protocol settings keys
+const GNP_ENABLED_KEY = 'gemini_ghost_nudge_enabled';
+const GNP_MAX_RETRIES_KEY = 'gemini_ghost_nudge_max_retries';
+
+// Default values
+export const GNP_ENABLED_DEFAULT = true;
+export const GNP_MAX_RETRIES_DEFAULT = 3;
+
+export function loadGhostNudgeEnabled(): boolean {
+  if (typeof window === 'undefined') return GNP_ENABLED_DEFAULT;
+  const val = localStorage.getItem(GNP_ENABLED_KEY);
+  if (val === null) return GNP_ENABLED_DEFAULT;
+  return val === 'true';
+}
+
+export function saveGhostNudgeEnabled(enabled: boolean): void {
+  if (typeof window === 'undefined') return;
+  trySetItem(GNP_ENABLED_KEY, enabled.toString());
+}
+
+export function loadGhostNudgeMaxRetries(): number {
+  if (typeof window === 'undefined') return GNP_MAX_RETRIES_DEFAULT;
+  const val = localStorage.getItem(GNP_MAX_RETRIES_KEY);
+  if (val === null) return GNP_MAX_RETRIES_DEFAULT;
+  const parsed = parseInt(val, 10);
+  if (isNaN(parsed) || parsed < 1 || parsed > 5) return GNP_MAX_RETRIES_DEFAULT;
+  return parsed;
+}
+
+export function saveGhostNudgeMaxRetries(max: number): void {
+  if (typeof window === 'undefined') return;
+  const clamped = Math.max(1, Math.min(5, max));
+  trySetItem(GNP_MAX_RETRIES_KEY, clamped.toString());
+}
+
+export interface SkillPromptOverride {
+  skillId: string;
+  customPrompt: string;
+}
+
+export function loadSkillPrompts(): Record<string, string> {
+  try {
+    const stored = localStorage.getItem(SKILL_PROMPTS_KEY);
+    if (!stored) return {};
+    return JSON.parse(stored);
+  } catch {
+    return {};
+  }
+}
+
+export function saveSkillPrompt(skillId: string, prompt: string) {
+  const prompts = loadSkillPrompts();
+  prompts[skillId] = prompt;
+  trySetItem(SKILL_PROMPTS_KEY, JSON.stringify(prompts));
+}
+
+export function getSkillPrompt(skillId: string): string | null {
+  const prompts = loadSkillPrompts();
+  return prompts[skillId] || null;
+}
+
+export function resetSkillPrompt(skillId: string) {
+  const prompts = loadSkillPrompts();
+  delete prompts[skillId];
+  trySetItem(SKILL_PROMPTS_KEY, JSON.stringify(prompts));
+}
+
+// ====================== MAX UPLOAD SIZE ======================
+
+const MAX_UPLOAD_SIZE_KEY = 'gemini_max_upload_size_mb';
+export const DEFAULT_MAX_UPLOAD_SIZE_MB = 3.5;
+
+const MIN_KB = 1;
+const MAX_KB = 1024 * 1024; // 1 GB in KB
+
+export function sizeMBToSliderValue(mb: number): number {
+  const kb = mb * 1024;
+  if (kb <= MIN_KB) return 0;
+  if (kb >= MAX_KB) return 100;
+  return (100 * Math.log(kb / MIN_KB)) / Math.log(MAX_KB / MIN_KB);
+}
+
+export function sliderValueToSizeMB(val: number): number {
+  if (val <= 0) return MIN_KB / 1024;
+  if (val >= 100) return MAX_KB / 1024;
+  const kb = MIN_KB * Math.exp((val / 100) * Math.log(MAX_KB / MIN_KB));
+  
+  // Округляем до красивых значений
+  if (kb < 10) {
+    return Math.round(kb) / 1024;
+  } else if (kb < 100) {
+    return (Math.round(kb / 5) * 5) / 1024;
+  } else if (kb < 1024) {
+    return (Math.round(kb / 50) * 50) / 1024;
+  } else {
+    const mb = kb / 1024;
+    if (mb < 10) {
+      return Math.round(mb * 2) / 2; // 0.5 MB steps
+    } else if (mb < 100) {
+      return Math.round(mb); // 1 MB steps
+    } else if (mb < 500) {
+      return Math.round(mb / 10) * 10; // 10 MB steps
+    } else {
+      return Math.round(mb / 50) * 50; // 50 MB steps
+    }
+  }
+}
+
+export function formatUploadSize(mb: number): string {
+  const kb = mb * 1024;
+  if (kb < 1023.9) {
+    return `${Math.round(kb)} KB`;
+  }
+  const currentMB = kb / 1024;
+  if (currentMB < 1023.9) {
+    return `${currentMB.toFixed(currentMB < 10 ? 1 : 0)} MB`;
+  }
+  const gb = currentMB / 1024;
+  return `${gb.toFixed(gb < 10 ? 1 : 0)} GB`;
+}
+
+export function loadMaxUploadSizeMB(): number {
+  if (typeof window === 'undefined') return DEFAULT_MAX_UPLOAD_SIZE_MB;
+  const raw = localStorage.getItem(MAX_UPLOAD_SIZE_KEY);
+  if (!raw) return DEFAULT_MAX_UPLOAD_SIZE_MB;
+  const val = parseFloat(raw);
+  if (isNaN(val) || val < 0.0009 || val > 1024) return DEFAULT_MAX_UPLOAD_SIZE_MB;
+  return val;
+}
+
+export function saveMaxUploadSizeMB(mb: number): void {
+  if (typeof window === 'undefined') return;
+  const clamped = Math.max(0.0009765625, Math.min(1024, mb)); // от 1 KB до 1 GB
+  trySetItem(MAX_UPLOAD_SIZE_KEY, clamped.toString());
+}
+
+// ====================== STORAGE REPAIR ======================
+
+export function checkAndRepairStorage(): { ok: boolean; warning?: string } {
+  if (typeof window === 'undefined') return { ok: true };
+
+  try {
+    // Тест записи
+    const testKey = '__gp_storage_test__';
+    localStorage.setItem(testKey, '1');
+    localStorage.removeItem(testKey);
+  } catch {
+    // localStorage вообще недоступен или заполнен под завязку
+    // Пробуем освободить место принудительно
+    try {
+      const chatsRaw = localStorage.getItem(CHATS_KEY);
+      if (chatsRaw) {
+        const chats = JSON.parse(chatsRaw) as SavedChat[];
+        // Оставляем только последние 5 чатов без messages
+        const trimmed = chats.slice(0, 5).map(c => ({ ...c, messages: [] }));
+        localStorage.removeItem(CHATS_KEY); // сначала освобождаем
+        localStorage.setItem(CHATS_KEY, JSON.stringify(trimmed));
+        setStorageWarning('Хранилище переполнено — старые чаты были обрезаны. Экспортируй данные для сохранности.');
+        return { ok: false, warning: 'repaired' };
+      }
+    } catch {
+      return { ok: false, warning: 'critical' };
+    }
+  }
+
+  // Проверка на corrupt JSON
+  try {
+    const raw = localStorage.getItem(CHATS_KEY);
+    if (raw) JSON.parse(raw);
+  } catch {
+    localStorage.removeItem(CHATS_KEY);
+    return { ok: false, warning: 'corrupt_json_cleared' };
+  }
+
+  return { ok: true };
 }

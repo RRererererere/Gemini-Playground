@@ -12,6 +12,8 @@ export const DEFAULT_DEEPTHINK_SYSTEM_PROMPT = `You are the internal strategist 
 Read the conversation, think through the user's real intent, and produce a system prompt for the answering model.
 Output only the final system prompt after your reasoning.`;
 
+export const DEEPTHINK_MEMORY_MARKER = '[DeepThink context from previous assistant turn]';
+
 export function isThoughtPart(part: Part): part is ThoughtPart {
   return 'thought' in part && part.thought === true;
 }
@@ -170,8 +172,30 @@ export function formatToolPayload(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
-export function buildChatRequestMessages(messages: Message[]) {
+export interface ChatMessageFilterOptions {
+  excludeBridgeData?: boolean;
+  excludeRegeneratedHidden?: boolean;
+  excludeToolResponse?: boolean;
+}
+
+const DEFAULT_MESSAGE_FILTERS: ChatMessageFilterOptions = {
+  excludeBridgeData: true,
+  excludeRegeneratedHidden: true,
+  excludeToolResponse: true,
+};
+
+export function buildChatRequestMessages(
+  messages: Message[],
+  filters: ChatMessageFilterOptions = DEFAULT_MESSAGE_FILTERS
+) {
+  const f = { ...DEFAULT_MESSAGE_FILTERS, ...filters };
   return messages
+    .filter(message => {
+      if (f.excludeBridgeData && message.kind === 'bridge_data') return false;
+      if (f.excludeToolResponse && message.kind === 'tool_response') return false;
+      if (f.excludeRegeneratedHidden && message.kind === 'regenerated_hidden') return false;
+      return true;
+    })
     .map(message => {
       const parts: any[] = message.parts
         .filter(part => {
@@ -180,6 +204,25 @@ export function buildChatRequestMessages(messages: Message[]) {
           return false;
         })
         .map(part => partToGeminiPart(part));
+
+      // Добавляем текст аннотаций если есть
+      if (message.annotationRefs && message.annotationRefs.length > 0) {
+        const annotationsText = message.annotationRefs.map(ref => {
+          const region = `${ref.annotation.x1_pct.toFixed(1)}%-${ref.annotation.y1_pct.toFixed(1)}% to ${ref.annotation.x2_pct.toFixed(1)}%-${ref.annotation.y2_pct.toFixed(1)}%`;
+          return `@[${ref.annotation.label}] (на изображении "${ref.imageName}", область: ${region})`;
+        }).join(', ');
+        
+        // Находим текстовую часть и добавляем к ней аннотации
+        const textPartIndex = parts.findIndex(p => p.text !== undefined);
+        if (textPartIndex >= 0) {
+          parts[textPartIndex].text = parts[textPartIndex].text 
+            ? `${parts[textPartIndex].text}\n\nСсылаюсь на: ${annotationsText}`
+            : `Расскажи подробнее про: ${annotationsText}`;
+        } else {
+          // Если нет текстовой части, добавляем новую
+          parts.unshift({ text: `Расскажи подробнее про: ${annotationsText}` });
+        }
+      }
 
       for (const toolCall of message.toolCalls || []) {
         parts.push({
@@ -195,6 +238,12 @@ export function buildChatRequestMessages(messages: Message[]) {
 
       for (const toolResponse of message.toolResponses || []) {
         parts.push(buildToolResponsePart(toolResponse));
+        // Добавляем sibling parts для Gemini 2.x (например, изображения рядом с functionResponse)
+        if (toolResponse.extraParts) {
+          for (const extraPart of toolResponse.extraParts) {
+            parts.push(extraPart);
+          }
+        }
       }
 
       return {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   AlertCircle,
   BookOpen,
@@ -10,12 +10,14 @@ import {
   Copy,
   Cpu,
   Download,
+  Edit2,
   Eye,
   EyeOff,
   FileStack,
   FolderOpen,
   Hash,
   Key,
+  Layers,
   MessageSquare,
   Plus,
   RefreshCw,
@@ -27,12 +29,21 @@ import {
   Trash2,
   Unlock,
   Upload,
+  Volume2,
   Wrench,
   X,
+  Zap,
   type LucideIcon,
-} from 'lucide-react';
-import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, SavedSystemPrompt } from '@/types';
+  } from 'lucide-react';
+  import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, SavedSystemPrompt, Provider, UniversalModel, ActiveModel } from '@/types';
+  import { AgentGraph } from '@/lib/agent-engine/types';
+  import { getGraphs, GRAPHS_UPDATED_EVENT } from '@/lib/agent-engine/graph-storage';
 import { addApiKey, removeApiKey, getKeyStatus, timeUntilUnblock, unblockKey } from '@/lib/apiKeyManager';
+import { loadProviders, saveCustomProvider, removeProvider, loadModelsCache, saveModelsCache, clearModelsCache } from '@/lib/providerStorage';
+import { ProviderModal } from './AddProviderModal';
+import { getAgents, deleteAgent, AGENTS_UPDATED_EVENT } from '@/lib/agents/agent-store';
+import { getAgentConfigs, getAgentConfig, getThreads, deleteThread, AGENT_THREADS_UPDATED_EVENT } from '@/lib/agent-engine/agent-chat-store';
+import type { Agent } from '@/lib/agents/types';
 import {
   exportAllSettings,
   exportChats,
@@ -40,25 +51,96 @@ import {
   importAllSettings,
   importChatsFromFile,
   importFromGoogleStudio,
+  importFromSimpleFormat,
   loadDeepThinkSystemPrompt,
   loadSystemPrompts,
   saveDeepThinkSystemPrompt,
   saveSystemPrompts,
   createSystemPrompt,
   cloneSystemPrompt,
+  formatUploadSize,
+  sizeMBToSliderValue,
+  sliderValueToSizeMB,
 } from '@/lib/storage';
+import { exportLogs, deleteLogsDatabase, getLogsCount } from '@/lib/logStore';
 import { DEFAULT_DEEPTHINK_SYSTEM_PROMPT, formatToolPayload } from '@/lib/gemini';
 import { ToolBuilderModal } from '@/components/ToolBuilder';
+import { getInstalledSkills, setSkillEnabled, getSkillById } from '@/lib/skills';
+
+// Skills Section Component
+function SkillsSection({ onSkillsChanged }: { onSkillsChanged?: () => void }) {
+  const [installedRecords, setInstalledRecords] = useState<ReturnType<typeof getInstalledSkills>>([]);
+  
+  useEffect(() => {
+    setInstalledRecords(getInstalledSkills());
+  }, []);
+  
+  const handleToggle = (skillId: string) => {
+    const record = installedRecords.find(r => r.id === skillId);
+    if (record) {
+      setSkillEnabled(skillId, !record.enabled);
+      setInstalledRecords(getInstalledSkills());
+      onSkillsChanged?.();
+    }
+  };
+
+  if (installedRecords.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between px-1">
+        <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)]">Встроенные</span>
+        <span className="text-[10px] text-[var(--text-muted)]">{installedRecords.filter(r => r.enabled).length}/{installedRecords.length}</span>
+      </div>
+      {installedRecords.map(record => {
+        const skill = getSkillById(record.id);
+        if (!skill) return null;
+        
+        return (
+          <div
+            key={record.id}
+            className="flex items-center justify-between rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-[var(--text-primary)]">{skill.name}</p>
+              <p className="mt-0.5 text-xs text-[var(--text-dim)]">{skill.description}</p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer ml-3">
+              <input
+                type="checkbox"
+                checked={record.enabled}
+                onChange={() => handleToggle(record.id)}
+                className="sr-only peer"
+              />
+              <div className="w-9 h-5 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
+            </label>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export interface SidebarSharedProps {
-  apiKeys: ApiKeyEntry[];
-  onApiKeysChange: (keys: ApiKeyEntry[]) => void;
-  activeKeyIndex: number;
-  onActiveKeyIndexChange: (idx: number) => void;
-  model: string;
-  onModelChange: (model: string) => void;
-  models: GeminiModel[];
-  onModelsLoad: (models: GeminiModel[]) => void;
+  // Multi-provider support
+  providers: Provider[];
+  onProvidersChange: (providers: Provider[]) => void;
+  activeProviderId: string;
+  onActiveProviderChange: (id: string) => void;
+  
+  // API Keys (per provider)
+  apiKeys: Record<string, ApiKeyEntry[]>;
+  onApiKeysChange: (providerId: string, keys: ApiKeyEntry[]) => void;
+  activeKeyIndex: Record<string, number>;
+  onActiveKeyIndexChange: (providerId: string, idx: number) => void;
+  
+  // Models (unified)
+  activeModel: ActiveModel | null;
+  onActiveModelChange: (model: ActiveModel) => void;
+  allModels: UniversalModel[];
+  onModelsLoad: (providerId: string, models: UniversalModel[]) => void;
+  onRefreshModels: (providerId: string) => void;
+  
   systemPrompt: string;
   onSystemPromptChange: (prompt: string) => void;
   tools: ChatTool[];
@@ -67,6 +149,9 @@ export interface SidebarSharedProps {
   onOpenSavePromptDialog?: () => void;
   onOpenDeepThinkDialog?: () => void;
   onOpenMemoryModal?: () => void;
+  onOpenContextInspector?: () => void;
+  onOpenSkillsMarket?: () => void;
+  onOpenHFSpaces?: () => void;
   deepThinkSystemPrompt: string;
   onDeepThinkSystemPromptChange: (prompt: string) => void;
   temperature: number;
@@ -74,6 +159,7 @@ export interface SidebarSharedProps {
   thinkingBudget: number;
   onThinkingBudgetChange: (v: number) => void;
   tokenCount: number;
+  isCountingTokens: boolean;
   isStreaming: boolean;
   savedChats: SavedChat[];
   onSavedChatsChange: (chats: SavedChat[]) => void;
@@ -83,7 +169,30 @@ export interface SidebarSharedProps {
   onDeleteChat: (id: string) => void;
   memoryEnabled: boolean;
   onMemoryEnabledChange: (enabled: boolean) => void;
+  // Advanced limits
+  maxToolRounds: number;
+  onMaxToolRoundsChange: (v: number) => void;
+  maxMemoryCalls: number;
+  onMaxMemoryCallsChange: (v: number) => void;
+  // Ghost Nudge Protocol
+  ghostNudgeEnabled: boolean;
+  onGhostNudgeEnabledChange: (enabled: boolean) => void;
+  ghostNudgeMaxRetries: number;
+  onGhostNudgeMaxRetriesChange: (v: number) => void;
+  // Max Upload Size
+  maxUploadSizeMB: number;
+  onMaxUploadSizeMBChange: (v: number) => void;
+  // RPG Feedback Settings
+  rpgFeedbackEnabled: boolean;
+  onRPGFeedbackEnabledChange: (enabled: boolean) => void;
+  rpgShowInlineFeedback: boolean;
+  onRPGShowInlineFeedbackChange: (enabled: boolean) => void;
+  onResetRPGProfile?: () => void;
+  onOpenRPGProfileModal?: () => void;
+  onSkillsChanged?: () => void;
   onClose?: () => void;
+  // Agents
+  onOpenAgent?: (agentId: string, parentChatId?: string) => void;
 }
 
 type SettingsSectionId = 'keys' | 'model' | 'system' | 'tools' | 'manage';
@@ -155,12 +264,14 @@ function SettingsSectionHeader({
   icon: Icon,
   openSections,
   onToggle,
+  badge,
 }: {
   id: SettingsSectionId;
   label: string;
   icon: LucideIcon;
   openSections: Set<SettingsSectionId>;
   onToggle: (id: SettingsSectionId) => void;
+  badge?: string;
 }) {
   const isOpen = openSections.has(id);
 
@@ -170,9 +281,16 @@ function SettingsSectionHeader({
         <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--surface-2)]">
           <Icon size={14} className="text-[var(--text-muted)]" />
         </div>
-        <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--text-dim)]">{label}</span>
+        <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--text-dim)]">{label}</span>
       </div>
-      <ChevronDown size={14} className={`text-[var(--text-dim)] transition-transform duration-300 ${isOpen ? '' : '-rotate-90'}`} />
+      <div className="flex items-center gap-2">
+        {badge && (
+          <span className="mr-2 rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2 py-0.5 text-[10px] font-mono text-[var(--text-muted)] max-w-[80px] truncate">
+            {badge}
+          </span>
+        )}
+        <ChevronDown size={14} className={`text-[var(--text-dim)] transition-transform duration-300 ${isOpen ? '' : '-rotate-90'}`} />
+      </div>
     </button>
   );
 }
@@ -184,103 +302,604 @@ export function ChatSidebar({
   onNewChat,
   onDeleteChat,
   onClose,
-}: Pick<SidebarSharedProps, 'savedChats' | 'currentChatId' | 'onLoadChat' | 'onNewChat' | 'onDeleteChat' | 'onClose'>) {
+  onOpenAgent,
+  // Arena props
+  appMode,
+  onAppModeChange,
+  arenaSessions,
+  activeArenaSessionId,
+  onLoadArenaSession,
+  onNewArenaSession,
+  onDeleteArenaSession,
+  // Agent props
+  activeAgentId,
+  onSelectAgent,
+}: Pick<SidebarSharedProps, 'savedChats' | 'currentChatId' | 'onLoadChat' | 'onNewChat' | 'onDeleteChat' | 'onClose' | 'onOpenAgent'> & {
+  appMode?: 'chat' | 'arena' | 'agents';
+  onAppModeChange?: (mode: 'chat' | 'arena' | 'agents') => void;
+  arenaSessions?: Array<{ id: string; title: string; agents: any[]; messages: any[]; createdAt: number; updatedAt: number }>;
+  activeArenaSessionId?: string | null;
+  onLoadArenaSession?: (id: string) => void;
+  onNewArenaSession?: () => void;
+  onDeleteArenaSession?: (id: string) => void;
+  activeAgentId?: string | null;
+  onSelectAgent?: (id: string | null) => void;
+}) {
   const formatDate = (ts: number) => new Date(ts).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  const isArena = appMode === 'arena';
+  const isAgentsMode = appMode === 'agents';
+  
+  // Agents state
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentConfigs, setAgentConfigs] = useState<any[]>([]);
+  const [agentThreads, setAgentThreads] = useState<any[]>([]);
+  const [collapsedChats, setCollapsedChats] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const refresh = () => {
+      setAgents(getAgents());
+      setAgentConfigs(getAgentConfigs().filter(c => c.isPublished));
+      setAgentThreads(getThreads());
+    };
+    refresh();
+
+    window.addEventListener(AGENTS_UPDATED_EVENT, refresh);
+    window.addEventListener(AGENT_THREADS_UPDATED_EVENT, refresh);
+    return () => {
+      window.removeEventListener(AGENTS_UPDATED_EVENT, refresh);
+      window.removeEventListener(AGENT_THREADS_UPDATED_EVENT, refresh);
+    };
+  }, []);  
+  // Группировка чатов по родителям и фильтрация для агентов
+  const { parentChats, subChatsByParent, standaloneChats } = useMemo(() => {
+    const parents: SavedChat[] = [];
+    const subChats: Record<string, SavedChat[]> = {};
+    const standalone: SavedChat[] = [];
+    
+    const filteredChats = isAgentsMode 
+      ? savedChats.filter(chat => chat.agentId === activeAgentId)
+      : savedChats;
+
+    // Сначала собираем все подчаты
+    filteredChats.forEach(chat => {
+      if (chat.isSubChat && chat.parentChatId) {
+        if (!subChats[chat.parentChatId]) {
+          subChats[chat.parentChatId] = [];
+        }
+        subChats[chat.parentChatId].push(chat);
+      }
+    });
+    
+    // Теперь группируем родительские и standalone чаты
+    filteredChats.forEach(chat => {
+      if (chat.isSubChat) {
+        // Уже обработан выше
+        return;
+      }
+      
+      if (subChats[chat.id] && subChats[chat.id].length > 0) {
+        // Это родительский чат с подчатами
+        parents.push(chat);
+      } else {
+        // Это standalone чат
+        standalone.push(chat);
+      }
+    });
+    
+    // Сортируем подчаты по дате создания
+    Object.keys(subChats).forEach(parentId => {
+      subChats[parentId].sort((a, b) => a.createdAt - b.createdAt);
+    });
+    
+    return { parentChats: parents, subChatsByParent: subChats, standaloneChats: standalone };
+  }, [savedChats, isAgentsMode, activeAgentId]);
+  
+  // Автоматически раскрываем чат с активным подчатом
+  useEffect(() => {
+    const currentChat = savedChats.find(c => c.id === currentChatId);
+    if (currentChat?.parentChatId) {
+      setCollapsedChats(prev => {
+        const next = new Set(prev);
+        next.delete(currentChat.parentChatId!);
+        return next;
+      });
+    }
+  }, [currentChatId, savedChats]);
+  
+  const toggleCollapse = (chatId: string) => {
+    setCollapsedChats(prev => {
+      const next = new Set(prev);
+      if (next.has(chatId)) {
+        next.delete(chatId);
+      } else {
+        next.add(chatId);
+      }
+      return next;
+    });
+  };
+  
+  const starredAgents = agents.filter(a => a.starred);
 
   return (
     <SidebarShell
-      title="Чаты"
-      subtitle="История диалогов и быстрый переход между ветками разговора."
+      title={isArena ? 'Arena' : 'Чаты'}
+      subtitle={isArena
+        ? 'Multi-AI сессии — несколько агентов обсуждают одну тему.'
+        : 'История диалогов и быстрый переход между ветками разговора.'
+      }
       icon={MessageSquare}
       onClose={onClose}
       borderClassName="border-r border-[var(--border)]"
-      footer={
-        <div className="px-5 py-4">
-          <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-1)] px-4 py-3">
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Локально</span>
-              <span className="text-xs font-mono text-[var(--text-primary)]">{savedChats.length}</span>
-            </div>
-            <p className="text-xs leading-relaxed text-[var(--text-muted)]">
-              Все сохранённые диалоги остаются под рукой и не смешиваются с настройками.
-            </p>
-          </div>
-        </div>
-      }
     >
       <div className="flex h-full min-h-0 flex-col">
-        <div className="px-5 pt-5">
+        {/* Pill switcher — Chat / Arena */}
+        {onAppModeChange && (
+          <div className="px-5 pt-4 pb-1">
+            <div className="flex bg-[var(--surface-3)] p-0.5 rounded-lg">
+              <button
+                onClick={() => onAppModeChange('chat')}
+                className={`flex-1 text-center py-1.5 text-xs font-medium rounded-md transition-all ${
+                  appMode === 'chat'
+                    ? 'bg-[var(--surface-4)] text-[var(--text-primary)] shadow-sm'
+                    : 'text-[var(--text-dim)] hover:text-[var(--text-muted)]'
+                }`}
+              >
+                💬 Чат
+              </button>
+              <button
+                onClick={() => onAppModeChange('arena')}
+                className={`flex-1 text-center py-1.5 text-xs font-medium rounded-md transition-all ${
+                  appMode === 'arena'
+                    ? 'bg-amber-400/15 text-amber-400 shadow-sm'
+                    : 'text-[var(--text-dim)] hover:text-[var(--text-muted)]'
+                }`}
+              >
+                ⚡ Arena
+              </button>
+              <button
+                onClick={() => onAppModeChange('agents')}
+                className={`flex-1 text-center py-1.5 text-xs font-medium rounded-md transition-all ${
+                  isAgentsMode
+                    ? 'bg-indigo-500/15 text-indigo-400 shadow-sm'
+                    : 'text-[var(--text-dim)] hover:text-[var(--text-muted)]'
+                }`}
+              >
+                🤖 Agents
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Published Agents List — only in Agents Mode */}
+        {isAgentsMode && agentConfigs.length > 0 && (
+          <div className="px-5 pt-4 pb-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-indigo-400 mb-3">
+              Агенты
+            </p>
+            <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-2">
+              {agentConfigs.map(config => (
+                <button
+                  key={config.id}
+                  onClick={() => onSelectAgent?.(config.id)}
+                  className={`flex-shrink-0 flex flex-col items-center justify-center w-20 h-24 rounded-2xl border transition-all ${
+                    activeAgentId === config.id
+                      ? 'border-indigo-500 bg-indigo-500/10 shadow-[0_0_15px_rgba(99,102,241,0.2)]'
+                      : 'border-[var(--border)] bg-[var(--surface-2)] hover:bg-[var(--surface-3)]'
+                  }`}
+                >
+                  <div className={`w-10 h-10 rounded-xl mb-2 flex items-center justify-center ${
+                    activeAgentId === config.id ? 'bg-indigo-500/20' : 'bg-[var(--surface-3)]'
+                  }`} style={{ backgroundColor: activeAgentId === config.id ? undefined : config.avatarColor }}>
+                    {activeAgentId === config.id ? (
+                      <Zap size={20} className="text-indigo-400" />
+                    ) : (
+                      <span className="text-xl">{config.avatarEmoji || '🤖'}</span>
+                    )}
+                  </div>
+                  <span className={`text-[10px] font-bold truncate w-full px-2 text-center ${
+                    activeAgentId === config.id ? 'text-indigo-400' : 'text-[var(--text-muted)]'
+                  }`}>
+                    {config.name}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* New button */}
+        <div className="px-5 pt-4">
           <button
             onClick={() => {
-              onNewChat();
+              if (isArena) {
+                onNewArenaSession?.();
+              } else {
+                onNewChat();
+              }
               onClose?.();
             }}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3.5 text-sm font-semibold text-black transition-all hover:opacity-90 active:scale-[0.99]"
+            className={`flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3.5 text-sm font-semibold transition-all hover:opacity-90 active:scale-[0.99] ${
+              isArena
+                ? 'bg-[linear-gradient(135deg,#fbbf24,#f59e0b)] text-black'
+                : 'bg-white text-black'
+            }`}
           >
             <Plus size={16} />
-            Новый чат
+            {isArena ? 'Новая арена' : 'Новый чат'}
           </button>
         </div>
 
+        {/* Starred agents section - только в режиме чата */}
+        {!isArena && starredAgents.length > 0 && (
+          <>
+            <div className="px-5 pb-2 pt-5 flex items-center justify-between">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-400">
+                ★ Избранные
+              </p>
+              <button
+                className="text-[10px] text-[var(--text-dim)] hover:text-[var(--text-primary)] transition-colors"
+                onClick={() => {
+                  // TODO: открыть модалку со всеми агентами
+                }}
+              >
+                Все агенты →
+              </button>
+            </div>
+
+            <div className="px-3 pb-3">
+              <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
+                {starredAgents.map(agent => (
+                  <button
+                    key={agent.id}
+                    onClick={() => {
+                      onOpenAgent?.(agent.id, currentChatId || undefined);
+                      onClose?.();
+                    }}
+                    className="flex-shrink-0 flex flex-col items-center justify-center w-16 h-20 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] hover:bg-[var(--surface-3)] transition-all"
+                  >
+                    <span className="text-2xl mb-1">{agent.avatarEmoji}</span>
+                    <span className="text-[10px] text-[var(--text-muted)] truncate w-full px-1 text-center">
+                      {agent.name}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Section header */}
         <div className="px-5 pb-3 pt-5">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-dim)]">История</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-dim)]">
+            {isArena ? 'Сессии' : isAgentsMode ? 'Агенты' : 'История'}
+          </p>
           <p className="mt-1 text-xs text-[var(--text-muted)]">
-            {savedChats.length > 0 ? `${savedChats.length} сохранённых диалогов` : 'Пока пусто'}
+            {isArena
+              ? (arenaSessions && arenaSessions.length > 0 ? `${arenaSessions.length} сессий` : 'Пока пусто')
+              : isAgentsMode
+              ? (agentConfigs.length > 0 ? `${agentConfigs.length} агентов` : 'Пока пусто')
+              : (savedChats.length > 0 ? `${savedChats.length} сохранённых диалогов` : 'Пока пусто')
+            }
           </p>
         </div>
 
+        {/* List */}
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-          {savedChats.length === 0 ? (
-            <div className="mx-2 rounded-[24px] border border-dashed border-[var(--border)] bg-[var(--surface-1)] px-5 py-8 text-center">
-              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--surface-2)] text-[var(--text-muted)]">
-                <MessageSquare size={18} />
+          {isAgentsMode ? (
+            /* Agent configs and threads list */
+            agentConfigs.length === 0 ? (
+              <div className="mx-2 rounded-[24px] border border-dashed border-indigo-500/20 bg-[var(--surface-1)] px-5 py-8 text-center">
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-400">
+                  <Zap size={20} />
+                </div>
+                <p className="text-sm font-medium text-[var(--text-primary)]">Нет агентов</p>
+                <p className="mt-2 text-xs leading-relaxed text-[var(--text-muted)]">
+                  Создайте агента в редакторе графов и опубликуйте его.
+                </p>
               </div>
-              <p className="text-sm font-medium text-[var(--text-primary)]">Нет сохранённых чатов</p>
-              <p className="mt-2 text-xs leading-relaxed text-[var(--text-muted)]">
-                Начните новый диалог, и он появится здесь отдельной карточкой.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {savedChats.map(chat => {
-                const isActive = chat.id === currentChatId;
-
-                return (
-                  <button
-                    key={chat.id}
-                    onClick={() => {
-                      onLoadChat(chat);
-                      onClose?.();
-                    }}
-                    className={`group flex w-full items-start gap-3 rounded-[22px] border px-4 py-3 text-left transition-all ${
-                      isActive
-                        ? 'border-[var(--border-strong)] bg-[linear-gradient(180deg,rgba(255,255,255,0.09),rgba(255,255,255,0.04))] shadow-[0_18px_40px_rgba(0,0,0,0.26)]'
-                        : 'border-[var(--border)] bg-[var(--surface-1)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)]'
-                    }`}
-                  >
-                    <div className={`mt-1 h-2.5 w-2.5 flex-shrink-0 rounded-full ${isActive ? 'bg-white shadow-[0_0_14px_rgba(255,255,255,0.45)]' : 'bg-[var(--surface-4)]'}`} />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[13px] font-medium text-[var(--text-primary)]">{chat.title}</p>
-                      <p className="mt-1 text-[11px] text-[var(--text-dim)]">
-                        {chat.messages.length} сообщ. • {formatDate(chat.updatedAt)}
-                      </p>
+            ) : (
+              <div className="space-y-3">
+                {agentConfigs.map(config => {
+                  const threads = agentThreads.filter(t => t.agentConfigId === config.id);
+                  const isExpanded = !collapsedChats.has(config.id);
+                  
+                  return (
+                    <div key={config.id} className="space-y-1">
+                      {/* Agent header */}
+                      <div
+                        onClick={() => toggleCollapse(config.id)}
+                        className="group flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer hover:bg-white/[0.04] transition-all"
+                      >
+                        <div
+                          className="w-8 h-8 rounded-lg flex items-center justify-center text-lg flex-shrink-0"
+                          style={{ backgroundColor: config.avatarColor }}
+                        >
+                          {config.avatarEmoji}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-[var(--text-primary)] truncate">{config.name}</p>
+                          <p className="text-[10px] text-[var(--text-dim)]">{threads.length} чатов</p>
+                        </div>
+                        <ChevronDown
+                          size={14}
+                          className={`text-[var(--text-dim)] transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                        />
+                      </div>
+                      
+                      {/* Threads list */}
+                      {isExpanded && threads.length > 0 && (
+                        <div className="ml-6 space-y-0.5">
+                          {[...threads].reverse().map(thread => (
+                            <div
+                              key={thread.id}
+                              onClick={() => {
+                                window.dispatchEvent(new CustomEvent('agent-chat-load-thread', { 
+                                  detail: { 
+                                    threadId: thread.id,
+                                    agentConfigId: config.id 
+                                  } 
+                                }));
+                                onClose?.();
+                              }}
+                              className="group flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer hover:bg-white/[0.04] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-all"
+                            >
+                              <MessageSquare size={12} className="flex-shrink-0" />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs truncate">{thread.title}</p>
+                                <p className="text-[10px] text-[var(--text-dim)]">
+                                  {thread.messages.length} сообщ. • {formatDate(thread.updatedAt)}
+                                </p>
+                              </div>
+                              <button
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  deleteThread(thread.id);
+                                  setAgentThreads(getThreads());
+                                }}
+                                className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-[var(--text-dim)] opacity-0 hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100 transition-all"
+                                title="Удалить чат"
+                              >
+                                <Trash2 size={10} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                  );
+                })}
+              </div>
+            )
+          ) : isArena ? (
+            /* Arena sessions list */
+            (!arenaSessions || arenaSessions.length === 0) ? (
+              <div className="mx-2 rounded-[24px] border border-dashed border-amber-400/20 bg-[var(--surface-1)] px-5 py-8 text-center">
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-400">
+                  <span className="text-xl">⚡</span>
+                </div>
+                <p className="text-sm font-medium text-[var(--text-primary)]">Нет Arena-сессий</p>
+                <p className="mt-2 text-xs leading-relaxed text-[var(--text-muted)]">
+                  Создайте новую сессию, чтобы запустить мультиагентное обсуждение.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {[...arenaSessions].reverse().map(session => {
+                  const isActive = session.id === activeArenaSessionId;
+                  return (
+                    <div
+                      key={session.id}
+                      onClick={() => {
+                        onLoadArenaSession?.(session.id);
+                        onClose?.();
+                      }}
+                      className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 cursor-pointer transition-all ${
+                        isActive
+                          ? 'bg-amber-400/[0.08] text-amber-200'
+                          : 'text-[var(--text-muted)] hover:bg-white/[0.04] hover:text-[var(--text-primary)]'
+                      }`}
+                    >
+                      <span className={`flex-shrink-0 text-sm ${isActive ? 'text-amber-400' : 'text-[var(--text-dim)]'}`}>⚡</span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-medium">{session.title}</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">
+                          {session.agents?.length ?? 0} агентов • {session.messages?.length ?? 0} сообщ. • {formatDate(session.updatedAt)}
+                        </p>
+                      </div>
+                      <button
+                        onClick={event => {
+                          event.stopPropagation();
+                          onDeleteArenaSession?.(session.id);
+                        }}
+                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] group-hover:opacity-100"
+                        title="Удалить сессию"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          ) : (
+            /* Hierarchical chat list */
+            savedChats.length === 0 ? (
+              <div className="mx-2 rounded-[24px] border border-dashed border-[var(--border)] bg-[var(--surface-1)] px-5 py-8 text-center">
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--surface-2)] text-[var(--text-muted)]">
+                  <MessageSquare size={18} />
+                </div>
+                <p className="text-sm font-medium text-[var(--text-primary)]">Нет сохранённых чатов</p>
+                <p className="mt-2 text-xs leading-relaxed text-[var(--text-muted)]">
+                  Начните новый диалог, и он появится здесь отдельной карточкой.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {/* Parent chats with subchats */}
+                {[...parentChats].reverse().map(parentChat => {
+                  const subChats = subChatsByParent[parentChat.id] || [];
+                  const isCollapsed = collapsedChats.has(parentChat.id);
+                  const hasActiveSubChat = subChats.some(sc => sc.id === currentChatId);
+                  const isParentActive = parentChat.id === currentChatId;
+
+                  return (
+                    <div key={parentChat.id} className="space-y-0.5">
+                      {/* Parent chat */}
+                      <div
+                        className={`group flex w-full items-center gap-2 rounded-lg px-3 py-2.5 cursor-pointer transition-all ${
+                          isParentActive
+                            ? 'bg-white/[0.08] text-white'
+                            : 'text-[var(--text-muted)] hover:bg-white/[0.04] hover:text-[var(--text-primary)]'
+                        }`}
+                      >
+                        {/* Collapse toggle */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleCollapse(parentChat.id);
+                          }}
+                          className="flex-shrink-0 flex items-center justify-center w-4 h-4 text-[var(--text-dim)] hover:text-[var(--text-primary)] transition-all"
+                        >
+                          <ChevronDown size={12} className={`transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`} />
+                        </button>
+
+                        {/* Chat info */}
+                        <div
+                          onClick={() => {
+                            onLoadChat(parentChat);
+                            onClose?.();
+                          }}
+                          className="flex items-center gap-2.5 min-w-0 flex-1"
+                        >
+                          <MessageSquare size={14} className={`flex-shrink-0 ${isParentActive ? 'text-white' : 'text-[var(--text-dim)]'}`} />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-[13px] font-semibold">{parentChat.title}</p>
+                            <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">
+                              {parentChat.messages.length} • {formatDate(parentChat.updatedAt)}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Delete button */}
+                        <button
+                          onClick={event => {
+                            event.stopPropagation();
+                            const subChatsCount = subChats.length;
+                            if (subChatsCount > 0) {
+                              if (confirm(`Удалить чат и ${subChatsCount} подчат${subChatsCount === 1 ? '' : subChatsCount < 5 ? 'а' : 'ов'}?`)) {
+                                // Delete parent and all subchats
+                                onDeleteChat(parentChat.id);
+                                subChats.forEach(sc => onDeleteChat(sc.id));
+                              }
+                            } else {
+                              onDeleteChat(parentChat.id);
+                            }
+                          }}
+                          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] group-hover:opacity-100"
+                          title="Удалить чат"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+
+                      {/* Subchats */}
+                      {!isCollapsed && subChats.length > 0 && (
+                        <div className="ml-3 border-l border-[var(--border)] pl-2 space-y-0.5">
+                          {subChats.map((subChat, idx) => {
+                            const isActive = subChat.id === currentChatId;
+                            const isLast = idx === subChats.length - 1;
+                            const agent = subChat.agentId ? agents.find(a => a.id === subChat.agentId) : null;
+
+                            return (
+                              <div
+                                key={subChat.id}
+                                onClick={() => {
+                                  onLoadChat(subChat);
+                                  onClose?.();
+                                }}
+                                className={`group flex w-full items-center gap-2 rounded-lg px-3 py-2 cursor-pointer transition-all relative ${
+                                  isActive
+                                    ? 'bg-white/[0.08] text-white'
+                                    : 'text-[var(--text-muted)] hover:bg-white/[0.04] hover:text-[var(--text-primary)]'
+                                }`}
+                              >
+                                {/* Tree line */}
+                                <span className="absolute -left-2 top-1/2 w-2 h-px bg-[var(--border)]" />
+                                
+                                {/* Icon */}
+                                {agent ? (
+                                  <span className="flex-shrink-0 text-sm">{agent.avatarEmoji}</span>
+                                ) : (
+                                  <MessageSquare size={12} className={`flex-shrink-0 ${isActive ? 'text-white' : 'text-[var(--text-dim)]'}`} />
+                                )}
+
+                                {/* Info */}
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-[12px] font-medium">{subChat.title}</p>
+                                  <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">
+                                    {subChat.messages.length} • {formatDate(subChat.updatedAt)}
+                                  </p>
+                                </div>
+
+                                {/* Delete button */}
+                                <button
+                                  onClick={event => {
+                                    event.stopPropagation();
+                                    onDeleteChat(subChat.id);
+                                  }}
+                                  className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] group-hover:opacity-100"
+                                  title="Удалить подчат"
+                                >
+                                  <Trash2 size={10} />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Standalone chats (no subchats) */}
+                {[...standaloneChats].reverse().map(chat => {
+                  const isActive = chat.id === currentChatId;
+
+                  return (
+                    <div
+                      key={chat.id}
+                      onClick={() => {
+                        onLoadChat(chat);
+                        onClose?.();
+                      }}
+                      className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 cursor-pointer transition-all ${
+                        isActive
+                          ? 'bg-white/[0.08] text-white'
+                          : 'text-[var(--text-muted)] hover:bg-white/[0.04] hover:text-[var(--text-primary)]'
+                      }`}
+                    >
+                      <MessageSquare size={14} className={`flex-shrink-0 ${isActive ? 'text-white' : 'text-[var(--text-dim)]'}`} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-medium">{chat.title}</p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">
+                          {chat.messages.length} • {formatDate(chat.updatedAt)}
+                        </p>
+                      </div>
                       <button
                         onClick={event => {
                           event.stopPropagation();
                           onDeleteChat(chat.id);
                         }}
-                        className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:bg-red-500/10 hover:text-[var(--gem-red)]"
+                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] group-hover:opacity-100"
                         title="Удалить чат"
                       >
-                        <Trash2 size={13} />
+                        <Trash2 size={12} />
                       </button>
                     </div>
-                  </button>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )
           )}
         </div>
       </div>
@@ -288,15 +907,21 @@ export function ChatSidebar({
   );
 }
 
+
 export function SettingsSidebar({
+  providers,
+  onProvidersChange,
+  activeProviderId,
+  onActiveProviderChange,
   apiKeys,
   onApiKeysChange,
   activeKeyIndex,
   onActiveKeyIndexChange,
-  model,
-  onModelChange,
-  models,
+  activeModel,
+  onActiveModelChange,
+  allModels,
   onModelsLoad,
+  onRefreshModels,
   systemPrompt,
   onSystemPromptChange,
   tools,
@@ -305,6 +930,9 @@ export function SettingsSidebar({
   onOpenSavePromptDialog,
   onOpenDeepThinkDialog,
   onOpenMemoryModal,
+  onOpenContextInspector,
+  onOpenSkillsMarket,
+  onOpenHFSpaces,
   deepThinkSystemPrompt,
   onDeepThinkSystemPromptChange,
   temperature,
@@ -312,79 +940,161 @@ export function SettingsSidebar({
   thinkingBudget,
   onThinkingBudgetChange,
   tokenCount,
+  isCountingTokens,
   isStreaming,
   savedChats,
   onSavedChatsChange,
   onLoadChat,
   memoryEnabled,
   onMemoryEnabledChange,
+  maxToolRounds,
+  onMaxToolRoundsChange,
+  maxMemoryCalls,
+  onMaxMemoryCallsChange,
+  ghostNudgeEnabled,
+  onGhostNudgeEnabledChange,
+  ghostNudgeMaxRetries,
+  onGhostNudgeMaxRetriesChange,
+  maxUploadSizeMB,
+  onMaxUploadSizeMBChange,
+  rpgFeedbackEnabled,
+  onRPGFeedbackEnabledChange,
+  rpgShowInlineFeedback,
+  onRPGShowInlineFeedbackChange,
+  onResetRPGProfile,
+  onOpenRPGProfileModal,
+  onSkillsChanged,
   onClose,
 }: SidebarSharedProps) {
-  const [loadingModels, setLoadingModels] = useState(false);
+  const [loadingModels, setLoadingModels] = useState<Record<string, boolean>>({});
   const [modelError, setModelError] = useState('');
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
-  const [openSections, setOpenSections] = useState<Set<SettingsSectionId>>(new Set<SettingsSectionId>(['keys', 'model', 'system', 'tools', 'manage']));
+  const [openSections, setOpenSections] = useState<Set<SettingsSectionId>>(new Set<SettingsSectionId>(['keys']));
 
   const [newKeyInput, setNewKeyInput] = useState('');
   const [showNewKey, setShowNewKey] = useState(false);
-  const [showKeys, setShowKeys] = useState<Record<number, boolean>>({});
+  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
+  const [showAddProviderModal, setShowAddProviderModal] = useState(false);
+  const [activeProviderTab, setActiveProviderTab] = useState(activeProviderId);
 
   const [savedPrompts, setSavedPrompts] = useState<SavedSystemPrompt[]>([]);
   const [promptDropdownOpen, setPromptDropdownOpen] = useState(false);
-  const activeKeyEntry = apiKeys[activeKeyIndex];
+  const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
+  
+  const currentProviderKeys = apiKeys[activeProviderTab] || [];
+  const currentKeyIndex = activeKeyIndex[activeProviderTab] || 0;
+  const activeKeyEntry = currentProviderKeys[currentKeyIndex];
   const activeKeySuffix = activeKeyEntry?.key ? activeKeyEntry.key.slice(-4) : '';
+  const activeProvider = providers.find(p => p.id === activeProviderId);
+  const currentTabProvider = providers.find(p => p.id === activeProviderTab);
 
   const importRef = useRef<HTMLInputElement>(null);
   const importGsRef = useRef<HTMLInputElement>(null);
+  const importSimpleRef = useRef<HTMLInputElement>(null);
   const importBackupRef = useRef<HTMLInputElement>(null);
   const [importError, setImportError] = useState('');
+  const [logsCount, setLogsCount] = useState<number | null>(null);
 
-  const loadModels = useCallback(async (key: string) => {
+  useEffect(() => {
+    getLogsCount().then(setLogsCount).catch(() => setLogsCount(0));
+  }, []);
+
+  const loadModels = useCallback(async (providerId: string, key: string) => {
     if (!key.trim()) return;
 
-    setLoadingModels(true);
+    setLoadingModels(prev => ({ ...prev, [providerId]: true }));
     setModelError('');
 
+    const provider = providers.find(p => p.id === providerId);
+    if (!provider) {
+      setLoadingModels(prev => ({ ...prev, [providerId]: false }));
+      return;
+    }
+
     try {
-      const res = await fetch(`/api/models?apiKey=${encodeURIComponent(key)}`);
-      const data = await res.json();
+      let res: Response;
+      let data: any;
 
-      if (!res.ok || data.error) {
-        setModelError(data.error || 'Не удалось загрузить модели');
-        onModelsLoad([]);
-        return;
-      }
+      if (provider.type === 'gemini') {
+        res = await fetch(`/api/models?apiKey=${encodeURIComponent(key)}`);
+        data = await res.json();
 
-      onModelsLoad(data.models || []);
+        if (!res.ok || data.error) {
+          setModelError(data.error || 'Не удалось загрузить модели');
+          onModelsLoad(providerId, []);
+          return;
+        }
 
-      if (!model && data.models?.length > 0) {
-        const preferred =
-          data.models.find((item: GeminiModel) => item.name.includes('gemini-2.5-flash') && !item.name.includes('lite') && !item.name.includes('audio')) ||
-          data.models.find((item: GeminiModel) => item.name.includes('gemini-2.0-flash') && !item.name.includes('lite')) ||
-          data.models[0];
+        const geminiModels: UniversalModel[] = (data.models || []).map((m: GeminiModel) => ({
+          id: m.name,
+          displayName: m.displayName,
+          providerId,
+          inputTokenLimit: m.inputTokenLimit,
+          outputTokenLimit: m.outputTokenLimit,
+          supportedGenerationMethods: m.supportedGenerationMethods,
+        }));
 
-        if (preferred) onModelChange(preferred.name);
+        onModelsLoad(providerId, geminiModels);
+
+        // Auto-select preferred model if none selected
+        if (!activeModel && geminiModels.length > 0) {
+          const preferred =
+            geminiModels.find(m => m.id.includes('gemini-2.5-flash') && !m.id.includes('lite') && !m.id.includes('audio')) ||
+            geminiModels.find(m => m.id.includes('gemini-2.0-flash') && !m.id.includes('lite')) ||
+            geminiModels[0];
+
+          if (preferred) onActiveModelChange({ providerId, modelId: preferred.id });
+        }
+      } else {
+        // OpenAI-compatible
+        res = await fetch(`/api/openai-models?apiKey=${encodeURIComponent(key)}&baseUrl=${encodeURIComponent(provider.baseUrl)}`);
+        data = await res.json();
+
+        if (!res.ok || data.error) {
+          setModelError(data.error || 'Не удалось загрузить модели');
+          onModelsLoad(providerId, []);
+          return;
+        }
+
+        const openaiModels: UniversalModel[] = (data.models || []).map((m: any) => ({
+          id: m.id,
+          displayName: m.displayName,
+          providerId,
+          inputTokenLimit: m.inputTokenLimit,
+        }));
+
+        onModelsLoad(providerId, openaiModels);
+
+        // Auto-select first model if none selected
+        if (!activeModel && openaiModels.length > 0) {
+          onActiveModelChange({ providerId, modelId: openaiModels[0].id });
+        }
       }
     } catch {
       setModelError('Ошибка сети');
     } finally {
-      setLoadingModels(false);
+      setLoadingModels(prev => ({ ...prev, [providerId]: false }));
     }
-  }, [model, onModelChange, onModelsLoad]);
+  }, [providers, activeModel, onActiveModelChange, onModelsLoad]);
 
   useEffect(() => {
     setSavedPrompts(loadSystemPrompts());
   }, []);
 
+  const loadModelsRef = useRef(loadModels);
+  useEffect(() => {
+    loadModelsRef.current = loadModels;
+  }, [loadModels]);
+
   useEffect(() => {
     if (!activeKeyEntry?.key) return;
 
     const timer = setTimeout(() => {
-      loadModels(activeKeyEntry.key);
+      loadModelsRef.current(activeProviderTab, activeKeyEntry.key);
     }, 250);
 
     return () => clearTimeout(timer);
-  }, [activeKeyEntry?.key, loadModels]);
+  }, [activeKeyEntry?.key, activeProviderTab]);
 
   const savePrompts = (prompts: SavedSystemPrompt[]) => {
     setSavedPrompts(prompts);
@@ -408,23 +1118,25 @@ export function SettingsSidebar({
     const trimmed = newKeyInput.trim();
     if (!trimmed) return;
 
-    const updated = addApiKey(apiKeys, trimmed);
-    onApiKeysChange(updated);
-    onActiveKeyIndexChange(updated.length - 1);
+    const updated = addApiKey(activeProviderTab, currentProviderKeys, trimmed);
+    onApiKeysChange(activeProviderTab, updated);
+    onActiveKeyIndexChange(activeProviderTab, updated.length - 1);
     setNewKeyInput('');
     setShowNewKey(false);
   };
 
   const deleteKey = (key: string) => {
-    const updated = removeApiKey(apiKeys, key);
-    onApiKeysChange(updated);
-    if (activeKeyIndex >= updated.length) onActiveKeyIndexChange(Math.max(updated.length - 1, 0));
+    const updated = removeApiKey(currentProviderKeys, key);
+    onApiKeysChange(activeProviderTab, updated);
+    if (currentKeyIndex >= updated.length) {
+      onActiveKeyIndexChange(activeProviderTab, Math.max(updated.length - 1, 0));
+    }
   };
 
   const selectKey = (idx: number) => {
-    onActiveKeyIndexChange(idx);
-    if (apiKeys[idx]?.key) {
-      loadModels(apiKeys[idx].key);
+    onActiveKeyIndexChange(activeProviderTab, idx);
+    if (currentProviderKeys[idx]?.key) {
+      loadModels(activeProviderTab, currentProviderKeys[idx].key);
     }
   };
 
@@ -434,11 +1146,18 @@ export function SettingsSidebar({
     return value.toString();
   };
 
-  const selectedModel = models.find(item => item.name === model);
-  const modelDisplayName = selectedModel?.displayName || model || 'Выбрать модель';
+  const selectedModel = activeModel ? allModels.find(m => m.id === activeModel.modelId && m.providerId === activeModel.providerId) : null;
+  const modelDisplayName = selectedModel?.displayName || activeModel?.modelId || 'Выбрать модель';
   const tempLabel = temperature < 0.4 ? 'Точно' : temperature < 0.8 ? 'Баланс' : temperature < 1.4 ? 'Творчески' : 'Хаос';
   const tempColor = temperature < 0.4 ? '#2dd4bf' : temperature < 0.8 ? '#4ade80' : temperature < 1.4 ? '#f59e0b' : '#ef4444';
   const thinkingLabel = thinkingBudget === 0 ? 'Выкл' : thinkingBudget === -1 ? 'Авто' : `${thinkingBudget} токенов`;
+  
+  // Group models by provider
+  const modelsByProvider = allModels.reduce((acc, model) => {
+    if (!acc[model.providerId]) acc[model.providerId] = [];
+    acc[model.providerId].push(model);
+    return acc;
+  }, {} as Record<string, UniversalModel[]>);
 
   const handleImportChats = async (file: File) => {
     setImportError('');
@@ -464,7 +1183,33 @@ export function SettingsSidebar({
         id: result.id!,
         title: result.title!,
         messages: result.messages!,
-        model: result.model || model,
+        model: result.model || activeModel?.modelId || '',
+        systemPrompt: result.systemPrompt || '',
+        tools: [],
+        temperature: result.temperature ?? temperature,
+        createdAt: result.createdAt!,
+        updatedAt: result.updatedAt!,
+      };
+
+      const merged = [chat, ...savedChats];
+      onSavedChatsChange(merged);
+      onLoadChat(chat);
+      onClose?.();
+    } catch (error: any) {
+      setImportError(error.message);
+    }
+  };
+
+  const handleImportSimpleFormat = async (file: File) => {
+    setImportError('');
+
+    try {
+      const result = await importFromSimpleFormat(file);
+      const chat: SavedChat = {
+        id: result.id!,
+        title: result.title!,
+        messages: result.messages!,
+        model: result.model || activeModel?.modelId || '',
         systemPrompt: result.systemPrompt || '',
         tools: [],
         temperature: result.temperature ?? temperature,
@@ -482,6 +1227,7 @@ export function SettingsSidebar({
   };
 
   return (
+    <>
     <SidebarShell
       title="Настройки"
       subtitle="Ключи, модели, системный промпт и резервные копии вынесены в отдельную правую зону."
@@ -498,6 +1244,7 @@ export function SettingsSidebar({
               </div>
               <div className="flex items-center gap-2">
                 {isStreaming && <span className="h-1.5 w-1.5 rounded-full bg-[var(--gem-green)] animate-pulse" />}
+                {isCountingTokens && <span className="h-1.5 w-1.5 rounded-full bg-[var(--text-dim)] animate-pulse" />}
                 <span className={`text-sm font-mono font-medium ${tokenCount > 0 ? 'text-[var(--text-primary)]' : 'text-[var(--text-dim)]'}`}>
                   {formatTokenCount(tokenCount)}
                 </span>
@@ -536,15 +1283,90 @@ export function SettingsSidebar({
               <SettingsSectionHeader id="keys" label="API Ключи" icon={Key} openSections={openSections} onToggle={toggleSection} />
               {openSections.has('keys') && (
                 <div className="space-y-3 px-4 pb-4">
-                  {apiKeys.map((entry, idx) => {
-                    const status = getKeyStatus(entry, model);
-                    const isActive = idx === activeKeyIndex;
+                  {/* Provider tabs */}
+                  <div className="flex items-center gap-1 overflow-x-auto pb-1">
+                    {providers.map(provider => {
+                      const isActive = provider.id === activeProviderTab;
+                      const providerKeys = apiKeys[provider.id] || [];
+                      
+                      return (
+                        <div key={provider.id} className={`group relative flex-shrink-0 flex items-center rounded-xl transition-all ${
+                          isActive ? 'bg-white/10' : ''
+                        }`}>
+                          <button
+                            onClick={() => setActiveProviderTab(provider.id)}
+                            className={`rounded-xl px-3 py-2 text-xs font-medium transition-all ${
+                              isActive
+                                ? 'text-white'
+                                : 'text-[var(--text-dim)] hover:text-[var(--text-muted)]'
+                            }`}
+                          >
+                            {provider.name}
+                            {providerKeys.length > 0 && (
+                              <span className={`ml-1.5 rounded-full px-1.5 py-0.5 text-[9px] ${
+                                isActive ? 'bg-white/20' : 'bg-[var(--surface-3)]'
+                              }`}>
+                                {providerKeys.length}
+                              </span>
+                            )}
+                          </button>
+                          {/* Edit / Delete — только для кастомных провайдеров */}
+                          {!provider.isBuiltin && isActive && (
+                            <div className="flex items-center gap-0.5 pr-1">
+                              <button
+                                onClick={e => { e.stopPropagation(); setEditingProvider(provider); }}
+                                className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-white/10 transition-colors"
+                                title="Редактировать провайдер"
+                              >
+                                <Edit2 size={10} />
+                              </button>
+                              <button
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  if (!confirm(`Удалить провайдер «${provider.name}»? Все его ключи тоже будут удалены.`)) return;
+                                  // Switch tab before delete
+                                  setActiveProviderTab('google');
+                                  onActiveProviderChange('google');
+                                  onProvidersChange(providers.filter(p => p.id !== provider.id));
+                                }}
+                                className="flex h-6 w-6 items-center justify-center rounded-lg text-[var(--text-dim)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                                title="Удалить провайдер"
+                              >
+                                <Trash2 size={10} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    <button
+                      onClick={() => setShowAddProviderModal(true)}
+                      className="flex-shrink-0 rounded-xl border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--text-dim)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+                      title="Добавить провайдер"
+                    >
+                      <Plus size={12} />
+                    </button>
+                  </div>
+
+                  {/* Keys for active provider */}
+                  {currentProviderKeys.map((entry, idx) => {
+                    const status = getKeyStatus(entry, activeModel?.modelId);
+                    const isActive = idx === currentKeyIndex;
+                    const keyId = `${entry.key}-${idx}`;
 
                     return (
-                      <button
-                        key={`${entry.key}-${idx}`}
+                      <div
+                        key={keyId}
+                        role="button"
+                        tabIndex={0}
                         onClick={() => selectKey(idx)}
-                        className={`group flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all ${
+                        onKeyDown={event => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            selectKey(idx);
+                          }
+                        }}
+                        className={`group flex w-full cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all ${
                           isActive
                             ? 'border-emerald-400/25 bg-emerald-400/10'
                             : 'border-[var(--border)] bg-[var(--surface-2)] hover:border-[var(--border-strong)]'
@@ -557,12 +1379,12 @@ export function SettingsSidebar({
                         <div className="min-w-0 flex-1">
                           {entry.label && <p className="mb-0.5 text-[10px] text-[var(--text-muted)]">{entry.label}</p>}
                           <p className="truncate font-mono text-xs text-[var(--text-dim)]">
-                            {showKeys[idx] ? entry.key : `${entry.key.slice(0, 8)}••••••••${entry.key.slice(-4)}`}
+                            {showKeys[keyId] ? entry.key : `${entry.key.slice(0, 8)}••••••••${entry.key.slice(-4)}`}
                           </p>
                           {status !== 'active' && (
                             <p className="mt-1 flex items-center gap-1 text-[10px] text-[var(--gem-red)]">
                               <Clock size={8} />
-                              Разблокируется через {timeUntilUnblock(entry, model)}
+                              Разблокируется через {timeUntilUnblock(entry, activeModel?.modelId)}
                             </p>
                           )}
                           <p className={`mt-1 text-[10px] ${isActive ? 'text-emerald-200/85' : 'text-[var(--text-muted)]'}`}>
@@ -575,8 +1397,8 @@ export function SettingsSidebar({
                             <button
                               onClick={event => {
                                 event.stopPropagation();
-                                const updated = unblockKey(apiKeys, idx, model);
-                                onApiKeysChange(updated);
+                                const updated = unblockKey(currentProviderKeys, idx, activeModel?.modelId);
+                                onApiKeysChange(activeProviderTab, updated);
                               }}
                               className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:text-[var(--text-primary)]"
                               title="Разблокировать ключ"
@@ -587,12 +1409,12 @@ export function SettingsSidebar({
                           <button
                             onClick={event => {
                               event.stopPropagation();
-                              setShowKeys(prev => ({ ...prev, [idx]: !prev[idx] }));
+                              setShowKeys(prev => ({ ...prev, [keyId]: !prev[keyId] }));
                             }}
                             className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-dim)] transition-colors hover:text-[var(--text-primary)]"
                             title="Показать ключ"
                           >
-                            {showKeys[idx] ? <EyeOff size={12} /> : <Eye size={12} />}
+                            {showKeys[keyId] ? <EyeOff size={12} /> : <Eye size={12} />}
                           </button>
                           <button
                             onClick={event => {
@@ -605,7 +1427,7 @@ export function SettingsSidebar({
                             <Trash2 size={12} />
                           </button>
                         </div>
-                      </button>
+                      </div>
                     );
                   })}
 
@@ -622,7 +1444,7 @@ export function SettingsSidebar({
                             setNewKeyInput('');
                           }
                         }}
-                        placeholder="AIza..."
+                        placeholder={currentTabProvider?.type === 'gemini' ? 'AIza...' : 'sk-...'}
                         autoFocus
                         className="w-full rounded-xl border border-[var(--border)] bg-[var(--surface-3)] px-3 py-2 text-xs font-mono text-[var(--text-primary)] placeholder:text-[var(--text-dim)]"
                       />
@@ -651,7 +1473,7 @@ export function SettingsSidebar({
                     </button>
                   )}
 
-                  {apiKeys.length === 0 && (
+                  {currentProviderKeys.length === 0 && currentTabProvider?.type === 'gemini' && (
                     <p className="text-xs leading-relaxed text-[var(--text-dim)]">
                       Ключи можно получить на{' '}
                       <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-[var(--gem-blue)] hover:underline">
@@ -661,7 +1483,7 @@ export function SettingsSidebar({
                     </p>
                   )}
 
-                  {apiKeys.length > 0 && activeKeySuffix && (
+                  {currentProviderKeys.length > 0 && activeKeySuffix && (
                     <p className="text-[11px] text-[var(--text-dim)]">
                       Активный ключ: <span className="font-mono text-emerald-200/90">••••{activeKeySuffix}</span>
                     </p>
@@ -678,61 +1500,79 @@ export function SettingsSidebar({
             </section>
 
             <section className="overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--surface-1)]">
-              <SettingsSectionHeader id="model" label="Модель" icon={Cpu} openSections={openSections} onToggle={toggleSection} />
+              <SettingsSectionHeader 
+                id="model" 
+                label="Модель" 
+                icon={Cpu} 
+                openSections={openSections} 
+                onToggle={toggleSection}
+                badge={activeModel?.modelId?.split('/').pop()?.replace('gemini-', 'g-') || undefined}
+              />
               {openSections.has('model') && (
                 <div className="space-y-4 px-4 pb-4">
                   <div className="relative">
                     <div className="mb-2 flex items-center justify-between">
                       <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)]">Выбранная модель</span>
-                      {apiKeys.length > 0 && (
+                      {currentProviderKeys.length > 0 && (
                         <button
-                          onClick={() => {
-                            if (activeKeyEntry?.key) loadModels(activeKeyEntry.key);
-                          }}
-                          disabled={loadingModels}
+                          onClick={() => onRefreshModels(activeProviderId)}
+                          disabled={loadingModels[activeProviderId]}
                           className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-dim)] transition-colors hover:bg-white/5 hover:text-[var(--text-primary)]"
                           title="Обновить модели"
                         >
-                          <RefreshCw size={12} className={loadingModels ? 'animate-spin' : ''} />
+                          <RefreshCw size={12} className={loadingModels[activeProviderId] ? 'animate-spin' : ''} />
                         </button>
                       )}
                     </div>
 
                     <button
                       onClick={() => setModelDropdownOpen(prev => !prev)}
-                      disabled={models.length === 0}
+                      disabled={allModels.length === 0}
                       className="flex w-full items-center justify-between rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-left transition-colors hover:border-[var(--border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <span className={`${model ? 'text-[var(--text-primary)]' : 'text-[var(--text-dim)]'} truncate text-sm`}>
-                        {loadingModels ? 'Загрузка...' : modelDisplayName.replace('Gemini ', '').replace(' (Preview)', '').trim()}
+                      <span className={`${activeModel ? 'text-[var(--text-primary)]' : 'text-[var(--text-dim)]'} truncate text-sm`}>
+                        {loadingModels[activeProviderId] ? 'Загрузка...' : modelDisplayName.replace('Gemini ', '').replace(' (Preview)', '').trim()}
                       </span>
                       <ChevronDown size={14} className={`ml-2 flex-shrink-0 text-[var(--text-dim)] transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} />
                     </button>
 
-                    {modelDropdownOpen && models.length > 0 && (
+                    {modelDropdownOpen && allModels.length > 0 && (
                       <div className="absolute inset-x-0 top-full z-50 mt-2 max-h-64 overflow-y-auto rounded-2xl border border-[var(--border-strong)] bg-[var(--surface-2)] p-2 shadow-2xl">
-                        {models.map(item => {
-                          const isSelected = item.name === model;
-                          const isNew = item.name.includes('3') || item.name.includes('2.5');
-                          const modelId = item.name.split('/')[1];
+                        {providers.map(provider => {
+                          const providerModels = modelsByProvider[provider.id] || [];
+                          if (providerModels.length === 0) return null;
 
                           return (
-                            <button
-                              key={item.name}
-                              onClick={() => {
-                                onModelChange(item.name);
-                                setModelDropdownOpen(false);
-                              }}
-                              className={`mb-1 flex w-full flex-col rounded-xl px-3 py-2 text-left transition-colors last:mb-0 ${
-                                isSelected ? 'bg-white/10 text-white' : 'text-[var(--text-primary)] hover:bg-white/[0.06]'
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="truncate text-[13px] font-medium">{item.displayName || modelId}</span>
-                                {isNew && <span className="rounded-full bg-white px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.18em] text-black">New</span>}
+                            <div key={provider.id} className="mb-2 last:mb-0">
+                              <div className="px-3 py-1.5 text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)]">
+                                {provider.name}
                               </div>
-                              <span className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-dim)]">{modelId}</span>
-                            </button>
+                              {providerModels.map(item => {
+                                const isSelected = activeModel?.modelId === item.id && activeModel?.providerId === item.providerId;
+                                const isNew = item.id.includes('3') || item.id.includes('2.5');
+                                const modelId = item.id.split('/').pop() || item.id;
+
+                                return (
+                                  <button
+                                    key={item.id}
+                                    onClick={() => {
+                                      onActiveModelChange({ providerId: item.providerId, modelId: item.id });
+                                      onActiveProviderChange(item.providerId);
+                                      setModelDropdownOpen(false);
+                                    }}
+                                    className={`mb-1 flex w-full flex-col rounded-xl px-3 py-2 text-left transition-colors last:mb-0 ${
+                                      isSelected ? 'bg-white/10 text-white' : 'text-[var(--text-primary)] hover:bg-white/[0.06]'
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="truncate text-[13px] font-medium">{item.displayName || modelId}</span>
+                                      {isNew && <span className="rounded-full bg-white px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.18em] text-black">New</span>}
+                                    </div>
+                                    <span className="mt-0.5 truncate font-mono text-[11px] text-[var(--text-dim)]">{modelId}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
                           );
                         })}
                       </div>
@@ -764,44 +1604,53 @@ export function SettingsSidebar({
                     </div>
                   </div>
 
-                  <div>
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="flex items-center gap-2 text-[var(--text-dim)]">
-                        <Brain size={12} />
-                        <span className="text-[10px] uppercase tracking-[0.16em]">Размышления</span>
+                  {activeProvider?.type === 'gemini' && (
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-[var(--text-dim)]">
+                          <Brain size={12} />
+                          <span className="text-[10px] uppercase tracking-[0.16em]">Размышления</span>
+                        </div>
+                        <span className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-mono text-[var(--text-primary)]">{thinkingLabel}</span>
                       </div>
-                      <span className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-mono text-[var(--text-primary)]">{thinkingLabel}</span>
-                    </div>
 
-                    <div className="mb-2 grid grid-cols-4 gap-1.5">
-                      {[
-                        { label: 'Выкл', value: 0 },
-                        { label: 'Авто', value: -1 },
-                        { label: 'Мало', value: 512 },
-                        { label: 'Много', value: 8192 },
-                      ].map(option => (
-                        <button
-                          key={option.label}
-                          onClick={() => onThinkingBudgetChange(option.value)}
-                          className={`rounded-xl border px-2 py-2 text-[10px] transition-all ${
-                            thinkingBudget === option.value ? 'border-white bg-white text-black' : 'border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-dim)] hover:text-[var(--text-primary)]'
-                          }`}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
+                      <div className="mb-2 grid grid-cols-4 gap-1.5">
+                        {[
+                          { label: 'Выкл', value: 0 },
+                          { label: 'Авто', value: -1 },
+                          { label: 'Мало', value: 512 },
+                          { label: 'Много', value: 8192 },
+                        ].map(option => (
+                          <button
+                            key={option.label}
+                            onClick={() => onThinkingBudgetChange(option.value)}
+                            className={`rounded-xl border px-2 py-2 text-[10px] transition-all ${
+                              thinkingBudget === option.value ? 'border-white bg-white text-black' : 'border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-dim)] hover:text-[var(--text-primary)]'
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
 
-                    {thinkingBudget > 0 && (
-                      <input type="range" min="128" max="32768" step="128" value={thinkingBudget} onChange={event => onThinkingBudgetChange(parseInt(event.target.value, 10))} />
-                    )}
-                  </div>
+                      {thinkingBudget > 0 && (
+                        <input type="range" min="128" max="32768" step="128" value={thinkingBudget} onChange={event => onThinkingBudgetChange(parseInt(event.target.value, 10))} />
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </section>
 
             <section className="overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--surface-1)]">
-              <SettingsSectionHeader id="tools" label="Инструменты" icon={Wrench} openSections={openSections} onToggle={toggleSection} />
+              <SettingsSectionHeader 
+                id="tools" 
+                label="Инструменты" 
+                icon={Wrench} 
+                openSections={openSections} 
+                onToggle={toggleSection}
+                badge={(tools.length + (memoryEnabled ? 1 : 0)) > 0 ? String(tools.length + (memoryEnabled ? 1 : 0)) : undefined}
+              />
               {openSections.has('tools') && (
                 <div className="space-y-3 px-4 pb-4">
                   {/* Память */}
@@ -835,12 +1684,212 @@ export function SettingsSidebar({
                     )}
                   </div>
 
+                  {/* Advanced Limits */}
+                  <details className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] group">
+                    <summary className="flex cursor-pointer items-center justify-between px-4 py-3 text-xs font-medium text-[var(--text-muted)] select-none hover:text-[var(--text-primary)] transition-colors list-none">
+                      <div className="flex items-center gap-2">
+                        <SlidersHorizontal size={13} />
+                        <span>Лимиты циклов</span>
+                      </div>
+                      <ChevronDown size={12} className="transition-transform group-open:rotate-180 text-[var(--text-dim)]" />
+                    </summary>
+                    <div className="px-4 pb-4 space-y-4">
+                      <p className="text-[10px] text-[var(--text-dim)] leading-relaxed">
+                        Максимальное количество раундов вызова инструментов за один запрос. Защита от бесконечных циклов.
+                      </p>
+
+                      {/* Max Tool Rounds */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-[11px] text-[var(--text-muted)]">Макс. раундов инструментов</label>
+                          <span className="rounded-md border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 text-xs font-mono text-[var(--text-primary)] min-w-[3rem] text-center">
+                            {maxToolRounds}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="1"
+                          max="50"
+                          step="1"
+                          value={maxToolRounds}
+                          onChange={e => onMaxToolRoundsChange(parseInt(e.target.value, 10))}
+                        />
+                        <div className="mt-1 flex justify-between text-[9px] text-[var(--text-dim)]">
+                          <span>1</span>
+                          <span>50</span>
+                        </div>
+                      </div>
+
+                      {/* Max Memory Calls */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-[11px] text-[var(--text-muted)]">Макс. вызовов памяти за turn</label>
+                          <span className="rounded-md border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 text-xs font-mono text-[var(--text-primary)] min-w-[3rem] text-center">
+                            {maxMemoryCalls}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="1"
+                          max="200"
+                          step="5"
+                          value={maxMemoryCalls}
+                          onChange={e => onMaxMemoryCallsChange(parseInt(e.target.value, 10))}
+                        />
+                        <div className="mt-1 flex justify-between text-[9px] text-[var(--text-dim)]">
+                          <span>1</span>
+                          <span>200</span>
+                        </div>
+                      </div>
+
+                      {/* Max Upload Size */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-[11px] text-[var(--text-muted)]">Макс. размер файла</label>
+                          <span className="rounded-md border border-[var(--border)] bg-[var(--surface-3)] px-2 py-0.5 text-xs font-mono text-[var(--text-primary)] min-w-[3rem] text-center">
+                            {formatUploadSize(maxUploadSizeMB)}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="1"
+                          value={sizeMBToSliderValue(maxUploadSizeMB)}
+                          onChange={e => onMaxUploadSizeMBChange(sliderValueToSizeMB(parseFloat(e.target.value)))}
+                        />
+                        <div className="mt-1 flex justify-between text-[9px] text-[var(--text-dim)]">
+                          <span>1 KB</span>
+                          <span>1 GB</span>
+                        </div>
+                        <p className="text-[9px] text-[var(--text-dim)] mt-1 leading-relaxed">
+                          Верхний лимит Vercel API route — 4.5 MB. Выше 4 MB файлы пойдут напрямую через Gemini File API.
+                        </p>
+                      </div>
+                    </div>
+                  </details>
+
+                  {/* Ghost Nudge Protocol */}
+                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[13px]">👻</span>
+                        <span className="text-xs font-medium text-[var(--text-primary)]">Ghost Nudge Protocol</span>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={ghostNudgeEnabled}
+                          onChange={e => onGhostNudgeEnabledChange(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-9 h-5 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
+                      </label>
+                    </div>
+                    <p className="text-[10px] text-[var(--text-muted)] leading-relaxed mb-2">
+                      Gemini иногда присылает пустой ответ. GNP автоматически повторяет запрос
+                    </p>
+                    {ghostNudgeEnabled && (
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[11px] text-[var(--text-muted)]">Попыток:</span>
+                          <div className="flex gap-1">
+                            {[1, 2, 3, 4, 5].map(n => (
+                              <button
+                                key={n}
+                                onClick={() => onGhostNudgeMaxRetriesChange(n)}
+                                className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-all ${
+                                  ghostNudgeMaxRetries === n
+                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                    : 'bg-[var(--surface-3)] text-[var(--text-muted)] border border-transparent hover:bg-[var(--surface-4)]'
+                                }`}
+                              >
+                                {n}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* RPG Feedback Settings */}
+                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[13px]">🎭</span>
+                        <span className="text-xs font-medium text-[var(--text-primary)]">RPG Feedback</span>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={rpgFeedbackEnabled}
+                          onChange={e => onRPGFeedbackEnabledChange(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-9 h-5 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-500"></div>
+                      </label>
+                    </div>
+                    <p className="text-[10px] text-[var(--text-muted)] leading-relaxed mb-2">
+                      Система обратной связи для RPG-чатов. Лайки/дизлайки влияют на стиль генерации
+                    </p>
+                    {rpgFeedbackEnabled && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-[var(--text-muted)]">Inline виджеты</span>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={rpgShowInlineFeedback}
+                              onChange={e => onRPGShowInlineFeedbackChange(e.target.checked)}
+                              className="sr-only peer"
+                            />
+                            <div className="w-7 h-4 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[1px] after:left-[1px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-purple-500"></div>
+                          </label>
+                        </div>
+                        <button
+                          onClick={() => onOpenRPGProfileModal?.()}
+                          className="w-full px-3 py-2 rounded-lg text-[10px] font-medium text-purple-400 bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/20 transition-all"
+                        >
+                          Управление профилем
+                        </button>
+                        {onResetRPGProfile && (
+                          <button
+                            onClick={onResetRPGProfile}
+                            className="w-full px-3 py-2 rounded-lg text-[10px] font-medium text-red-400 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-all"
+                          >
+                            Сбросить профиль
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Skills - встроенные инструменты */}
+                  <SkillsSection onSkillsChanged={onSkillsChanged} />
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => onOpenSkillsMarket?.()}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-xs text-[var(--text-muted)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+                    >
+                      <Plus size={13} />
+                      Скиллы
+                    </button>
+                    <button
+                      onClick={() => onOpenHFSpaces?.()}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-xs text-[var(--text-muted)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+                    >
+                      🤗 HF Spaces
+                    </button>
+                  </div>
+
                   {tools.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-5 py-6 text-center">
                       <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--surface-3)] text-[var(--text-muted)]">
                         <Wrench size={16} />
                       </div>
-                      <p className="text-sm font-medium text-[var(--text-primary)]">Нет инструментов</p>
+                      <p className="text-sm font-medium text-[var(--text-primary)]">Нет пользовательских инструментов</p>
                       <p className="mt-1 text-xs leading-relaxed text-[var(--text-muted)]">
                         Создайте функции, которые модель сможет вызывать
                       </p>
@@ -897,7 +1946,14 @@ export function SettingsSidebar({
             </section>
 
             <section className="overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--surface-1)]">
-              <SettingsSectionHeader id="system" label="Система" icon={BookOpen} openSections={openSections} onToggle={toggleSection} />
+              <SettingsSectionHeader 
+                id="system" 
+                label="Система" 
+                icon={BookOpen} 
+                openSections={openSections} 
+                onToggle={toggleSection}
+                badge={systemPrompt.trim() ? `${systemPrompt.trim().slice(0,12)}…` : undefined}
+              />
               {openSections.has('system') && (
                 <div className="space-y-3 px-4 pb-4">
                   <div className="relative">
@@ -978,6 +2034,19 @@ export function SettingsSidebar({
                   )}
 
                   <div className="mt-3 space-y-2">
+                    <button
+                      onClick={() => onOpenContextInspector?.()}
+                      className="flex w-full items-center justify-center gap-2 rounded-2xl border border-[var(--gem-teal)]/30 bg-[var(--gem-teal)]/10 px-4 py-3 text-xs font-medium text-[var(--gem-teal)] transition-all hover:bg-[var(--gem-teal)]/15 hover:border-[var(--gem-teal)]/50"
+                    >
+                      <Layers size={13} />
+                      Контекст запроса
+                    </button>
+                    <p className="text-[10px] text-center text-[var(--text-dim)] leading-relaxed">
+                      Просмотр и редактирование всего, что уходит в нейросеть
+                    </p>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)]">DeepThink промпт</span>
                       <button
@@ -997,7 +2066,14 @@ export function SettingsSidebar({
             </section>
 
             <section className="overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--surface-1)]">
-              <SettingsSectionHeader id="manage" label="Данные" icon={FileStack} openSections={openSections} onToggle={toggleSection} />
+              <SettingsSectionHeader 
+                id="manage" 
+                label="Данные" 
+                icon={FileStack} 
+                openSections={openSections} 
+                onToggle={toggleSection}
+                badge={savedChats.length > 0 ? `${savedChats.length}` : undefined}
+              />
               {openSections.has('manage') && (
                 <div className="space-y-3 px-4 pb-4">
                   {importError && (
@@ -1026,6 +2102,29 @@ export function SettingsSidebar({
                       </button>
                     )}
 
+                    <button
+                      onClick={async () => { await exportLogs(); setLogsCount(await getLogsCount()); }}
+                      className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+                    >
+                      <Download size={12} />
+                      Экспорт логов{logsCount !== null ? ` (${logsCount})` : ''}
+                    </button>
+
+                    <button
+                      onClick={async () => {
+                        const msg = logsCount !== null && logsCount > 0
+                          ? `Удалить все логи действий (${logsCount} записей)? Это необратимо — сначала экспортируйте, если нужно сохранить.`
+                          : 'Удалить все логи действий? Это необратимо — сначала экспортируйте, если нужно сохранить.';
+                        if (!confirm(msg)) return;
+                        await deleteLogsDatabase();
+                        setLogsCount(0);
+                      }}
+                      className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3 text-xs text-red-400 transition-colors hover:text-red-300"
+                    >
+                      <Trash2 size={12} />
+                      Удалить логи
+                    </button>
+
                     <button onClick={() => importRef.current?.click()} className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]">
                       <Upload size={12} />
                       Импорт JSON
@@ -1034,6 +2133,11 @@ export function SettingsSidebar({
                     <button onClick={() => importGsRef.current?.click()} className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3 text-xs text-[var(--gem-blue)] transition-colors hover:bg-white/[0.04]">
                       <FolderOpen size={12} />
                       Импорт AI Studio
+                    </button>
+
+                    <button onClick={() => importSimpleRef.current?.click()} className="flex items-center justify-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3 text-xs text-[var(--gem-green)] transition-colors hover:bg-white/[0.04]">
+                      <Upload size={12} />
+                      Импорт user/assistant
                     </button>
 
                     {savedChats.length > 0 && (
@@ -1083,6 +2187,18 @@ export function SettingsSidebar({
                     }}
                   />
                   <input
+                    ref={importSimpleRef}
+                    type="file"
+                    accept=".json"
+                    className="hidden"
+                    onChange={event => {
+                      if (event.target.files?.[0]) {
+                        handleImportSimpleFormat(event.target.files[0]);
+                        event.target.value = '';
+                      }
+                    }}
+                  />
+                  <input
                     ref={importBackupRef}
                     type="file"
                     accept=".json"
@@ -1105,5 +2221,26 @@ export function SettingsSidebar({
       </div>
 
     </SidebarShell>
+    {showAddProviderModal && (
+      <ProviderModal
+        onClose={() => setShowAddProviderModal(false)}
+        onSave={(provider) => {
+          onProvidersChange([...providers, provider]);
+          setActiveProviderTab(provider.id);
+          setShowAddProviderModal(false);
+        }}
+      />
+    )}
+    {editingProvider && (
+      <ProviderModal
+        existingProvider={editingProvider}
+        onClose={() => setEditingProvider(null)}
+        onSave={(updated) => {
+          onProvidersChange(providers.map(p => p.id === updated.id ? updated : p));
+          setEditingProvider(null);
+        }}
+      />
+    )}
+    </>
   );
 }

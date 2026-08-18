@@ -3,15 +3,27 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import remarkBreaks from 'remark-breaks';
+import rehypeKatex from 'rehype-katex';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import {
   User, Sparkles, Copy, Check, Edit2, Trash2, RefreshCw,
   ChevronDown, ChevronUp, FileText, Image as ImageIcon, Volume2, Braces,
-  Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square, Wrench, Video
+  Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square, Wrench, Video, MonitorPlay,
+  Send, Calculator, ClipboardList, MessageSquare, Globe, GitBranch, Ghost
 } from 'lucide-react';
-import type { Message, AttachedFile, Part, DeepThinkAnalysis } from '@/types';
+import type { Message, AttachedFile, Part, DeepThinkAnalysis, BridgePayload } from '@/types';
 import MemoryPill from './MemoryPill';
+import ImageMemoryPill from './ImageMemoryPill';
+import ImageMemoryRecallPill from './ImageMemoryRecallPill';
+import ImageMemorySearchPill from './ImageMemorySearchPill';
+import { SkillArtifactsGroup } from './SkillArtifactRenderer';
+import AnnotationRefDisplay from './AnnotationRefDisplay';
+import ImageLightbox from './ImageLightbox';
+import MessageFeedback from './MessageFeedback';
+import { SceneStatePanel } from './SceneStatePanel';
 
 interface ChatMessageProps {
   message: Message;
@@ -22,11 +34,30 @@ interface ChatMessageProps {
   onEdit: (id: string, newParts: Part[]) => void;
   onDelete: (id: string) => void;
   onRegenerate: () => void;
-  onContinue: () => void;
+  onContinue?: (chunk?: import('@/types').InterruptedChunk) => void;
+  onBranch?: () => void;
   onSubmitToolResults?: (messageId: string, responses: Array<{ toolCallId: string; rawResponse: string }>) => void;
   onEditPreviousUserMessage?: (modelMessageId: string) => void;
   onClearForceEdit?: (userMessageId: string) => void;
   onEditDeepThinkAnalysis?: (id: string, analysis: DeepThinkAnalysis) => void;
+  onPlayHTML?: (html: string) => void;
+  onAnnotationClick?: (annotation: import('@/types').AnnotationItem) => void;
+  onOpenAgentChat?: (agentId: string) => void;
+  onFeedback?: (messageId: string, rating: 'like' | 'dislike', comment?: string) => void;
+  onRegenerateWithFeedback?: (messageId: string, comment: string) => void;
+  onRememberStyle?: (messageId: string) => void;
+  onShorter?: (messageId: string) => void;
+  onContinueFromCursor?: (messageId: string) => void;
+  onRegenerateTextOnly?: (messageId: string) => void;
+  onDismissBlocked?: (messageId: string) => void;
+  onEditDeepThinking?: (messageId: string, newThinking: string) => void;
+  onContinueDeepThink?: (messageId: string) => void;
+  onSkipDeepThink?: (messageId: string) => void;
+  onSceneStateSettingsOpen?: () => void;
+  isSceneStatePinned?: boolean;
+  onToggleSceneStatePin?: () => void;
+  onRequestSceneCategory?: (request: { id: string; content: string }) => void;
+  hideActions?: boolean;
 }
 
 function FilePreview({ file }: { file: AttachedFile }) {
@@ -49,12 +80,18 @@ function FilePreview({ file }: { file: AttachedFile }) {
     return (
       <>
         <div
-          className="relative rounded-lg overflow-hidden border border-[var(--border)] max-w-xs cursor-pointer"
+          className="relative rounded-lg overflow-hidden border border-[var(--border)] max-w-xs cursor-pointer group"
           onMouseEnter={() => setIsHovered(true)}
           onMouseLeave={() => setIsHovered(false)}
           onClick={() => setShowModal(true)}
         >
           <img src={file.previewUrl} alt={file.name} className="max-h-48 w-auto object-cover" />
+          
+          {/* ID Badge */}
+          <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-sm text-white/70 text-[9px] font-mono px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity">
+            {file.id}
+          </div>
+          
           <div className={`absolute inset-0 transition-colors flex items-end ${isHovered ? 'bg-black/30' : 'bg-black/0'}`}>
             <div className={`transition-opacity px-2 py-1 bg-black/70 w-full ${isHovered ? 'opacity-100' : 'opacity-0'}`}>
               <p className="text-white text-xs truncate">{file.name}</p>
@@ -181,116 +218,22 @@ function PdfModal({ file, src, onClose }: { file: AttachedFile; src: string; onC
 
 // Image modal with zoom
 function ImageModal({ file, onClose }: { file: AttachedFile; onClose: () => void }) {
-  const [scale, setScale] = useState(1);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const imgRef = useRef<HTMLImageElement>(null);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
-
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setScale(s => Math.max(0.5, Math.min(5, s * delta)));
+  const metadata = {
+    width: undefined,
+    height: undefined,
+    type: file.mimeType,
+    size: file.size
   };
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (scale > 1) {
-      setIsDragging(true);
-      setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
-    }
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (isDragging) {
-      setPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
-    }
-  };
-
-  const handleMouseUp = () => setIsDragging(false);
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (e.touches.length === 1 && scale > 1) {
-      setIsDragging(true);
-      setDragStart({ x: e.touches[0].clientX - position.x, y: e.touches[0].clientY - position.y });
-    }
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (isDragging && e.touches.length === 1) {
-      setPosition({ x: e.touches[0].clientX - dragStart.x, y: e.touches[0].clientY - dragStart.y });
-    }
-  };
-
-  const handleTouchEnd = () => setIsDragging(false);
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <button
-        onClick={onClose}
-        className="absolute top-4 right-4 text-white/70 hover:text-white text-2xl w-10 h-10 flex items-center justify-center rounded-full bg-black/30 hover:bg-black/50 transition-colors z-10"
-      >
-        ×
-      </button>
-      <div className="absolute top-4 left-4 flex gap-2 z-10">
-        <button
-          onClick={(e) => { e.stopPropagation(); setScale(s => Math.max(0.5, s - 0.2)); }}
-          className="text-white/70 hover:text-white px-3 py-1.5 rounded-lg bg-black/30 hover:bg-black/50 transition-colors text-sm"
-        >
-          −
-        </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); setScale(1); setPosition({ x: 0, y: 0 }); }}
-          className="text-white/70 hover:text-white px-3 py-1.5 rounded-lg bg-black/30 hover:bg-black/50 transition-colors text-sm"
-        >
-          {Math.round(scale * 100)}%
-        </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); setScale(s => Math.min(5, s + 0.2)); }}
-          className="text-white/70 hover:text-white px-3 py-1.5 rounded-lg bg-black/30 hover:bg-black/50 transition-colors text-sm"
-        >
-          +
-        </button>
-      </div>
-      <div
-        className="relative max-w-full max-h-full overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-        onWheel={handleWheel}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-        style={{ cursor: scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default' }}
-      >
-        <img
-          ref={imgRef}
-          src={file.previewUrl}
-          alt={file.name}
-          className="max-w-full max-h-[90vh] object-contain select-none"
-          style={{
-            transform: `scale(${scale}) translate(${position.x / scale}px, ${position.y / scale}px)`,
-            transition: isDragging ? 'none' : 'transform 0.1s ease-out',
-          }}
-          draggable={false}
-        />
-      </div>
-      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/50 px-4 py-2 rounded-lg">
-        <p className="text-white text-sm">{file.name}</p>
-      </div>
-    </div>
+    <ImageLightbox
+      src={file.previewUrl || ''}
+      alt={file.name}
+      imageId={file.id}
+      fileName={file.name}
+      metadata={metadata}
+      onClose={onClose}
+    />
   );
 }
 
@@ -465,9 +408,10 @@ function VideoPlayer({ file }: { file: AttachedFile }) {
   );
 }
 
-function CodeBlock({ code, language }: { code: string; language?: string }) {
+function CodeBlock({ code, language, onPlayHTML }: { code: string; language?: string; onPlayHTML?: (html: string) => void }) {
   const [copied, setCopied] = useState(false);
   const lang = language || '';
+  const isHTML = lang.toLowerCase() === 'html';
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code).then(() => {
@@ -476,17 +420,35 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
     });
   };
 
+  const handlePlay = () => {
+    if (isHTML && onPlayHTML) {
+      onPlayHTML(code);
+    }
+  };
+
   return (
     <div className="relative group my-3 rounded-lg border border-[var(--border)] overflow-hidden">
       <div className="flex items-center justify-between px-4 py-2 bg-[var(--surface-3)] border-b border-[var(--border)]">
         <span className="text-[10px] font-mono text-[var(--text-dim)] uppercase tracking-widest">{lang || 'code'}</span>
-        <button
-          onClick={handleCopy}
-          className="flex items-center gap-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] transition-colors"
-        >
-          {copied ? <Check size={11} className="text-[var(--gem-green)]" /> : <Copy size={11} />}
-          {copied ? 'Скопировано' : 'Копировать'}
-        </button>
+        <div className="flex items-center gap-2">
+          {isHTML && onPlayHTML && (
+            <button
+              onClick={handlePlay}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[#1a1a1a] text-white text-[11px] font-medium hover:bg-[#2a2a2a] transition-colors"
+              title="Открыть в Live Preview"
+            >
+              <MonitorPlay size={12} />
+              <span className="hidden sm:inline">Play</span>
+            </button>
+          )}
+          <button
+            onClick={handleCopy}
+            className="flex items-center gap-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] transition-colors"
+          >
+            {copied ? <Check size={11} className="text-[var(--gem-green)]" /> : <Copy size={11} />}
+            <span className="hidden sm:inline">{copied ? 'Скопировано' : 'Копировать'}</span>
+          </button>
+        </div>
       </div>
       <div className="overflow-x-auto">
         <SyntaxHighlighter
@@ -517,11 +479,13 @@ function StreamingText({
   isStreaming, 
   isLast,
   animateKey,
+  onPlayHTML,
 }: { 
   text: string; 
   isStreaming: boolean;
   isLast: boolean;
   animateKey: number;
+  onPlayHTML?: (html: string) => void;
 }) {
   const prevTextRef = useRef<string>('');
   const [oldText, setOldText] = useState('');
@@ -548,7 +512,8 @@ function StreamingText({
   if (!isStreaming || !isLast) {
     return (
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
+        rehypePlugins={[rehypeKatex]}
         components={{
           code({ node, className, children, ...props }: any) {
             const isInline = !className;
@@ -560,6 +525,7 @@ function StreamingText({
               <CodeBlock
                 language={lang}
                 code={String(children).replace(/\n$/, '')}
+                onPlayHTML={onPlayHTML}
               />
             );
           },
@@ -577,7 +543,8 @@ function StreamingText({
     <>
       {oldText && (
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
+          remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
+          rehypePlugins={[rehypeKatex]}
           components={{
             code({ node, className, children, ...props }: any) {
               const isInline = !className;
@@ -589,6 +556,7 @@ function StreamingText({
                 <CodeBlock
                   language={lang}
                   code={String(children).replace(/\n$/, '')}
+                  onPlayHTML={onPlayHTML}
                 />
               );
             },
@@ -697,7 +665,8 @@ function ThinkingBlock({ thinking, isStreaming }: { thinking: string; isStreamin
           ) : (
             <div className={translatedText ? 'animate-text-appear' : ''}>
               <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
+                rehypePlugins={[rehypeKatex]}
                 components={{
                   code({ node, className, children, ...props }: any) {
                     return <code className={className} {...props}>{children}</code>;
@@ -715,10 +684,28 @@ function ThinkingBlock({ thinking, isStreaming }: { thinking: string; isStreamin
 }
 
 // Блок с размышлениями DeepThink (фиолетовый)
-function DeepThinkingBlock({ thinking, isStreaming }: { thinking: string; isStreaming?: boolean }) {
+function DeepThinkingBlock({ 
+  thinking, 
+  isStreaming,
+  isInterrupted,
+  errorMessage,
+  onEdit,
+  onContinue,
+  onSkip,
+}: { 
+  thinking: string; 
+  isStreaming?: boolean;
+  isInterrupted?: boolean;
+  errorMessage?: string;
+  onEdit?: (newThinking: string) => void;
+  onContinue?: () => void;
+  onSkip?: () => void;
+}) {
   const [expanded, setExpanded] = useState(true); // По умолчанию открыт
   const [translatedText, setTranslatedText] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState(thinking);
 
   const handleTranslate = async () => {
     if (translatedText) {
@@ -748,6 +735,18 @@ function DeepThinkingBlock({ thinking, isStreaming }: { thinking: string; isStre
     }
   };
 
+  const handleSave = () => {
+    if (onEdit) {
+      onEdit(editText);
+    }
+    setIsEditing(false);
+  };
+
+  const handleCancel = () => {
+    setEditText(thinking);
+    setIsEditing(false);
+  };
+
   const displayText = translatedText || thinking;
 
   return (
@@ -760,6 +759,20 @@ function DeepThinkingBlock({ thinking, isStreaming }: { thinking: string; isStre
         <span className="text-xs text-purple-400 font-medium flex-1 text-left">
           {isStreaming ? '🧠 DeepThink анализирует контекст...' : '🧠 DeepThink Analysis'}
         </span>
+        {!isStreaming && onEdit && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsEditing(true);
+              setExpanded(true);
+            }}
+            className="flex items-center gap-1 px-2 py-1 text-[9px] text-purple-300/70 hover:text-purple-300 hover:bg-purple-500/20 rounded transition-all"
+            title="Редактировать размышления"
+          >
+            <Edit2 size={9} />
+            Правка
+          </button>
+        )}
         {!isStreaming && (
           <button
             onClick={(e) => {
@@ -791,7 +804,35 @@ function DeepThinkingBlock({ thinking, isStreaming }: { thinking: string; isStre
       </button>
       {(expanded || isStreaming) && (
         <div className="px-4 py-3 border-t border-purple-500/20 bg-purple-500/5">
-          {isTranslating ? (
+          {isEditing ? (
+            <div className="flex flex-col gap-2">
+              <textarea
+                value={editText}
+                onChange={e => setEditText(e.target.value)}
+                className="w-full text-xs text-purple-200/90 leading-relaxed bg-purple-500/10 border border-purple-500/30 rounded-lg px-3 py-2 resize-none focus:outline-none focus:border-purple-400/60 placeholder:text-purple-400/40 max-h-[200px] sm:max-h-[400px]"
+                style={{ minHeight: '120px', resize: 'vertical' }}
+                placeholder="Размышления DeepThink..."
+                autoFocus
+              />
+              <div className="flex items-center gap-2 justify-end">
+                <span className="text-[10px] text-purple-400/50 flex-1">
+                  После сохранения — нажми «Регенерировать текст»
+                </span>
+                <button
+                  onClick={handleCancel}
+                  className="px-2.5 py-1 text-[11px] rounded-lg text-purple-300/60 hover:text-purple-300 hover:bg-purple-500/20 transition-colors"
+                >
+                  Отмена
+                </button>
+                <button
+                  onClick={handleSave}
+                  className="px-2.5 py-1 text-[11px] rounded-lg bg-purple-500/25 text-purple-300 hover:bg-purple-500/35 border border-purple-500/30 transition-colors"
+                >
+                  Сохранить
+                </button>
+              </div>
+            </div>
+          ) : isTranslating ? (
             // Скелетон во время перевода
             <div className="space-y-2">
               <div className="skeleton-text w-full" style={{ background: 'linear-gradient(90deg, rgba(168, 85, 247, 0.1) 0%, rgba(168, 85, 247, 0.2) 50%, rgba(168, 85, 247, 0.1) 100%)', backgroundSize: '200% 100%' }}></div>
@@ -802,7 +843,8 @@ function DeepThinkingBlock({ thinking, isStreaming }: { thinking: string; isStre
           ) : (
             <div className={`text-xs text-purple-300/90 leading-relaxed ${translatedText ? 'animate-text-appear' : ''}`}>
               <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
+                remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
+                rehypePlugins={[rehypeKatex]}
                 components={{
                   code({ node, className, children, ...props }: any) {
                     return <code className={className} {...props}>{children}</code>;
@@ -816,6 +858,35 @@ function DeepThinkingBlock({ thinking, isStreaming }: { thinking: string; isStre
               </ReactMarkdown>
             </div>
           )}
+        </div>
+      )}
+      
+      {/* Кнопки при прерывании DeepThink */}
+      {isInterrupted && onContinue && onSkip && (
+        <div className="px-4 py-3 border-t border-purple-500/20 bg-purple-500/5 flex flex-col gap-2">
+          {errorMessage && (
+            <p className="text-[11px] text-red-300/80 leading-relaxed">
+              ⚠ {errorMessage}
+            </p>
+          )}
+          <p className="text-[11px] text-purple-300/60">
+            DeepThink прерван. Продолжить генерацию или оставить только анализ?
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onSkip}
+              className="px-3 py-1.5 text-[11px] rounded-lg bg-[var(--surface-3)] text-[var(--text-dim)] hover:text-[var(--text-primary)] border border-[var(--border)] transition-colors"
+            >
+              Оставить анализ
+            </button>
+            <button
+              onClick={onContinue}
+              className="px-3 py-1.5 text-[11px] rounded-lg bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 border border-purple-500/30 transition-colors flex items-center gap-1.5"
+            >
+              <RefreshCw size={10} />
+              Повторить генерацию
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -1199,6 +1270,67 @@ function BlockedIndicator({ reason }: { reason?: string }) {
   );
 }
 
+// Блок с действиями когда контент заблокирован после DeepThink
+function BlockedWithDeepThinkActions({
+  reason,
+  messageId,
+  isLast,
+  onDismiss,
+  onRetry,
+}: {
+  reason?: string;
+  messageId: string;
+  isLast: boolean;
+  onDismiss: () => void;
+  onRetry: () => void;
+}) {
+  const reasonLabels: Record<string, string> = {
+    SAFETY: 'SAFETY',
+    RECITATION: 'RECITATION',
+    BLOCKLIST: 'BLOCKLIST',
+    PROHIBITED_CONTENT: 'PROHIBITED_CONTENT',
+    OTHER: 'OTHER',
+  };
+
+  const reasonCode = (reason && reasonLabels[reason]) || 'BLOCKED';
+
+  return (
+    <div className="mb-3 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <AlertOctagon size={13} className="text-red-400 flex-shrink-0" />
+        <span className="text-[11px] text-red-400 font-medium">
+          Контент заблокирован
+        </span>
+        <span className="text-[10px] text-red-400/60 font-mono ml-1">
+          [{reasonCode}]
+        </span>
+      </div>
+      
+      <p className="text-[11px] text-[var(--text-dim)] leading-relaxed">
+        DeepThink-анализ сохранён. Попробовать снова с другим подходом или оставить анализ без ответа?
+      </p>
+      
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          onClick={onDismiss}
+          className="px-3 py-1.5 text-[11px] rounded-lg bg-[var(--surface-3)] text-[var(--text-dim)] hover:text-[var(--text-primary)] border border-[var(--border)] transition-colors"
+        >
+          Оставить анализ
+        </button>
+        {isLast && (
+          <button
+            onClick={onRetry}
+            className="px-3 py-1.5 text-[11px] rounded-lg bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/25 transition-colors flex items-center gap-1.5"
+          >
+            <RefreshCw size={10} />
+            Попробовать снова
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ToolCallsBlock({
   toolCalls,
   messageId,
@@ -1348,9 +1480,204 @@ function ToolCallsBlock({
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Skill Tool Call Pill - сворачиваемая плашка для вызовов skill tools
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SkillToolCallPill({
+  name,
+  args,
+  result,
+}: {
+  name: string;
+  args: Record<string, unknown>;
+  result: unknown;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  
+  const resultStr = typeof result === 'string' 
+    ? result 
+    : JSON.stringify(result, null, 2);
+  
+  const hasArgs = Object.keys(args).length > 0;
+  
+  // Короткий превью результата (первые 50 символов)
+  const resultPreview = resultStr.length > 50 
+    ? resultStr.slice(0, 50) + '...' 
+    : resultStr;
+
+  return (
+    <div className="mb-3">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-left transition-all hover:border-[var(--border-strong)] hover:bg-[var(--surface-3)]"
+      >
+        <Wrench size={12} className="flex-shrink-0 text-[var(--text-muted)]" />
+        <span className="flex-1 truncate font-mono text-xs text-[var(--text-primary)]">
+          {name}
+        </span>
+        {!expanded && (
+          <span className="truncate text-xs text-[var(--text-dim)]">
+            → {resultPreview}
+          </span>
+        )}
+        <ChevronDown 
+          size={14} 
+          className={`flex-shrink-0 text-[var(--text-dim)] transition-transform ${expanded ? 'rotate-180' : ''}`}
+        />
+      </button>
+      
+      {expanded && (
+        <div className="mt-2 rounded-xl border border-[var(--border)] bg-[var(--surface-1)] p-3 text-xs">
+          {hasArgs && (
+            <div className="mb-3">
+              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-dim)]">
+                Аргументы
+              </p>
+              <div className="space-y-1">
+                {Object.entries(args).map(([key, value]) => (
+                  <div key={key} className="flex gap-2">
+                    <span className="font-mono text-[var(--text-muted)]">{key}:</span>
+                    <span className="font-mono text-[var(--text-primary)]">{String(value)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          <div>
+            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-dim)]">
+              Результат
+            </p>
+            <pre className="overflow-x-auto rounded-lg bg-[var(--surface-2)] p-2 font-mono text-xs leading-relaxed text-[var(--text-primary)]">
+              {resultStr}
+            </pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BridgeDataBlock({ bridgeData }: { bridgeData: BridgePayload }) {
+  const [expanded, setExpanded] = useState(true);
+  
+  // Определяем иконку и цвет в зависимости от типа события
+  const getEventStyle = (eventType: string) => {
+    const type = eventType.toLowerCase();
+    if (type.includes('form') || type.includes('submit')) {
+      return { icon: Send, color: 'blue', label: 'Отправка формы' };
+    }
+    if (type.includes('calculate') || type.includes('calc')) {
+      return { icon: Calculator, color: 'green', label: 'Расчет' };
+    }
+    if (type.includes('survey') || type.includes('poll')) {
+      return { icon: ClipboardList, color: 'purple', label: 'Опрос' };
+    }
+    if (type.includes('feedback')) {
+      return { icon: MessageSquare, color: 'orange', label: 'Обратная связь' };
+    }
+    return { icon: Globe, color: 'cyan', label: 'Данные с сайта' };
+  };
+  
+  const style = getEventStyle(bridgeData.eventType);
+  const Icon = style.icon;
+  
+  // Цветовые классы для разных типов
+  const colorClasses = {
+    blue: {
+      border: 'border-blue-500/30',
+      bg: 'from-blue-500/5 to-blue-600/5',
+      iconBg: 'bg-blue-500/20',
+      iconText: 'text-blue-400',
+      labelText: 'text-blue-400',
+      headerText: 'text-blue-400/80',
+      codeBorder: 'border-blue-500/20',
+      codeText: 'text-blue-300/80',
+    },
+    green: {
+      border: 'border-green-500/30',
+      bg: 'from-green-500/5 to-green-600/5',
+      iconBg: 'bg-green-500/20',
+      iconText: 'text-green-400',
+      labelText: 'text-green-400',
+      headerText: 'text-green-400/80',
+      codeBorder: 'border-green-500/20',
+      codeText: 'text-green-300/80',
+    },
+    purple: {
+      border: 'border-purple-500/30',
+      bg: 'from-purple-500/5 to-purple-600/5',
+      iconBg: 'bg-purple-500/20',
+      iconText: 'text-purple-400',
+      labelText: 'text-purple-400',
+      headerText: 'text-purple-400/80',
+      codeBorder: 'border-purple-500/20',
+      codeText: 'text-purple-300/80',
+    },
+    orange: {
+      border: 'border-orange-500/30',
+      bg: 'from-orange-500/5 to-orange-600/5',
+      iconBg: 'bg-orange-500/20',
+      iconText: 'text-orange-400',
+      labelText: 'text-orange-400',
+      headerText: 'text-orange-400/80',
+      codeBorder: 'border-orange-500/20',
+      codeText: 'text-orange-300/80',
+    },
+    cyan: {
+      border: 'border-cyan-500/30',
+      bg: 'from-cyan-500/5 to-cyan-600/5',
+      iconBg: 'bg-cyan-500/20',
+      iconText: 'text-cyan-400',
+      labelText: 'text-cyan-400',
+      headerText: 'text-cyan-400/80',
+      codeBorder: 'border-cyan-500/20',
+      codeText: 'text-cyan-300/80',
+    },
+  };
+  
+  const colors = colorClasses[style.color as keyof typeof colorClasses];
+  
+  return (
+    <div className={`mb-3 rounded-2xl border ${colors.border} bg-gradient-to-br ${colors.bg} overflow-hidden`}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-3 px-4 py-3 bg-black/20 hover:bg-black/30 transition-colors"
+      >
+        <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${colors.iconBg}`}>
+          <Icon size={16} className={colors.iconText} />
+        </div>
+        <div className="flex-1 min-w-0 text-left">
+          <p className="text-sm font-semibold text-[var(--text-primary)]">{style.label}</p>
+          <p className={`text-xs ${colors.labelText} font-medium`}>{bridgeData.eventType}</p>
+        </div>
+        <ChevronDown
+          size={16}
+          className={`text-[var(--text-dim)] transition-transform ${expanded ? 'rotate-180' : ''}`}
+        />
+      </button>
+      {expanded && (
+        <div className="px-4 py-4 border-t border-white/5">
+          <p className={`mb-2 text-xs font-semibold uppercase tracking-wider ${colors.headerText} flex items-center gap-1.5`}>
+            <Braces size={11} />
+            Данные
+          </p>
+          <div className={`overflow-x-auto rounded-xl bg-black/40 border ${colors.codeBorder} p-3`}>
+            <pre className={`text-xs ${colors.codeText} font-mono leading-relaxed max-h-96 overflow-y-auto`}>
+              {JSON.stringify(bridgeData.data, null, 2)}
+            </pre>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ChatMessage({
   message, index, isLast, isStreaming,
-  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit
+  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat, onFeedback, onRegenerateWithFeedback, onRememberStyle, onShorter, onContinueFromCursor, onRegenerateTextOnly, onDismissBlocked, onEditDeepThinking, onContinueDeepThink, onSkipDeepThink,
+  onSceneStateSettingsOpen, isSceneStatePinned, onToggleSceneStatePin, onRequestSceneCategory, hideActions = false
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -1485,7 +1812,15 @@ export default function ChatMessage({
           </span>
         )}
         {isBlocked && !isUser && (
-          <BlockedIndicator reason={message.blockReason || message.finishReason} />
+          deepThinking
+            ? <BlockedWithDeepThinkActions
+                reason={message.blockReason || message.finishReason}
+                messageId={message.id}
+                isLast={isLast}
+                onDismiss={() => onDismissBlocked?.(message.id)}
+                onRetry={() => onRegenerateTextOnly?.(message.id)}
+              />
+            : <BlockedIndicator reason={message.blockReason || message.finishReason} />
         )}
         {geminiError && !isUser && (
           <MessageErrorIndicator
@@ -1497,20 +1832,73 @@ export default function ChatMessage({
           />
         )}
         {isStreaming && isLast && !isUser && (
-          <span className="text-[10px] text-[var(--gem-green)] flex items-center gap-1">
-            <span className="inline-block w-1 h-1 rounded-full bg-[var(--gem-green)] animate-pulse" />
-            Генерация
+          <span className="text-[10px] flex items-center gap-1" style={{ color: message.ghostNudgeActive ? 'var(--gem-purple, #a78bfa)' : 'var(--gem-green)' }}>
+            <span className={`inline-block w-1 h-1 rounded-full animate-pulse`} style={{ background: message.ghostNudgeActive ? 'var(--gem-purple, #a78bfa)' : 'var(--gem-green)' }} />
+            {message.ghostNudgeActive ? '\u{1F47B} Ghost Protocol' : 'Генерация'}
           </span>
         )}
       </div>
 
       {/* Message Bubble */}
-      <div className={`relative w-full chat-bubble ${isUser ? 'max-w-[85%] self-end' : 'max-w-[90%] self-start'}`}>
+      <div className={`relative w-full chat-bubble ${isUser ? 'max-w-[90%] md:max-w-[75%] self-end' : 'max-w-[90%] self-start'}`}>
 
         {/* Файлы */}
         {message.files && message.files.length > 0 && (
           <div className={`flex flex-wrap gap-2 mb-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
             {message.files.map(f => <FilePreview key={f.id} file={f} />)}
+          </div>
+        )}
+
+        {/* Ghost Nudge Protocol: индикатор перегенерации */}
+        {message.ghostRetrying && (
+          <div className="flex items-center gap-2 py-2 px-3 mb-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm text-amber-400/80 animate-in fade-in duration-300">
+            <RefreshCw size={14} className="animate-spin shrink-0" />
+            <span>
+              Gemini вернул пустой ответ · Перегенерация
+              <span className="text-amber-400/50 ml-1">
+                ({message.ghostRetryAttempt}/{message.ghostRetryMax})
+              </span>
+            </span>
+          </div>
+        )}
+
+        {/* Ghost Nudge Protocol: все попытки исчерпаны */}
+        {message.ghostRetryFailed && !message.ghostRetrying && (
+          <div className="flex flex-col gap-2 py-2 px-3 mb-2 rounded-lg bg-red-500/10 border border-red-500/20">
+            <div className="flex items-center gap-2 text-sm text-red-400/70">
+              <Ghost size={14} className="shrink-0" />
+              <span>
+                Gemini не смог ответить после {message.ghostRetryMax} попыток
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => onRegenerate()}
+                className="text-xs px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 transition-colors text-red-300/80"
+              >
+                ↺ Попробовать ещё раз
+              </button>
+              <button
+                onClick={() => onDelete(message.id)}
+                className="text-xs px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 transition-colors text-red-400/70"
+              >
+                ✕ Убрать
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Annotation References */}
+        {message.annotationRefs && message.annotationRefs.length > 0 && (
+          <div className={`mb-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
+            <AnnotationRefDisplay annotationRefs={message.annotationRefs} />
+          </div>
+        )}
+
+        {/* Skill Artifacts */}
+        {message.skillArtifacts && message.skillArtifacts.length > 0 && (
+          <div className={`mb-2 ${isUser ? 'text-right' : 'text-left'}`}>
+            <SkillArtifactsGroup artifacts={message.skillArtifacts} onAnnotationClick={onAnnotationClick} onOpenAgentChat={onOpenAgentChat} />
           </div>
         )}
 
@@ -1557,6 +1945,11 @@ export default function ChatMessage({
               <DeepThinkingBlock
                 thinking={deepThinking}
                 isStreaming={isStreaming && isLast && !deepThinkAnalysis && !thinking && !messageText}
+                isInterrupted={message.deepThinkInterrupted}
+                errorMessage={message.deepThinkError}
+                onEdit={onEditDeepThinking ? (newText) => onEditDeepThinking(message.id, newText) : undefined}
+                onContinue={onContinueDeepThink ? () => onContinueDeepThink(message.id) : undefined}
+                onSkip={onSkipDeepThink ? () => onSkipDeepThink(message.id) : undefined}
               />
             )}
 
@@ -1569,8 +1962,19 @@ export default function ChatMessage({
               />
             )}
 
-            {/* DeepThink Error block */}
-            {!isUser && deepThinkError && (
+            {/* Scene State Panel */}
+            {!isUser && message.sceneState && (
+              <SceneStatePanel 
+                sceneState={message.sceneState}
+                onSettingsOpen={onSceneStateSettingsOpen || (() => {})}
+                onTogglePin={onToggleSceneStatePin || (() => {})}
+                isPinned={isSceneStatePinned || false}
+                onRequestCategory={onRequestSceneCategory}
+              />
+            )}
+
+            {/* DeepThink Error block - только если не interrupted (в interrupted случае UI уже в DeepThinkingBlock) */}
+            {!isUser && deepThinkError && !message.deepThinkInterrupted && (
               <DeepThinkErrorBlock error={deepThinkError} />
             )}
 
@@ -1596,19 +2000,72 @@ export default function ChatMessage({
             {/* Memory Operations */}
             {!isUser && message.memoryOperations && message.memoryOperations.length > 0 && (
               <>
-                {message.memoryOperations.map((op, idx) => (
-                  <MemoryPill
-                    key={`${message.id}-mem-${idx}`}
-                    operation={op.type}
-                    scope={op.scope}
-                    fact={op.fact}
-                    oldFact={op.oldFact}
-                    category={op.category}
-                    confidence={op.confidence}
-                    reason={op.reason}
+                {message.memoryOperations.map((op, idx) => {
+                  if (op.type === 'save_image') {
+                    return (
+                      <ImageMemoryPill
+                        key={`${message.id}-mem-${idx}`}
+                        scope={op.scope || 'local'}
+                        description={op.description || ''}
+                        tags={op.tags || []}
+                        entities={op.entities || []}
+                        thumbnailBase64={op.thumbnailBase64}
+                      />
+                    );
+                  }
+                  if (op.type === 'search_image' && op.results) {
+                    return (
+                      <ImageMemorySearchPill
+                        key={`${message.id}-mem-${idx}`}
+                        memories={op.results}
+                        entities={op.results.flatMap(r => r.tags)}
+                        confidence={0.8}
+                      />
+                    );
+                  }
+                  if (op.type === 'recall_image') {
+                    return (
+                      <ImageMemoryRecallPill
+                        key={`${message.id}-mem-${idx}`}
+                        memoryId={op.memoryId || ''}
+                        description={op.description}
+                        thumbnailBase64={op.thumbnailBase64}
+                      />
+                    );
+                  }
+                  return (
+                    <MemoryPill
+                      key={`${message.id}-mem-${idx}`}
+                      operation={op.type}
+                      scope={op.scope || 'local'}
+                      fact={op.fact}
+                      oldFact={op.oldFact}
+                      category={op.category}
+                      confidence={op.confidence}
+                      reason={op.reason}
+                    />
+                  );
+                })}
+              </>
+            )}
+
+            {/* Skill Tool Calls */}
+            {!isUser && message.skillToolCalls && message.skillToolCalls.length > 0 && (
+              <>
+                {message.skillToolCalls.map((call, idx) => (
+                  <SkillToolCallPill
+                    key={`${message.id}-skill-${idx}`}
+                    name={call.name}
+                    args={call.args}
+                    result={call.result}
                   />
                 ))}
               </>
+            )}
+
+            {/* Bridge Data (данные от сайта) */}
+            {isUser && message.bridgeData && (
+              <BridgeDataBlock bridgeData={message.bridgeData} />
             )}
 
             {/* Tool Responses (в user сообщениях) */}
@@ -1661,6 +2118,7 @@ export default function ChatMessage({
                       isStreaming={isStreaming}
                       isLast={isLast}
                       animateKey={animateKey}
+                      onPlayHTML={onPlayHTML}
                     />
                     ) : isStreaming && isLast ? (
                       thinking
@@ -1689,26 +2147,34 @@ export default function ChatMessage({
       </div>
 
       {/* Actions */}
-      {!isEditing && !isStreaming && (
-        <div className={`flex items-center gap-0.5 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-          {messageText && (
-            <button
-              onClick={copyText}
-              className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-all"
-            >
-              {copied ? <Check size={10} className="text-[var(--gem-green)]" /> : <Copy size={10} />}
-              {copied ? 'Скопировано' : 'Копировать'}
-            </button>
-          )}
+      {!hideActions && !isEditing && !isStreaming && (() => {
+        const hasFeedback = !isUser && !!message.feedback?.rating;
+        return (
+          <div className={`flex items-center gap-0.5 mt-1.5 transition-opacity ${
+            hasFeedback
+              ? 'opacity-100'
+              : 'opacity-0 group-hover:opacity-100'
+          } ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+            {messageText && (
+              <button
+                onClick={copyText}
+                className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-all"
+                title={copied ? 'Скопировано' : 'Копировать'}
+              >
+                {copied ? <Check size={10} className="text-[var(--gem-green)]" /> : <Copy size={10} />}
+                <span className="hidden sm:inline">{copied ? 'Скопировано' : 'Копировать'}</span>
+              </button>
+            )}
 
           {/* Нельзя редактировать thinking-only ответы */}
           {!(message.thinking && !messageText && !isBlocked) && (
             <button
               onClick={startEdit}
               className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-all"
+              title="Изменить"
             >
               <Edit2 size={10} />
-              Изменить
+              <span className="hidden sm:inline">Изменить</span>
             </button>
           )}
 
@@ -1716,30 +2182,84 @@ export default function ChatMessage({
             <button
               onClick={onRegenerate}
               className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-all"
+              title="Повтор"
             >
               <RefreshCw size={10} />
-              Повтор
+              <span className="hidden sm:inline">Повтор</span>
             </button>
           )}
 
-          {!isUser && isLast && messageText && (
-            <button
-              onClick={onContinue}
-              className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--gem-teal)] hover:bg-[rgba(45,212,191,0.08)] rounded-md transition-all"
-            >
-              <span className="text-[9px]">▶</span>
-              Продолжить
-            </button>
+          {/* Регенерировать только текст (без DeepThink) */}
+          {(() => {
+            const hasDeepThink = !!message.deepThinking && !!message.deepThinkEnhancedPrompt;
+            const hasError = !!message.error;
+            const isEmpty = !messageText && !message.isStreaming;
+            const showTextOnlyRegen = !isUser && isLast && hasDeepThink && (hasError || isEmpty || message.isBlocked);
+            
+            return showTextOnlyRegen && onRegenerateTextOnly && (
+              <button
+                onClick={() => onRegenerateTextOnly(message.id)}
+                className="flex items-center gap-1 px-2 py-1 text-[11px] text-purple-400/80 hover:text-purple-400 hover:bg-purple-500/10 rounded-md transition-all"
+                title="Регенерировать текст"
+              >
+                <RefreshCw size={10} />
+                <span className="hidden sm:inline">Регенерировать текст</span>
+              </button>
+            );
+          })()}
+
+          {/* Continue button UI */}
+          {!isUser && isLast && message.isPartial && message.interruptedChunk && onContinue && (
+            <div className="flex flex-col gap-1.5 mt-2 mb-1 w-full border-t border-[var(--border-subtle)] pt-2">
+              <span className="text-[10px] text-[var(--text-dim)] flex items-center gap-1.5">
+                <AlertCircle size={10} className="text-amber-500/70" />
+                ✂️ Генерация прервана · {message.interruptedChunk.reason}
+              </span>
+              <button
+                onClick={() => onContinue(message.interruptedChunk)}
+                className="flex items-center self-start gap-1.5 px-3 py-1.5 text-[11px] text-[var(--gem-teal)] hover:bg-[rgba(45,212,191,0.08)] bg-[rgba(45,212,191,0.04)] border border-[rgba(45,212,191,0.2)] rounded-lg transition-all font-medium"
+                title="Продолжить"
+              >
+                <span className="text-[10px]">▶</span>
+                <span className="inline">Продолжить генерацию</span>
+              </button>
+            </div>
+          )}
+
+          {/* Feedback кнопки - только для model сообщений */}
+          {!isUser && onFeedback && onRegenerateWithFeedback && (
+            <MessageFeedback
+              message={message}
+              isLast={isLast}
+              onFeedback={onFeedback}
+              onRegenerateWithFeedback={onRegenerateWithFeedback}
+              onRememberStyle={onRememberStyle}
+              onShorter={onShorter}
+              onContinueFromCursor={onContinueFromCursor}
+            />
           )}
 
           <button
             onClick={() => onDelete(message.id)}
             className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--gem-red)] hover:bg-[rgba(239,68,68,0.08)] rounded-md transition-all"
+            title="Удалить"
           >
             <Trash2 size={10} />
           </button>
-        </div>
-      )}
+          
+          {onBranch && (
+            <button
+              onClick={onBranch}
+              className="flex items-center gap-1 px-2 py-1 text-[11px] text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)] rounded-md transition-all"
+              title="Создать новую ветку от этого сообщения"
+            >
+              <GitBranch size={10} />
+              <span className="hidden md:inline">Ветка</span>
+            </button>
+          )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

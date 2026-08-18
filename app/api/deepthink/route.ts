@@ -1,4 +1,9 @@
 import { NextRequest } from 'next/server';
+import { DEEPTHINK_MEMORY_MARKER } from '@/lib/gemini';
+import { classifyGeminiError, extractRetryAfterSeconds } from '@/lib/gemini-errors';
+import { getEnabledCategoryIdsForPrompt } from '@/lib/scene-state-storage';
+import { convertGeminiToOpenAI } from '@/lib/message-converter';
+import { normalizeApiBaseUrl } from '@/lib/api-base-url';
 
 export const maxDuration = 30;
 export const dynamic = 'force-dynamic';
@@ -22,7 +27,32 @@ const DEFAULT_DEEPTHINK_SYSTEM = `Ты — внутренний наблюдат
 ---СИСТЕМНЫЙ ПРОМПТ---
 [готовый промпт для нейронки]`;
 
-const DEEPTHINK_PROMPT = (history: string, originalSystem: string) => `
+const DEEPTHINK_PROMPT = (history: string, originalSystem: string, enabledCategoryIds?: string[], aiInstructions?: string) => {
+  const sceneStateBlock = enabledCategoryIds && enabledCategoryIds.length > 0 ? `
+
+--- SCENE STATE INSTRUCTIONS ---
+После размышлений — заполни блок состояния сцены для текущего момента истории.
+
+---SCENE_STATE---
+Верни ТОЛЬКО валидный JSON массив (без markdown-обёрток) следующего вида:
+[
+  { "id": "spatial", "content": "Таверна «Золотой Петух», второй этаж, комната 7. Окно выходит на восток." },
+  { "id": "characters", "content": "Арвен (ГГ): сидит на кровати, устала. Страж Морн: стоит у двери снаружи." },
+  { "id": "narrative", "content": "Арвен только что узнала что Морн — двойной агент. Ещё не решила что делать." }
+]
+
+Заполняй ТОЛЬКО категории из списка: ${enabledCategoryIds.join(', ')}.
+Будь конкретен, не абстрактен. Пиши как ремарки режиссёра, не как описание.
+${aiInstructions ? `Дополнительные инструкции от пользователя: ${aiInstructions}` : ''}
+
+Если тебе не хватает какой-то категории — запроси её добавление в конце массива:
+{ "id": "__request__", "content": "Мне нужна категория 'Эмоциональное состояние' — я постоянно теряю трек того кто что чувствует" }
+
+---END_SCENE_STATE---
+
+` : '';
+
+  return `
 Оригинальный системный промпт:
 """
 ${originalSystem || 'не задан — обычный ассистент'}
@@ -33,8 +63,7 @@ ${originalSystem || 'не задан — обычный ассистент'}
 ${history}
 """
 
-Проанализируй. Подумай вслух. Напиши итоговый системный промпт.
-
+Проанализируй. Подумай вслух. Напиши итоговый системный промпт.${sceneStateBlock}
 Правила для системного промпта:
 — если задача техническая (код, математика, анализ) — опиши стиль мышления, на что обратить внимание, как структурировать ответ, какие детали важны именно для этого человека
 — если разговор или вопрос про личность ("кто ты", "расскажи о себе") — придумай конкретного персонажа: имя, возраст, характер, история, что сейчас делает, где находится, настроение в эту секунду, манера речи, маленькие детали которые делают его живым. Всё это вшей в промпт
@@ -44,8 +73,7 @@ ${history}
 — всегда: никакой шаблонности, никаких списков в ответе, живой текст
 
 Помни: нейронка которая получит этот промпт ничего не знает о твоём анализе. Всё важное должно быть прямо в промпте.`;
-
-const DEEPTHINK_MEMORY_MARKER = '[DeepThink context from previous assistant turn]';
+};
 
 const DEEPTHINK_PROMPT_WITH_MULTIMODAL_CONTEXT = (originalSystem: string) => `
 Original system prompt for the main chat:
@@ -92,13 +120,21 @@ function buildDeepThinkContents(messages: any[]) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { messages, systemInstruction, apiKey, model, deepThinkSystemPrompt } = body;
+    const { messages, systemInstruction, apiKey, model, deepThinkSystemPrompt, sceneStateConfig, baseUrl, providerType } = body;
 
     if (!apiKey) {
       return Response.json({ error: 'API key required' }, { status: 400 });
     }
+    if (!Array.isArray(messages)) {
+      return Response.json({ error: 'Messages must be an array' }, { status: 400 });
+    }
 
     const historyContents = buildDeepThinkContents(Array.isArray(messages) ? messages : []);
+    const enabledIds = sceneStateConfig?.enabledCategories || [];
+    const aiInstructions = sceneStateConfig?.aiInstructions || '';
+
+    // Считаем turnIndex по количеству user сообщений
+    const turnIndex = historyContents.filter(m => m.role === 'user').length;
 
     const modelId = (model || 'gemini-2.0-flash').replace('models/', '');
     // Поддерживают ли модели режим размышлений (thinkingConfig)
@@ -108,59 +144,111 @@ export async function POST(request: NextRequest) {
     const MAX_HISTORY_MESSAGES = 20;
     const limitedHistory = historyContents.slice(-MAX_HISTORY_MESSAGES);
 
-    const requestBody: any = {
-      contents: [
-        ...limitedHistory,
-        {
-          role: 'user',
-          parts: [{ text: DEEPTHINK_PROMPT_WITH_MULTIMODAL_CONTEXT(systemInstruction || '') }],
-        },
-      ],
-      systemInstruction: {
-        parts: [{ text: deepThinkSystemPrompt || DEFAULT_DEEPTHINK_SYSTEM }],
-      },
-      generationConfig: {
+    // Используем DEEPTHINK_PROMPT который включает SCENE_STATE блок
+    const historyText = limitedHistory.map(m => {
+      const role = m.role === 'model' ? 'Assistant' : 'User';
+      const texts = (m.parts || []).filter((p: any) => p.text).map((p: any) => p.text).join(' ');
+      return `${role}: ${texts}`;
+    }).join('\n\n');
+
+    let response: Response;
+    const isOpenAI = providerType === 'openai';
+
+    if (isOpenAI) {
+      // ── OpenAI / OpenRouter Formatting ──────────────────────────────────────
+      const oaiMessages = convertGeminiToOpenAI(messages, systemInstruction);
+      const limitedOaiHistory = oaiMessages.slice(-MAX_HISTORY_MESSAGES);
+      
+      const normalizedBase = normalizeApiBaseUrl(baseUrl || '');
+      const endpoint = normalizedBase + '/chat/completions';
+
+      const oaiRequestBody = {
+        model,
+        messages: [
+          { role: 'system', content: deepThinkSystemPrompt || DEFAULT_DEEPTHINK_SYSTEM },
+          ...limitedOaiHistory,
+          { 
+            role: 'user', 
+            content: DEEPTHINK_PROMPT(historyText, systemInstruction || '', enabledIds.length > 0 ? enabledIds : undefined, aiInstructions) 
+          }
+        ],
         temperature: 0.7,
-        maxOutputTokens: 16384, // Увеличим лимит для длинных анализов
-      },
-    };
-
-    if (isThinkingModel) {
-      requestBody.generationConfig.thinkingConfig = {
-        includeThoughts: true,
+        max_tokens: 16384,
+        stream: true
       };
-      // Для thinking моделей температура обычно не поддерживается или должна быть 1.0
-      requestBody.generationConfig.temperature = 1.0;
+
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'HTTP-Referer': 'https://gemini-studio.app',
+          'X-Title': 'Gemini Studio',
+        },
+        body: JSON.stringify(oaiRequestBody),
+      });
+    } else {
+      // ── Gemini Formatting ───────────────────────────────────────────────────
+      const requestBody: any = {
+        contents: [
+          ...limitedHistory,
+          {
+            role: 'user',
+            parts: [{ text: DEEPTHINK_PROMPT(historyText, systemInstruction || '', enabledIds.length > 0 ? enabledIds : undefined, aiInstructions) }],
+          },
+        ],
+        systemInstruction: {
+          parts: [{ text: deepThinkSystemPrompt || DEFAULT_DEEPTHINK_SYSTEM }],
+        },
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 16384,
+        },
+      };
+
+      if (isThinkingModel) {
+        requestBody.generationConfig.thinkingConfig = { includeThoughts: true };
+        requestBody.generationConfig.temperature = 1.0;
+      }
+
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}&alt=sse`;
+      response = await fetch(geminiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
     }
-
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}&alt=sse`;
-
-    const response = await fetch(geminiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-    });
 
     if (!response.ok) {
       const errBody = await response.text();
       let errMessage = 'Gemini API error';
       let errCode = response.status;
+      let errStatus: string | undefined = undefined;
+      
       try {
         const errJson = JSON.parse(errBody);
         errMessage = errJson?.error?.message || errMessage;
         errCode = errJson?.error?.code || errCode;
+        errStatus = errJson?.error?.status || errStatus;
       } catch {}
       
-      console.error(`[DeepThink API Error] Model: ${modelId}, Status: ${errCode}, Message: ${errMessage}`);
+      console.error(`[DeepThink API Error] Model: ${modelId}, Status: ${errCode}, Message: ${errMessage}, Provider: ${providerType || 'gemini'}`);
 
-      // Если ошибка связана с лимитом токенов - даём понятное сообщение
-      if (errMessage.toLowerCase().includes('token') || errMessage.toLowerCase().includes('length') || errCode === 400) {
-        errMessage = 'Слишком большой запрос. Попробуй сократить историю или отключи DeepThink для этого сообщения.';
-      }
+      // Классифицируем ошибку и получаем понятное сообщение
+      const classified = classifyGeminiError(errCode, errMessage);
+      const retryAfterSeconds = extractRetryAfterSeconds(errMessage);
+      const displayMessage = classified.userMessage || errMessage;
 
       // Возвращаем 200 но с ошибкой в потоке, чтобы фронтенд мог это обработать
       return new Response(
-        `data: ${JSON.stringify({ error: `DeepThink: ${errMessage}` })}\n\ndata: [DONE]\n\n`,
+        `data: ${JSON.stringify({ 
+          error: `DeepThink: ${displayMessage}`,
+          originalError: errMessage,
+          errorType: classified.errorType,
+          errorCode: errCode,
+          errorStatus: errStatus,
+          retryAfterSeconds
+        })}\n\ndata: [DONE]\n\n`,
         { 
           status: 200, 
           headers: { 
@@ -179,8 +267,9 @@ export async function POST(request: NextRequest) {
     const encoder = new TextEncoder();
 
     (async () => {
+      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
       try {
-        const reader = response.body!.getReader();
+        reader = response.body!.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
         let textAccumulator = '';
@@ -194,51 +283,108 @@ export async function POST(request: NextRequest) {
           buffer = lines.pop() || '';
 
           for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const jsonStr = line.slice(6).trim();
+            const trimmedLine = line.trim();
+            if (!trimmedLine || !trimmedLine.startsWith('data:')) continue;
+            
+            // Extract data after 'data:' prefix
+            let jsonStr = trimmedLine.slice(5).trim();
             if (!jsonStr || jsonStr === '[DONE]') continue;
 
             try {
               const parsed = JSON.parse(jsonStr);
 
               if (parsed.error) {
+                const msg = parsed.error.message || 'Gemini API error';
+                const code = parsed.error.code || 0;
+                const classified = classifyGeminiError(code, msg);
+                const displayMessage = classified.userMessage || msg;
+                
                 await writer.write(
-                  encoder.encode(`data: ${JSON.stringify({ error: parsed.error.message })}\n\n`)
+                  encoder.encode(`data: ${JSON.stringify({ 
+                    error: displayMessage,
+                    originalError: msg,
+                    errorType: classified.errorType
+                  })}\n\n`)
                 );
                 continue;
               }
 
-              const candidate = parsed?.candidates?.[0];
-              const parts = candidate?.content?.parts || [];
+              if (isOpenAI) {
+                // OpenAI / OpenRouter Chunk Parsing
+                const choice = parsed.choices?.[0];
+                const delta = choice?.delta;
+                
+                // Reasoning content (DeepSeek R1 / models with reasoning field)
+                const reasoning = delta?.reasoning_content || delta?.thinking;
+                if (reasoning) {
+                  await writer.write(
+                    encoder.encode(`data: ${JSON.stringify({ thinking: reasoning })}\n\n`)
+                  );
+                }
 
-              for (const part of parts) {
-                if (part.thought === true && part.text) {
-                  // Нативные размышления thinking-модели
+                // Regular content
+                if (delta?.content) {
+                  textAccumulator += delta.content;
                   await writer.write(
-                    encoder.encode(`data: ${JSON.stringify({ thinking: part.text })}\n\n`)
+                    encoder.encode(`data: ${JSON.stringify({ thinking: delta.content })}\n\n`)
                   );
-                } else if (part.text !== undefined) {
-                  // Обычный текст — это размышления модели перед маркером
-                  textAccumulator += part.text;
-                  // Стримим как thinking чтобы показывать в реальном времени
-                  await writer.write(
-                    encoder.encode(`data: ${JSON.stringify({ thinking: part.text })}\n\n`)
-                  );
+                }
+              } else {
+                // Gemini Chunk Parsing
+                const candidate = parsed?.candidates?.[0];
+                const parts = candidate?.content?.parts || [];
+
+                for (const part of parts) {
+                  if (part.thought === true && part.text) {
+                    // Нативные размышления thinking-модели
+                    await writer.write(
+                      encoder.encode(`data: ${JSON.stringify({ thinking: part.text })}\n\n`)
+                    );
+                  } else if (part.text !== undefined) {
+                    // Обычный текст — это размышления модели перед маркером
+                    textAccumulator += part.text;
+                    // Стримим как thinking чтобы показывать в реальном времени
+                    await writer.write(
+                      encoder.encode(`data: ${JSON.stringify({ thinking: part.text })}\n\n`)
+                    );
+                  }
                 }
               }
             } catch {}
           }
         }
 
-        // Извлекаем системный промпт из текста
+        // Извлекаем SCENE_STATE и системный промпт из текста
         const marker = '---СИСТЕМНЫЙ ПРОМПТ---';
         const idx = textAccumulator.indexOf(marker);
         const enhancedPrompt = idx !== -1
           ? textAccumulator.slice(idx + marker.length).trim()
           : textAccumulator.trim();
 
+        // Парсим SCENE_STATE
+        let sceneState: any = null;
+        const sceneStateMatch = textAccumulator.match(/---SCENE_STATE---\n([\s\S]*?)---END_SCENE_STATE---/);
+        if (sceneStateMatch) {
+          try {
+            // Попробуем распарсить JSON (иногда он может быть в markdown-блоке)
+            let jsonStr = sceneStateMatch[1].trim();
+            // Уберём markdown обёртки если есть
+            jsonStr = jsonStr.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+            const entries = JSON.parse(jsonStr);
+            if (Array.isArray(entries)) {
+              sceneState = {
+                entries,
+                generatedAt: Date.now(),
+                turnIndex,
+              };
+            }
+          } catch (e) {
+            console.warn('[DeepThink] Failed to parse SCENE_STATE:', e);
+          }
+        }
+
         await writer.write(
-          encoder.encode(`data: ${JSON.stringify({ enhancedPrompt })}\n\n`)
+          encoder.encode(`data: ${JSON.stringify({ enhancedPrompt, sceneState })}\n\n`)
         );
         await writer.write(encoder.encode('data: [DONE]\n\n'));
       } catch (error: any) {
@@ -249,6 +395,10 @@ export async function POST(request: NextRequest) {
           await writer.write(encoder.encode('data: [DONE]\n\n'));
         } catch {}
       } finally {
+        // Cleanup reader
+        if (reader) {
+          try { reader.releaseLock(); } catch {}
+        }
         try { await writer.close(); } catch {}
       }
     })();

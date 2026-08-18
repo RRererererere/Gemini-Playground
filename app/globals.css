@@ -1,8 +1,9 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import 'katex/dist/katex.min.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
@@ -46,6 +47,18 @@
   --blocked-bg: rgba(239, 68, 68, 0.06);
   --blocked-border: rgba(239, 68, 68, 0.2);
   --blocked-text: #ef4444;
+
+  /* Typography scale */
+  --text-2xs: 10px;
+  --text-xs:  11px;
+  --text-sm:  13px;
+  --text-base: 14px;
+  --text-lg:  16px;
+
+  /* Spacing scale для chat */
+  --chat-gap: 1.5rem;       /* 24px между сообщениями */
+  --chat-px-desktop: 1.5rem; /* 24px горизонталь */
+  --chat-py-desktop: 2rem;   /* 32px вертикаль */
 }
 
 * {
@@ -323,6 +336,38 @@ textarea {
   margin-left: 2px;
 }
 
+/* Spring easing utility */
+.ease-spring {
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Новые анимации для UI улучшений */
+@keyframes messageAppear {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes sendPop {
+  0% { transform: scale(1); }
+  35% { transform: scale(0.88); }
+  70% { transform: scale(1.04); }
+  100% { transform: scale(1); }
+}
+
+.animate-message-appear {
+  animation: messageAppear 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-send-pop {
+  animation: sendPop 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
 /* Skeleton loader для текста */
 .skeleton-text {
   background: linear-gradient(
@@ -460,4 +505,273 @@ input[type='range']::-moz-range-thumb {
   .input-hint {
     display: none;
   }
+}
+
+/* ==================== KATEX (LaTeX Math) ==================== */
+/* Стили для математических формул в темной теме */
+.katex {
+  font-size: 1.05em;
+  color: var(--text-primary);
+}
+
+.katex-display {
+  margin: 1em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.5em 0;
+}
+
+.katex-display > .katex {
+  display: inline-block;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* Inline math */
+.katex-inline {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Цвета для темной темы */
+.katex .mord,
+.katex .mop,
+.katex .mbin,
+.katex .mrel,
+.katex .mopen,
+.katex .mclose,
+.katex .mpunct,
+.katex .minner {
+  color: var(--text-primary);
+}
+
+/* Операторы и функции */
+.katex .mop {
+  color: #61afef;
+}
+
+/* Переменные */
+.katex .mord.mathnormal {
+  color: #e5c07b;
+}
+
+/* Числа */
+.katex .mord.mtight {
+  color: #d19a66;
+}
+
+/* Скобки и разделители */
+.katex .mopen,
+.katex .mclose,
+.katex .mfrac > span {
+  color: #c678dd;
+}
+
+/* Корни и радикалы */
+.katex .sqrt > .root {
+  color: #98c379;
+}
+
+/* Улучшенная читаемость в блоках кода */
+.prose-gem .katex {
+  font-size: 1em;
+}
+
+/* Скроллбар для длинных формул */
+.katex-display::-webkit-scrollbar {
+  height: 6px;
+}
+
+.katex-display::-webkit-scrollbar-track {
+  background: var(--surface-2);
+  border-radius: 3px;
+}
+
+.katex-display::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+
+.katex-display::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Адаптация для мобильных устройств */
+@media (max-width: 768px) {
+  .katex {
+    font-size: 0.95em;
+  }
+  
+  .katex-display {
+    font-size: 0.9em;
+  }
+}
+
+/* Scrollbar hide utility */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* ==================== AGENT NODE EDITOR ==================== */
+
+/* ── Design Tokens ─────────────────────────────────────────── */
+:root {
+  /* Node surfaces */
+  --node-bg: rgba(14, 14, 18, 0.96);
+  --node-bg-hover: rgba(20, 20, 26, 0.98);
+  --node-border: rgba(255, 255, 255, 0.07);
+  --node-border-hover: rgba(255, 255, 255, 0.14);
+  --node-border-selected: rgba(255, 255, 255, 0.6);
+  --node-shadow: 0 2px 16px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255,255,255,0.04);
+  --node-shadow-hover: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255,255,255,0.08);
+  --node-shadow-selected: 0 0 0 2px rgba(255,255,255,0.4), 0 8px 32px rgba(0,0,0,0.5);
+  --node-radius: 14px;
+  --node-header-height: 36px;
+
+  /* Port colors — muted, professional palette */
+  --port-text: #888;
+  --port-number: #34d399;
+  --port-boolean: #f472b6;
+  --port-object: #fb923c;
+  --port-array: #fbbf24;
+  --port-any: #94a3b8;
+
+  /* Category accent colors — subtle gradients */
+  --cat-ai: #888;
+  --cat-logic: #f59e0b;
+  --cat-memory: #10b981;
+  --cat-chat: #888;
+  --cat-utility: #64748b;
+  --cat-io: #888;
+}
+
+/* ── Node Structure ────────────────────────────────────────── */
+.react-flow__node {
+  overflow: visible !important;
+}
+
+/* ── Handles ───────────────────────────────────────────────── */
+.react-flow__handle {
+  cursor: crosshair !important;
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 0.15s ease,
+              background-color 0.15s ease !important;
+}
+
+.react-flow__handle:hover {
+  transform: translateY(-50%) scale(1.35) !important;
+}
+
+/* ── Edges ─────────────────────────────────────────────────── */
+.react-flow__edge-path {
+  transition: stroke 0.2s ease, stroke-width 0.2s ease !important;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #fbbf24 !important;
+  stroke-width: 2.5 !important;
+  filter: drop-shadow(0 0 6px rgba(251,191,36,0.5));
+}
+
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: rgba(251, 191, 36, 0.7) !important;
+  stroke-width: 2.5 !important;
+}
+
+/* ── Connection line ───────────────────────────────────────── */
+.react-flow__connection-path {
+  stroke: #888 !important;
+  stroke-width: 2 !important;
+  stroke-dasharray: 6 4 !important;
+  animation: connectionDash 0.4s linear infinite !important;
+}
+
+/* ── Controls ──────────────────────────────────────────────── */
+.react-flow__controls {
+  border-radius: 10px !important;
+  overflow: hidden !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4) !important;
+}
+
+.react-flow__controls-button {
+  background: var(--surface-2) !important;
+  border-bottom: 1px solid var(--border) !important;
+  fill: var(--text-muted) !important;
+  width: 32px !important;
+  height: 32px !important;
+}
+
+.react-flow__controls-button:hover {
+  background: var(--surface-3) !important;
+  fill: var(--text-primary) !important;
+}
+
+/* ── MiniMap ───────────────────────────────────────────────── */
+.react-flow__minimap {
+  border-radius: 10px !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4) !important;
+  overflow: hidden !important;
+}
+
+/* ── Execution Animations ──────────────────────────────────── */
+@keyframes flowPulse {
+  0% { stroke-dashoffset: 24; }
+  100% { stroke-dashoffset: 0; }
+}
+
+@keyframes connectionDash {
+  0% { stroke-dashoffset: 10; }
+  100% { stroke-dashoffset: 0; }
+}
+
+@keyframes nodeRunning {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(255,255,255,0.3), 0 8px 32px rgba(0,0,0,0.5); }
+  50% { box-shadow: 0 0 0 3px rgba(255,255,255,0.6), 0 0 20px rgba(255,255,255,0.15), 0 8px 32px rgba(0,0,0,0.5); }
+}
+
+@keyframes nodeSuccess {
+  0% { box-shadow: 0 0 0 2px rgba(16,185,129,0.6), 0 0 20px rgba(16,185,129,0.2); }
+  100% { box-shadow: var(--node-shadow); }
+}
+
+@keyframes statusPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.edge-executing .react-flow__edge-path {
+  stroke: #888 !important;
+  stroke-width: 2.5 !important;
+  stroke-dasharray: 8 6 !important;
+  animation: flowPulse 0.5s linear infinite !important;
+}
+
+/* ── Node status classes ───────────────────────────────────── */
+.agent-node--running {
+  animation: nodeRunning 1.5s ease-in-out infinite;
+}
+
+.agent-node--success {
+  animation: nodeSuccess 0.8s ease-out forwards;
+}
+
+.agent-node--error {
+  box-shadow: 0 0 0 2px rgba(239,68,68,0.5), 0 0 16px rgba(239,68,68,0.15), 0 8px 32px rgba(0,0,0,0.5) !important;
+}
+
+.agent-node--skipped {
+  opacity: 0.45;
+  filter: saturate(0.3);
+}
+
+/* ── Background dots ───────────────────────────────────────── */
+.react-flow__background pattern circle {
+  fill: rgba(255, 255, 255, 0.035) !important;
 }

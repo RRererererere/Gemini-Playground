@@ -1,0 +1,1 @@
+export { videoFrameExtractorSkill } from './skill';

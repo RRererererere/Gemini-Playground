@@ -149,3 +149,112 @@ export async function clearAllFiles(): Promise<void> {
     console.error('Failed to clear files from IndexedDB:', err);
   }
 }
+
+// Export all IndexedDB files as a JSON backup download
+export async function exportFileDatabase(): Promise<void> {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+
+    const entries: Record<string, string> = {};
+    await new Promise<void>((resolve, reject) => {
+      const req = store.openCursor();
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (cursor) {
+          entries[cursor.key as string] = cursor.value;
+          cursor.continue();
+        } else {
+          resolve();
+        }
+      };
+      req.onerror = () => reject(req.error);
+    });
+
+    const data = JSON.stringify({ version: 1, exportedAt: Date.now(), files: entries }, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gemini-studio-files-db-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error('Failed to export file database:', err);
+    throw err;
+  }
+}
+
+// Delete the entire IndexedDB database
+export async function deleteFileDatabase(): Promise<void> {
+  // Close existing connection first
+  if (dbPromise) {
+    try {
+      const db = await dbPromise;
+      db.close();
+    } catch {}
+    dbPromise = null;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+    req.onblocked = () => resolve(); // proceed even if blocked
+  });
+}
+
+// Get file with metadata (searches in current chat messages from localStorage)
+export async function getFile(fileId: string): Promise<{
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  data: string;
+} | null> {
+  try {
+    // Load base64 data from IndexedDB
+    const data = await loadFileData(fileId);
+    if (!data) return null;
+
+    // Try to find metadata in localStorage chats
+    if (typeof window !== 'undefined') {
+      const chatsJson = localStorage.getItem('gemini_saved_chats');
+      if (chatsJson) {
+        const chats = JSON.parse(chatsJson);
+        
+        // Search through all chats for this file
+        for (const chat of chats) {
+          if (chat.messages) {
+            for (const message of chat.messages) {
+              if (message.files) {
+                const file = message.files.find((f: any) => f.id === fileId);
+                if (file) {
+                  return {
+                    id: file.id,
+                    name: file.name,
+                    mimeType: file.mimeType,
+                    size: file.size,
+                    data
+                  };
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback: return with minimal metadata
+    return {
+      id: fileId,
+      name: 'image.png',
+      mimeType: 'image/png',
+      size: Math.round((data.length * 3) / 4),
+      data
+    };
+  } catch (err) {
+    console.error('Failed to get file:', err);
+    return null;
+  }
+}

@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Brain } from 'lucide-react';
 
-export type MemoryOperation = 'save' | 'update' | 'forget';
+export type MemoryOperation = 'save' | 'update' | 'forget' | 'save_image' | 'search_image' | 'recall_image';
 
 export interface MemoryPillProps {
   operation: MemoryOperation;
