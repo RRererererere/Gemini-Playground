@@ -175,7 +175,7 @@ const AgentEditorContent = ({ allModels, activeModel, apiKeys, graph, onGraphCha
 
   // Save status
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved');
-  const saveTimeoutRef = useRef<NodeJS.Timeout>();
+  const saveTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
   // Context Menus
   const [nodeMenu, setNodeMenu] = useState<{ id: string; top: number; left: number } | null>(null);

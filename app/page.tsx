@@ -4,20 +4,14 @@
 export const dynamic = 'force-dynamic';
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import dynamicImport from 'next/dynamic';
 import { ChatSidebar, SettingsSidebar } from '@/components/Sidebar';
 import ChatMessage from '@/components/ChatMessage';
 import ChatInput from '@/components/ChatInput';
-import { ToolBuilderModal } from '@/components/ToolBuilder';
-import MemoryModal from '@/components/MemoryModal';
-import { RPGProfileModal } from '@/components/RPGProfileModal';
 import MemoryPill from '@/components/MemoryPill';
 import ImageMemoryPill from '@/components/ImageMemoryPill';
 import ImageMemoryRecallPill from '@/components/ImageMemoryRecallPill';
-import { CommandPalette } from '@/components/CommandPalette';
-import { SelectionToolbar } from '@/components/SelectionToolbar';
 import StorageWarningBanner from '@/components/StorageWarningBanner';
-import { AgentChatPage } from '@/components/agent-chat/AgentChatPage';
-import { AgentChatList } from '@/components/agent-chat/AgentChatList';
 import {
   PanelLeft, MessageSquarePlus, Sparkles, Trash2, AlertCircle,
   SlidersHorizontal,
@@ -32,14 +26,11 @@ import FileEditorCanvas from '@/components/FileEditorCanvas';
 import InsightsPanel from '@/components/InsightsPanel';
 import { useDeepThink } from '@/lib/useDeepThink';
 import DeepThinkToggle from '@/components/DeepThinkToggle';
-import { DeepThinkSettingsDialog } from '@/components/DeepThinkSettingsDialog';
 
 import AgentMessageHeader from '@/components/AgentMessageHeader';
 import ArenaInputBar from '@/components/ArenaInputBar';
 import ArenaAgentsSidebar from '@/components/ArenaAgentsSidebar';
 import { useArena } from '@/lib/useArena';
-import { SceneStateSettingsModal } from '@/components/SceneStateSettingsModal';
-import { ContextInspectorModal } from '@/components/ContextInspectorModal';
 import { loadSceneStateConfig, saveSceneStateConfig } from '@/lib/scene-state-storage';
 import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, ToolResponse, SavedSystemPrompt, SkillArtifact, CanvasElement, Provider, UniversalModel, ActiveModel, Message, AttachedFile, Part, DeepThinkAnalysis, WebsiteType, OpenFile, FileDiffOp } from '@/types';
 import {
@@ -116,16 +107,25 @@ import {
   reloadHFSpaceSkills,
 } from '@/lib/skills';
 import { useSkillsUI } from '@/lib/useSkillsUI';
-import { SkillsMarket } from '@/components/SkillsMarket';
-import { HFSpaceManager } from '@/components/HFSpaceManager';
 import { useAppState } from '@/lib/useAppState';
 import { useWindowedMessages } from '@/lib/hooks/useWindowedMessages';
 import { AgentsHistory } from '@/components/agent-editor/AgentsHistory';
 import { GraphExecutor } from '@/lib/agent-engine/executor';
 import { getGraphById } from '@/lib/agent-engine/graph-storage';
-import { AgentGraph, AgentRun } from '@/lib/agent-engine/types';
-import remarkGfm from 'remark-gfm';
-import ReactMarkdown from 'react-markdown';
+import type { AgentGraph, AgentRun } from '@/lib/agent-engine/types';
+
+const ToolBuilderModal = dynamicImport(() => import('@/components/ToolBuilder').then(module => module.ToolBuilderModal));
+const MemoryModal = dynamicImport(() => import('@/components/MemoryModal'));
+const RPGProfileModal = dynamicImport(() => import('@/components/RPGProfileModal').then(module => module.RPGProfileModal));
+const CommandPalette = dynamicImport(() => import('@/components/CommandPalette').then(module => module.CommandPalette));
+const AgentChatPage = dynamicImport(() => import('@/components/agent-chat/AgentChatPage').then(module => module.AgentChatPage));
+const AgentChatList = dynamicImport(() => import('@/components/agent-chat/AgentChatList').then(module => module.AgentChatList));
+const DeepThinkSettingsDialog = dynamicImport(() => import('@/components/DeepThinkSettingsDialog').then(module => module.DeepThinkSettingsDialog));
+const SceneStateSettingsModal = dynamicImport(() => import('@/components/SceneStateSettingsModal').then(module => module.SceneStateSettingsModal));
+const ContextInspectorModal = dynamicImport(() => import('@/components/ContextInspectorModal').then(module => module.ContextInspectorModal));
+const SkillsMarket = dynamicImport(() => import('@/components/SkillsMarket').then(module => module.SkillsMarket));
+const HFSpaceManager = dynamicImport(() => import('@/components/HFSpaceManager').then(module => module.HFSpaceManager));
+const SelectionToolbar = dynamicImport(() => import('@/components/SelectionToolbar').then(module => module.SelectionToolbar));
 
 function generateId() {
   // Используем crypto.randomUUID для гарантированной уникальности

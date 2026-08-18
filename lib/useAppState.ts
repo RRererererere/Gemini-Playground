@@ -275,10 +275,7 @@ export function useAppState(): UseAppStateReturn {
   // ═══════════════════════════════════════════
   // FILE EDITOR
   // ═══════════════════════════════════════════
-  const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
-  const [activeFileId, setActiveFileId] = useState<string | null>(null);
-  const [showFileEditor, setShowFileEditor] = useState(false);
-  const [pendingEdits, setPendingEdits] = useState<Map<string, FileDiffOp[]>>(new Map());
+  // File editor state is owned by useFileEditor below.
 
   // ═══════════════════════════════════════════
   // MOBILE CANVAS
@@ -320,10 +317,10 @@ export function useAppState(): UseAppStateReturn {
   const { tokenCount, setTokenCount, isCountingTokens, countTokens, scheduleTokenCount } = useTokenCounter();
   const { showMemoryModal, setShowMemoryModal } = useMemory();
   const {
-    openFiles: feOpenFiles, setOpenFiles: feSetOpenFiles,
-    activeFileId: feActiveFileId, setActiveFileId: feSetActiveFileId,
-    showFileEditor: feShowFileEditor, setShowFileEditor: feSetShowFileEditor,
-    pendingEdits: fePendingEdits, setPendingEdits: feSetPendingEdits,
+    openFiles, setOpenFiles,
+    activeFileId, setActiveFileId,
+    showFileEditor, setShowFileEditor,
+    pendingEdits, setPendingEdits,
     checkFilesForEditor,
     acceptEdits: feAcceptEdits,
     rejectEdits: feRejectEdits,
@@ -332,14 +329,6 @@ export function useAppState(): UseAppStateReturn {
     revertFile: feRevertFile,
     chatKey: fileEditorChatKey,
   } = useFileEditor(currentChatId);
-
-  // Sync file editor state from bridge-backed hook (single source of truth)
-  useEffect(() => {
-    setOpenFiles(feOpenFiles);
-    setPendingEdits(fePendingEdits);
-    if (feActiveFileId !== activeFileId) setActiveFileId(feActiveFileId);
-    if (feShowFileEditor !== showFileEditor) setShowFileEditor(feShowFileEditor);
-  }, [feOpenFiles, fePendingEdits, feActiveFileId, feShowFileEditor]);
 
   const rpgProfile = useRPGProfile(model, selectedApiKey);
 

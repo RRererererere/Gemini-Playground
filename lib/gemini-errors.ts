@@ -1,4 +1,4 @@
-// Утилиты для обработки ошибок Gemini API
+// Helpers for classifying Gemini API errors.
 
 export function isRateLimitError(status: number, message: string): boolean {
   return (
@@ -32,54 +32,46 @@ export function classifyGeminiError(status: number, message: string): GeminiErro
     m.includes('api key not valid') ||
     m.includes('api_key_invalid') ||
     m.includes('invalid api key') ||
-    m.includes('permission denied') && m.includes('key');
+    (m.includes('permission denied') && m.includes('key'));
   const isPermission =
-    status === 403 && !isInvalidKey ||
+    (status === 403 && !isInvalidKey) ||
     m.includes('permission denied') ||
     m.includes('not authorized');
 
   let errorType = 'unknown';
   let userMessage: string | undefined;
-  
+
   if (isQuota) {
     errorType = 'quota';
-    // Проверяем, связана ли ошибка с токенами (контекстом)
     if (m.includes('input_token') || m.includes('input token') || m.includes('context')) {
-      userMessage = 'Контекст слишком большой. Попробуйте сократить сообщение или начать новый чат.';
+      userMessage = 'Input context is too large. Shorten the message or start a new chat.';
     } else if (m.includes('output_token') || m.includes('output token')) {
-      userMessage = 'Превышен лимит токенов ответа. Попробуйте позже или используйте другую модель.';
+      userMessage = 'The response token limit was exceeded. Try again later or use another model.';
     } else {
-      userMessage = 'Превышена квота API. Попробуйте позже или проверьте лимиты вашего аккаунта.';
+      userMessage = 'The API quota was exceeded. Check your API limits or billing settings.';
     }
-  }
-  else if (isRateLimit) {
+  } else if (isRateLimit) {
     errorType = 'rate_limit';
-    userMessage = 'Слишком много запросов. Подождите немного и попробуйте снова.';
-  }
-  else if (isInvalidKey) {
+    userMessage = 'Too many requests. Wait a moment and try again.';
+  } else if (isInvalidKey) {
     errorType = 'invalid_key';
-    userMessage = 'Неверный API ключ. Проверьте настройки.';
-  }
-  else if (isPermission) {
+    userMessage = 'The API key is invalid. Check the provider settings.';
+  } else if (isPermission) {
     errorType = 'permission';
-    userMessage = 'Нет доступа к этой функции. Проверьте права вашего API ключа.';
-  }
-  else if (status === 400) {
+    userMessage = 'This operation is not permitted. Check the API key permissions.';
+  } else if (status === 400) {
     errorType = 'bad_request';
-    // Для 400 ошибок проверяем, не связано ли с размером
     if (m.includes('token') || m.includes('length') || m.includes('too large') || m.includes('too long')) {
-      userMessage = 'Запрос слишком большой. Попробуйте сократить сообщение или историю чата.';
+      userMessage = 'The request is too large. Shorten the message or start a new chat.';
     }
-  }
-  else if (status === 408) {
+  } else if (status === 408) {
     errorType = 'timeout';
-    userMessage = 'Превышено время ожидания. Попробуйте снова.';
-  }
-  else if (status >= 500) {
+    userMessage = 'The request timed out. Try again.';
+  } else if (status >= 500) {
     errorType = 'internal';
-    userMessage = 'Ошибка сервера Gemini. Попробуйте позже.';
+    userMessage = 'The Gemini service returned an error. Try again later.';
   }
-  
+
   return { errorType, isRateLimit, isQuota, isInvalidKey, isPermission, userMessage };
 }
 

@@ -1355,10 +1355,18 @@ export function SettingsSidebar({
                     const keyId = `${entry.key}-${idx}`;
 
                     return (
-                      <button
+                      <div
                         key={keyId}
+                        role="button"
+                        tabIndex={0}
                         onClick={() => selectKey(idx)}
-                        className={`group flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all ${
+                        onKeyDown={event => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            selectKey(idx);
+                          }
+                        }}
+                        className={`group flex w-full cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all ${
                           isActive
                             ? 'border-emerald-400/25 bg-emerald-400/10'
                             : 'border-[var(--border)] bg-[var(--surface-2)] hover:border-[var(--border-strong)]'
@@ -1419,7 +1427,7 @@ export function SettingsSidebar({
                             <Trash2 size={12} />
                           </button>
                         </div>
-                      </button>
+                      </div>
                     );
                   })}
 

@@ -133,11 +133,11 @@ export const AgentEditorProperties: React.FC<AgentEditorPropertiesProps> = ({
   activeModel, 
   apiKeys = {} 
 }) => {
-  
+  const { isPortConnected } = usePortConnection(node, edges);
+
   if (!node) return null;
 
   const nodeDef = NODE_DEFINITIONS[node.type!];
-  const { isPortConnected } = usePortConnection(node, edges);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     updateNodeData(node.id, {

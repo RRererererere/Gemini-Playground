@@ -369,24 +369,24 @@ function ArtifactAnnotatedImage({ artifact, onAnnotationClick }: Props) {
   const [sourceImage, setSourceImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const imgRef = useState<HTMLImageElement | null>(null)[0];
-  
-  if (artifact.data.kind !== 'annotations') return null;
-
-  const { sourceImageId, annotations } = artifact.data;
+  const sourceImageId = artifact.data.kind === 'annotations' ? artifact.data.sourceImageId : null;
 
   useEffect(() => {
+    if (!sourceImageId) return;
+    const imageId = sourceImageId;
+
     async function loadSourceImage() {
       try {
         // Сначала пробуем загрузить из universal-image-store
         const { loadUniversalImage } = await import('@/lib/universal-image-store');
-        const universalImg = await loadUniversalImage(sourceImageId);
+        const universalImg = await loadUniversalImage(imageId);
         
         if (universalImg) {
           setSourceImage(`data:${universalImg.image.mimeType};base64,${universalImg.base64}`);
         } else {
           // Fallback: пробуем загрузить из старого fileStorage
           const { loadFileData } = await import('@/lib/fileStorage');
-          const base64Data = await loadFileData(sourceImageId);
+          const base64Data = await loadFileData(imageId);
           
           if (base64Data) {
             // Определяем MIME type (по умолчанию image/png)
@@ -398,7 +398,7 @@ function ArtifactAnnotatedImage({ artifact, onAnnotationClick }: Props) {
             
             setSourceImage(`data:${mimeType};base64,${base64Data}`);
           } else {
-            console.warn('Source image not found:', sourceImageId);
+            console.warn('Source image not found:', imageId);
           }
         }
       } catch (err) {
@@ -410,6 +410,10 @@ function ArtifactAnnotatedImage({ artifact, onAnnotationClick }: Props) {
 
     loadSourceImage();
   }, [sourceImageId]);
+
+  if (artifact.data.kind !== 'annotations') return null;
+
+  const { sourceImageId: annotatedSourceImageId, annotations } = artifact.data;
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
@@ -482,7 +486,7 @@ function ArtifactAnnotatedImage({ artifact, onAnnotationClick }: Props) {
                   
                   const annotationRef: import('@/types').AnnotationReference = {
                     id: Math.random().toString(36).slice(2),
-                    imageId: sourceImageId,
+                    imageId: annotatedSourceImageId,
                     imageName: artifact.filename || artifact.label || 'analyzed-image.png',
                     annotation: ann,
                     color: annotationColors[ann.type] || '#60A5FA'
@@ -510,7 +514,7 @@ function ArtifactAnnotatedImage({ artifact, onAnnotationClick }: Props) {
         <ImageLightbox
           src={sourceImage}
           alt={artifact.label || 'Annotated image'}
-          imageId={sourceImageId}
+          imageId={annotatedSourceImageId}
           fileName={artifact.filename || artifact.label || 'analyzed-image.png'}
           annotations={annotations}
           onAnnotationClick={(ann) => {
@@ -527,7 +531,7 @@ function ArtifactAnnotatedImage({ artifact, onAnnotationClick }: Props) {
               
               const annotationRef: import('@/types').AnnotationReference = {
                 id: Math.random().toString(36).slice(2),
-                imageId: sourceImageId,
+                imageId: annotatedSourceImageId,
                 imageName: artifact.filename || artifact.label || 'analyzed-image.png',
                 annotation: ann,
                 color: annotationColors[ann.type] || '#60A5FA'
@@ -652,9 +656,10 @@ function ArtifactCode({ artifact }: Props) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ArtifactText({ artifact }: Props) {
+  const [expanded, setExpanded] = useState(false);
+
   if (artifact.data.kind !== 'text') return null;
 
-  const [expanded, setExpanded] = useState(false);
   const content = artifact.data.content;
   const lines = content.split('\n');
   const isLong = lines.length > 10 || content.length > 500;
