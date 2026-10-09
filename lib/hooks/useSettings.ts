@@ -17,16 +17,8 @@ import {
   loadSystemPrompts,
   saveSystemPrompts,
   createSystemPrompt,
-  loadGhostNudgeEnabled, saveGhostNudgeEnabled,
-  loadGhostNudgeMaxRetries, saveGhostNudgeMaxRetries,
   loadMaxUploadSizeMB, saveMaxUploadSizeMB, DEFAULT_MAX_UPLOAD_SIZE_MB,
 } from '@/lib/storage';
-import {
-  loadRPGFeedbackSettings,
-  saveRPGFeedbackSettings,
-  DEFAULT_RPG_FEEDBACK_SETTINGS,
-} from '@/lib/rpg-feedback-settings';
-import { loadRPGProfile, saveRPGProfile } from '@/lib/rpg-style-profile';
 import { DEFAULT_DEEPTHINK_SYSTEM_PROMPT } from '@/lib/gemini';
 
 /**
@@ -60,13 +52,7 @@ export function useSettings() {
   const [memoryEnabled, setMemoryEnabled] = useState<boolean>(true);
   const [maxToolRounds, setMaxToolRounds] = useState<number>(20);
   const [maxMemoryCalls, setMaxMemoryCalls] = useState<number>(100);
-  const [ghostNudgeEnabled, setGhostNudgeEnabled] = useState<boolean>(true);
-  const [ghostNudgeMaxRetries, setGhostNudgeMaxRetries] = useState<number>(3);
   const [maxUploadSizeMB, setMaxUploadSizeMBState] = useState<number>(DEFAULT_MAX_UPLOAD_SIZE_MB);
-  
-  // RPG Feedback Settings
-  const [rpgFeedbackEnabled, setRPGFeedbackEnabled] = useState<boolean>(DEFAULT_RPG_FEEDBACK_SETTINGS.enabled);
-  const [rpgShowInlineFeedback, setRPGShowInlineFeedback] = useState<boolean>(DEFAULT_RPG_FEEDBACK_SETTINGS.showInlineFeedback);
 
   // Load from localStorage
   useEffect(() => {
@@ -122,10 +108,7 @@ export function useSettings() {
       const savedMaxToolRounds = localStorage.getItem('gemini_max_tool_rounds');
       const savedMaxMemoryCalls = localStorage.getItem('gemini_max_memory_calls');
       const savedDeepThinkPrompt = loadDeepThinkSystemPrompt();
-      const savedGhostNudgeEnabled = loadGhostNudgeEnabled();
-      const savedGhostNudgeMaxRetries = loadGhostNudgeMaxRetries();
       const savedMaxUploadSizeMB = loadMaxUploadSizeMB();
-      const savedRPGFeedbackSettings = loadRPGFeedbackSettings();
 
       if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
       if (savedTemp) setTemperature(parseFloat(savedTemp));
@@ -141,11 +124,7 @@ export function useSettings() {
       if (savedMemoryEnabled !== null) setMemoryEnabled(savedMemoryEnabled === 'true');
       if (savedMaxToolRounds !== null) setMaxToolRounds(parseInt(savedMaxToolRounds));
       if (savedMaxMemoryCalls !== null) setMaxMemoryCalls(parseInt(savedMaxMemoryCalls));
-      setGhostNudgeEnabled(savedGhostNudgeEnabled);
-      setGhostNudgeMaxRetries(savedGhostNudgeMaxRetries);
       setMaxUploadSizeMBState(savedMaxUploadSizeMB);
-      setRPGFeedbackEnabled(savedRPGFeedbackSettings.enabled);
-      setRPGShowInlineFeedback(savedRPGFeedbackSettings.showInlineFeedback);
     };
     loadData();
   }, []);
@@ -178,20 +157,7 @@ export function useSettings() {
   useEffect(() => { localStorage.setItem('gemini_memory_enabled', memoryEnabled.toString()); }, [memoryEnabled]);
   useEffect(() => { localStorage.setItem('gemini_max_tool_rounds', maxToolRounds.toString()); }, [maxToolRounds]);
   useEffect(() => { localStorage.setItem('gemini_max_memory_calls', maxMemoryCalls.toString()); }, [maxMemoryCalls]);
-  useEffect(() => { saveGhostNudgeEnabled(ghostNudgeEnabled); }, [ghostNudgeEnabled]);
-  useEffect(() => { saveGhostNudgeMaxRetries(ghostNudgeMaxRetries); }, [ghostNudgeMaxRetries]);
   useEffect(() => { saveMaxUploadSizeMB(maxUploadSizeMB); }, [maxUploadSizeMB]);
-  
-  // RPG Feedback Settings
-  useEffect(() => {
-    const settings = loadRPGFeedbackSettings();
-    saveRPGFeedbackSettings({ ...settings, enabled: rpgFeedbackEnabled });
-  }, [rpgFeedbackEnabled]);
-  
-  useEffect(() => {
-    const settings = loadRPGFeedbackSettings();
-    saveRPGFeedbackSettings({ ...settings, showInlineFeedback: rpgShowInlineFeedback });
-  }, [rpgShowInlineFeedback]);
   useEffect(() => { localStorage.setItem('gemini_deepthink_provider_id', deepThinkProviderId); }, [deepThinkProviderId]);
   useEffect(() => { localStorage.setItem('gemini_deepthink_model_id', deepThinkModelId); }, [deepThinkModelId]);
   useEffect(() => { localStorage.setItem('gemini_deepthink_api_key_index', deepThinkApiKeyIndex.toString()); }, [deepThinkApiKeyIndex]);
@@ -327,21 +293,8 @@ export function useSettings() {
     setMaxToolRounds,
     maxMemoryCalls,
     setMaxMemoryCalls,
-    ghostNudgeEnabled,
-    setGhostNudgeEnabled,
-    ghostNudgeMaxRetries,
-    setGhostNudgeMaxRetries,
     maxUploadSizeMB,
     setMaxUploadSizeMB: setMaxUploadSizeMBState,
-    
-    // RPG Feedback Settings
-    rpgFeedbackEnabled,
-    setRPGFeedbackEnabled,
-    rpgShowInlineFeedback,
-    setRPGShowInlineFeedback,
-    resetRPGProfile: () => {
-      saveRPGProfile({ entries: [], totalLikes: 0, totalDislikes: 0 });
-    },
 
     // Model handlers
     onModelsLoad: handleModelsLoad,

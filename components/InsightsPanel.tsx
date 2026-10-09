@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { X, BarChart2, ThumbsUp, ThumbsDown, RefreshCw, ChevronUp, ChevronDown } from 'lucide-react';
+import { X, BarChart2, ChevronUp, ChevronDown } from 'lucide-react';
 import type { Message } from '@/types';
 import { getMemories } from '@/lib/memory-store';
 import type { Memory, MemoryScope } from '@/lib/memory-store';
@@ -13,7 +13,7 @@ interface InsightsPanelProps {
   onClose: () => void;
 }
 
-type TabType = 'memory' | 'deepthink' | 'session';
+type TabType = 'memory' | 'deepthink';
 
 const CATEGORY_COLORS: Record<string, string> = {
   identity: '#a855f7',
@@ -137,16 +137,6 @@ export default function InsightsPanel({ messages, chatId, onClose }: InsightsPan
           >
             DeepThink
           </button>
-          <button
-            onClick={() => setActiveTab('session')}
-            className={`text-[11px] px-3 py-1.5 rounded-md transition-colors ${
-              activeTab === 'session'
-                ? 'bg-[var(--surface-3)] text-[var(--text-primary)]'
-                : 'text-[var(--text-dim)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            Session
-          </button>
         </div>
 
         <button
@@ -172,10 +162,6 @@ export default function InsightsPanel({ messages, chatId, onClose }: InsightsPan
 
         {activeTab === 'deepthink' && (
           <DeepThinkTab analyses={deepThinkAnalyses} />
-        )}
-
-        {activeTab === 'session' && (
-          <SessionTab messages={messages} />
         )}
       </div>
     </div>
@@ -543,129 +529,6 @@ function PipelineArrow() {
     <div className="flex items-center justify-center py-1 bg-[var(--surface-3)]">
       <div className="w-px h-3 bg-[var(--border)]" />
       <span className="text-[9px] text-[var(--text-dim)] mx-2 absolute">↓</span>
-    </div>
-  );
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Session Tab
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-interface SessionTabProps {
-  messages: Message[];
-}
-
-function SessionTab({ messages }: SessionTabProps) {
-  // Собираем model-сообщения с событиями
-  const modelMessages = messages
-    .filter(m => m.role === 'model' && !m.isStreaming) // включаем все model сообщения, даже скрытые
-    .map((m) => ({
-      id: m.id,
-      index: messages.indexOf(m) + 1,
-      excerpt: getTextFromParts(m.parts).slice(0, 70),
-      feedback: m.feedback,
-      regenerationCount: 0, // TODO: добавить interactionMeta в Message
-      regenerationReasons: [],
-      isHidden: (m.kind as string) === 'regenerated_hidden', // помечаем скрытые для визуализации
-    }));
-
-  const hasAnyEvents = modelMessages.some(
-    m => m.feedback || m.regenerationCount > 0
-  );
-
-  // Summary stats
-  const totalLikes = modelMessages.filter(m => m.feedback?.rating === 'like').length;
-  const totalDislikes = modelMessages.filter(m => m.feedback?.rating === 'dislike').length;
-  const totalRegens = modelMessages.reduce((s, m) => s + m.regenerationCount, 0);
-  const mostRegenMsg = [...modelMessages].sort((a, b) => b.regenerationCount - a.regenerationCount)[0];
-
-  if (!hasAnyEvents) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full p-8 text-center gap-3">
-        <div className="text-3xl">💬</div>
-        <div className="text-sm text-[var(--text-primary)]">Нет данных</div>
-        <div className="text-xs text-[var(--text-dim)] max-w-[200px]">
-          Ставь лайки и дизлайки на ответы — они появятся здесь
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col h-full overflow-y-auto">
-      {/* Summary */}
-      <div className="px-4 pt-4 pb-3">
-        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-4 py-3">
-          <div className="flex items-center gap-4 flex-wrap text-[11px]">
-            {totalLikes > 0 && (
-              <span className="flex items-center gap-1 text-[var(--gem-teal)]">
-                <ThumbsUp size={10} /> {totalLikes}
-              </span>
-            )}
-            {totalDislikes > 0 && (
-              <span className="flex items-center gap-1 text-red-400">
-                <ThumbsDown size={10} /> {totalDislikes}
-              </span>
-            )}
-            {totalRegens > 0 && (
-              <span className="flex items-center gap-1 text-purple-400">
-                <RefreshCw size={10} /> {totalRegens} рег.
-              </span>
-            )}
-          </div>
-          {mostRegenMsg && mostRegenMsg.regenerationCount > 1 && (
-            <p className="text-[10px] text-[var(--text-dim)] mt-2">
-              Проблемный: сообщение #{mostRegenMsg.index} ({mostRegenMsg.regenerationCount} регенерации)
-            </p>
-          )}
-        </div>
-      </div>
-
-      {/* Timeline */}
-      <div className="px-4 pb-4 space-y-2">
-        {modelMessages.map(msg => {
-          const hasEvents = msg.feedback || msg.regenerationCount > 0;
-          if (!hasEvents) return null;
-
-          return (
-            <div key={msg.id} className="space-y-1.5">
-              {/* Сообщение */}
-              <div className="rounded-lg bg-[var(--surface-2)] border border-[var(--border)] px-3 py-2">
-                <div className="text-[10px] text-[var(--text-dim)] mb-1">
-                  #{msg.index}
-                </div>
-                {msg.excerpt && (
-                  <p className="text-[11px] text-[var(--text-dim)] leading-relaxed line-clamp-2">
-                    {msg.excerpt}...
-                  </p>
-                )}
-              </div>
-
-              {/* Events */}
-              <div className="flex items-center gap-1.5 flex-wrap pl-1">
-                {msg.feedback?.rating === 'like' && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-[var(--gem-teal)]/10 text-[var(--gem-teal)] border border-[var(--gem-teal)]/20">
-                    <ThumbsUp size={8} />
-                    {msg.feedback.comment ? `"${msg.feedback.comment.slice(0, 30)}"` : 'лайк'}
-                  </span>
-                )}
-                {msg.feedback?.rating === 'dislike' && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-red-500/10 text-red-400 border border-red-500/20">
-                    <ThumbsDown size={8} />
-                    {msg.feedback.comment ? `"${msg.feedback.comment.slice(0, 30)}"` : 'дизлайк'}
-                  </span>
-                )}
-                {msg.regenerationCount > 0 && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/20">
-                    <RefreshCw size={8} />
-                    ×{msg.regenerationCount}
-                  </span>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }

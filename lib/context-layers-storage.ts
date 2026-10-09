@@ -9,7 +9,6 @@ export type ContextLayerId =
   | 'memory_facts'
   | 'user_system'
   | 'skills'
-  | 'rpg_style'
   | 'image_context'
   | 'deepthink_enhanced';
 
@@ -47,7 +46,6 @@ export const DEFAULT_CONTEXT_LAYERS_CONFIG: ContextLayersConfig = {
     memory_facts: defaultLayer(true),
     user_system: defaultLayer(true),
     skills: defaultLayer(true),
-    rpg_style: defaultLayer(true),
     image_context: defaultLayer(true),
     deepthink_enhanced: defaultLayer(true),
   },
@@ -65,12 +63,18 @@ export function loadContextLayersConfig(): ContextLayersConfig {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_CONTEXT_LAYERS_CONFIG;
     const parsed = JSON.parse(raw);
+    // Отфильтровываем неизвестные/удалённые слои (например, rpg_style из старых конфигов)
+    const knownLayerIds = Object.keys(DEFAULT_CONTEXT_LAYERS_CONFIG.layers) as ContextLayerId[];
+    const savedLayers: Record<string, ContextLayerState> = {};
+    for (const id of knownLayerIds) {
+      if (parsed.layers && parsed.layers[id]) savedLayers[id] = parsed.layers[id];
+    }
     return {
       ...DEFAULT_CONTEXT_LAYERS_CONFIG,
       ...parsed,
       layers: {
         ...DEFAULT_CONTEXT_LAYERS_CONFIG.layers,
-        ...(parsed.layers || {}),
+        ...savedLayers,
       },
       messageFilters: {
         ...DEFAULT_CONTEXT_LAYERS_CONFIG.messageFilters,
@@ -139,12 +143,6 @@ export const CONTEXT_LAYER_META: Record<
     description: 'Инъекции от активных скиллов',
     editable: false,
     link: 'skills',
-  },
-  rpg_style: {
-    label: 'RPG-профиль стиля',
-    description: 'Предпочтения из лайков/дизлайков',
-    editable: true,
-    link: 'rpg',
   },
   image_context: {
     label: 'Контекст изображений',

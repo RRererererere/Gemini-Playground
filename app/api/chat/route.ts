@@ -253,18 +253,23 @@ export async function POST(request: NextRequest) {
       requestBody.toolConfig = toolConfig;
     }
 
-    // Режим размышлений (актуально в основном для Gemini 2.x/3.x).
-    // По умолчанию мысли НЕ запрашиваем — это сильно ускоряет стрим и разгружает UI.
-    const wantsThoughts = includeThoughts === true;
-    if (wantsThoughts && thinkingBudget !== undefined) {
-      if (thinkingBudget === 0) {
-        requestBody.generationConfig.thinkingConfig = { thinkingBudget: 0 };
-      } else if (thinkingBudget > 0) {
-        requestBody.generationConfig.thinkingConfig = { thinkingBudget };
-      } else {
-        requestBody.generationConfig.thinkingConfig = {};
-      }
-      requestBody.generationConfig.thinkingConfig.includeThoughts = true;
+    // Режим размышлений для Gemini (Gemini 2.5, thinking-exp, 3.x).
+    // Поддерживает настройки thinkingBudget: 0 = выключить, -1 = авто/динамический, >0 = заданный бюджет токенов.
+    const isThinkingModel =
+      modelId.toLowerCase().includes('thinking') ||
+      modelId.toLowerCase().includes('2.5') ||
+      modelId.toLowerCase().includes('3.');
+
+    if (isThinkingModel) {
+      const budget = typeof thinkingBudget === 'number' ? thinkingBudget : -1;
+      requestBody.generationConfig.thinkingConfig = {
+        thinkingBudget: budget,
+      };
+    } else if (includeThoughts === true && thinkingBudget !== undefined) {
+      const budget = typeof thinkingBudget === 'number' ? thinkingBudget : -1;
+      requestBody.generationConfig.thinkingConfig = {
+        thinkingBudget: budget,
+      };
     }
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}&alt=sse`;

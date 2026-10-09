@@ -218,12 +218,29 @@ function base64ToBlob(base64: string, mimeType: string): Blob {
 const CHATS_KEY = 'gemini_saved_chats';
 const ACTIVE_CHAT_KEY = 'gemini_active_chat_id';
 
+// Канонический порядок списка чатов: новые сверху (по updatedAt).
+// Используется и при загрузке, и при сохранении — порядок в storage и в UI всегда совпадает.
+function sortChatsByRecency(chats: SavedChat[]): SavedChat[] {
+  return [...chats].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+}
+
+// Очередь мутаций хранилища чатов: save/delete выполняют read-modify-write
+// одного ключа localStorage. Без сериализации параллельные вызовы (например,
+// удаление родителя + всех веток, или автосейв во время удаления) теряют
+// изменения — последний записавший перезатирает результат предыдущего.
+let chatMutationQueue: Promise<unknown> = Promise.resolve();
+function enqueueChatMutation<T>(task: () => Promise<T>): Promise<T> {
+  const run = chatMutationQueue.then(task, task);
+  chatMutationQueue = run.then(() => undefined, () => undefined);
+  return run;
+}
+
 export async function loadSavedChats(): Promise<SavedChat[]> {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(CHATS_KEY);
     if (!raw) return [];
-    const chats = JSON.parse(raw) as SavedChat[];
+    const chats = sortChatsByRecency(JSON.parse(raw) as SavedChat[]);
     
     // Restore file data from IndexedDB
     const restored = await Promise.all(
@@ -279,40 +296,46 @@ export function clearStorageWarning() {
 
 export async function saveChatToStorage(chat: SavedChat): Promise<void> {
   if (typeof window === 'undefined') return;
-  
-  // Strip file data and save to IndexedDB
-  const strippedMessages = await stripFileData(chat.messages);
-  const strippedChat = { ...chat, messages: strippedMessages };
-  
-  const chats = await loadSavedChatsSync(); // Load without file data
-  const idx = chats.findIndex(c => c.id === chat.id);
-  if (idx >= 0) {
-    chats[idx] = strippedChat;
-  } else {
-    chats.unshift(strippedChat);
-  }
-  
-  const result = trySetItem(CHATS_KEY, JSON.stringify(chats));
-  if (result === 'ok') return;
+  await enqueueChatMutation(async () => {
+    // Strip file data and save to IndexedDB
+    const strippedMessages = await stripFileData(chat.messages);
+    const strippedChat = { ...chat, messages: strippedMessages };
 
-  // Стратегия 1: обрезать сообщения в старых чатах (оставить только заголовок+метадату)
-  const evicted1 = evictOldMessages(chats, chat.id);
-  if (trySetItem(CHATS_KEY, JSON.stringify(evicted1)) === 'ok') return;
+    const chats = loadSavedChatsSync(); // Load without file data
+    const idx = chats.findIndex(c => c.id === chat.id);
+    if (idx >= 0) {
+      // Сохраняем исходный createdAt, даже если вызывающий код перезаписал его
+      strippedChat.createdAt = chats[idx].createdAt || strippedChat.createdAt;
+      chats[idx] = strippedChat;
+    } else {
+      chats.unshift(strippedChat);
+    }
 
-  // Стратегия 2: удалить самые старые чаты полностью
-  const evicted2 = evictOldChats(evicted1, chat.id, 5);
-  if (trySetItem(CHATS_KEY, JSON.stringify(evicted2)) === 'ok') return;
+    // Канонический порядок: обновлённый чат всплывает наверх
+    const ordered = sortChatsByRecency(chats);
 
-  // Стратегия 3: сохранить только текущий чат
-  if (trySetItem(CHATS_KEY, JSON.stringify([strippedChat])) === 'ok') {
-    setStorageWarning('Хранилище переполнено. Старые чаты были удалены для сохранения текущего.');
-    return;
-  }
+    const result = trySetItem(CHATS_KEY, JSON.stringify(ordered));
+    if (result === 'ok') return;
 
-  // Стратегия 4: сохранить только метадату (без messages)
-  const skeleton = { ...strippedChat, messages: [] };
-  trySetItem(CHATS_KEY, JSON.stringify([skeleton]));
-  setStorageWarning('critical');
+    // Стратегия 1: обрезать сообщения в старых чатах (оставить только заголовок+метадату)
+    const evicted1 = evictOldMessages(ordered, chat.id);
+    if (trySetItem(CHATS_KEY, JSON.stringify(evicted1)) === 'ok') return;
+
+    // Стратегия 2: удалить самые старые чаты полностью
+    const evicted2 = evictOldChats(evicted1, chat.id, 5);
+    if (trySetItem(CHATS_KEY, JSON.stringify(evicted2)) === 'ok') return;
+
+    // Стратегия 3: сохранить только текущий чат
+    if (trySetItem(CHATS_KEY, JSON.stringify([strippedChat])) === 'ok') {
+      setStorageWarning('Хранилище переполнено. Старые чаты были удалены для сохранения текущего.');
+      return;
+    }
+
+    // Стратегия 4: сохранить только метадату (без messages)
+    const skeleton = { ...strippedChat, messages: [] };
+    trySetItem(CHATS_KEY, JSON.stringify([skeleton]));
+    setStorageWarning('critical');
+  });
 }
 
 // Sync version without file data restoration (for internal use)
@@ -329,20 +352,38 @@ function loadSavedChatsSync(): SavedChat[] {
 
 export async function deleteChatFromStorage(id: string): Promise<void> {
   if (typeof window === 'undefined') return;
-  const chats = loadSavedChatsSync();
-  const chat = chats.find(c => c.id === id);
-  
-  // Delete associated files from IndexedDB
-  if (chat) {
-    const fileIds = extractFileIds(chat.messages);
-    if (fileIds.length > 0) {
-      const { deleteFileData } = await import('./fileStorage');
-      await Promise.all(fileIds.map(fid => deleteFileData(fid)));
+  await enqueueChatMutation(async () => {
+    const chats = loadSavedChatsSync();
+    const chat = chats.find(c => c.id === id);
+
+    // Delete associated files from IndexedDB
+    if (chat) {
+      const fileIds = extractFileIds(chat.messages);
+      if (fileIds.length > 0) {
+        const { deleteFileData } = await import('./fileStorage');
+        await Promise.all(fileIds.map(fid => deleteFileData(fid)));
+      }
     }
-  }
-  
-  const filtered = chats.filter(c => c.id !== id);
-  trySetItem(CHATS_KEY, JSON.stringify(filtered));
+
+    const filtered = chats.filter(c => c.id !== id);
+    trySetItem(CHATS_KEY, JSON.stringify(filtered));
+  });
+}
+
+// Переименование чата: обновляет только title в сыром хранилище,
+// не трогая messages/файлы — нулевой риск потери данных.
+// Проходит через очередь мутаций, чтобы не конфликтовать с save/delete.
+export async function renameChatInStorage(id: string, title: string): Promise<void> {
+  if (typeof window === 'undefined') return;
+  const trimmed = title.trim();
+  if (!trimmed) return;
+  await enqueueChatMutation(async () => {
+    const chats = loadSavedChatsSync();
+    const idx = chats.findIndex(c => c.id === id);
+    if (idx === -1) return;
+    chats[idx] = { ...chats[idx], title: trimmed, updatedAt: Date.now() };
+    trySetItem(CHATS_KEY, JSON.stringify(sortChatsByRecency(chats)));
+  });
 }
 
 export function getActiveChatId(): string | null {
@@ -677,17 +718,10 @@ export async function exportAllSettings(): Promise<void> {
     // ↓ НОВЫЕ ПОЛЯ для Memory
     memories: exportAllMemories(),
 
-    // ↓ НОВЫЕ ПОЛЯ для Agents
-    agents: localStorage.getItem('gemini_agents') || '[]',
-
     // ↓ НОВЫЕ ПОЛЯ для Skills
     skillPrompts: localStorage.getItem('gemini_skill_prompts') || '{}',
     deepThinkPrompt: localStorage.getItem('gemini_deepthink_system_prompt') || '',
 
-    // ↓ НОВЫЕ ПОЛЯ для Ghost Nudge Protocol
-    ghostNudgeEnabled: localStorage.getItem(GNP_ENABLED_KEY) || String(GNP_ENABLED_DEFAULT),
-    ghostNudgeMaxRetries: localStorage.getItem(GNP_MAX_RETRIES_KEY) || String(GNP_MAX_RETRIES_DEFAULT),
-    
     // ↓ НОВЫЕ ПОЛЯ для Max Upload Size
     maxUploadSizeMB: localStorage.getItem(MAX_UPLOAD_SIZE_KEY) || String(DEFAULT_MAX_UPLOAD_SIZE_MB),
   };
@@ -743,16 +777,9 @@ export async function importAllSettings(file: File): Promise<void> {
           // ↓ НОВЫЕ ПОЛЯ для Memory
           if (raw.memories) importAllMemories(raw.memories);
           
-          // ↓ НОВЫЕ ПОЛЯ для Agents
-          if (raw.agents) localStorage.setItem('gemini_agents', raw.agents);
-          
           // ↓ НОВЫЕ ПОЛЯ для Skills
           if (raw.skillPrompts) localStorage.setItem('gemini_skill_prompts', raw.skillPrompts);
           if (raw.deepThinkPrompt) localStorage.setItem('gemini_deepthink_system_prompt', raw.deepThinkPrompt);
-
-          // ↓ НОВЫЕ ПОЛЯ для Ghost Nudge Protocol
-          if (raw.ghostNudgeEnabled !== undefined) localStorage.setItem(GNP_ENABLED_KEY, String(raw.ghostNudgeEnabled));
-          if (raw.ghostNudgeMaxRetries !== undefined) localStorage.setItem(GNP_MAX_RETRIES_KEY, String(raw.ghostNudgeMaxRetries));
 
           // ↓ НОВЫЕ ПОЛЯ для Max Upload Size
           if (raw.maxUploadSizeMB !== undefined) trySetItem(MAX_UPLOAD_SIZE_KEY, String(raw.maxUploadSizeMB));
@@ -774,41 +801,6 @@ export async function importAllSettings(file: File): Promise<void> {
 // ====================== SKILL PROMPTS ======================
 
 const SKILL_PROMPTS_KEY = 'gemini_skill_prompts';
-
-// Ghost Nudge Protocol settings keys
-const GNP_ENABLED_KEY = 'gemini_ghost_nudge_enabled';
-const GNP_MAX_RETRIES_KEY = 'gemini_ghost_nudge_max_retries';
-
-// Default values
-export const GNP_ENABLED_DEFAULT = true;
-export const GNP_MAX_RETRIES_DEFAULT = 3;
-
-export function loadGhostNudgeEnabled(): boolean {
-  if (typeof window === 'undefined') return GNP_ENABLED_DEFAULT;
-  const val = localStorage.getItem(GNP_ENABLED_KEY);
-  if (val === null) return GNP_ENABLED_DEFAULT;
-  return val === 'true';
-}
-
-export function saveGhostNudgeEnabled(enabled: boolean): void {
-  if (typeof window === 'undefined') return;
-  trySetItem(GNP_ENABLED_KEY, enabled.toString());
-}
-
-export function loadGhostNudgeMaxRetries(): number {
-  if (typeof window === 'undefined') return GNP_MAX_RETRIES_DEFAULT;
-  const val = localStorage.getItem(GNP_MAX_RETRIES_KEY);
-  if (val === null) return GNP_MAX_RETRIES_DEFAULT;
-  const parsed = parseInt(val, 10);
-  if (isNaN(parsed) || parsed < 1 || parsed > 5) return GNP_MAX_RETRIES_DEFAULT;
-  return parsed;
-}
-
-export function saveGhostNudgeMaxRetries(max: number): void {
-  if (typeof window === 'undefined') return;
-  const clamped = Math.max(1, Math.min(5, max));
-  trySetItem(GNP_MAX_RETRIES_KEY, clamped.toString());
-}
 
 export interface SkillPromptOverride {
   skillId: string;

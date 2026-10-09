@@ -36,14 +36,9 @@ import {
   type LucideIcon,
   } from 'lucide-react';
   import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, SavedSystemPrompt, Provider, UniversalModel, ActiveModel } from '@/types';
-  import { AgentGraph } from '@/lib/agent-engine/types';
-  import { getGraphs, GRAPHS_UPDATED_EVENT } from '@/lib/agent-engine/graph-storage';
-import { addApiKey, removeApiKey, getKeyStatus, timeUntilUnblock, unblockKey } from '@/lib/apiKeyManager';
+  import { addApiKey, removeApiKey, getKeyStatus, timeUntilUnblock, unblockKey } from '@/lib/apiKeyManager';
 import { loadProviders, saveCustomProvider, removeProvider, loadModelsCache, saveModelsCache, clearModelsCache } from '@/lib/providerStorage';
 import { ProviderModal } from './AddProviderModal';
-import { getAgents, deleteAgent, AGENTS_UPDATED_EVENT } from '@/lib/agents/agent-store';
-import { getAgentConfigs, getAgentConfig, getThreads, deleteThread, AGENT_THREADS_UPDATED_EVENT } from '@/lib/agent-engine/agent-chat-store';
-import type { Agent } from '@/lib/agents/types';
 import {
   exportAllSettings,
   exportChats,
@@ -151,7 +146,6 @@ export interface SidebarSharedProps {
   onOpenMemoryModal?: () => void;
   onOpenContextInspector?: () => void;
   onOpenSkillsMarket?: () => void;
-  onOpenHFSpaces?: () => void;
   deepThinkSystemPrompt: string;
   onDeepThinkSystemPromptChange: (prompt: string) => void;
   temperature: number;
@@ -174,25 +168,11 @@ export interface SidebarSharedProps {
   onMaxToolRoundsChange: (v: number) => void;
   maxMemoryCalls: number;
   onMaxMemoryCallsChange: (v: number) => void;
-  // Ghost Nudge Protocol
-  ghostNudgeEnabled: boolean;
-  onGhostNudgeEnabledChange: (enabled: boolean) => void;
-  ghostNudgeMaxRetries: number;
-  onGhostNudgeMaxRetriesChange: (v: number) => void;
   // Max Upload Size
   maxUploadSizeMB: number;
   onMaxUploadSizeMBChange: (v: number) => void;
-  // RPG Feedback Settings
-  rpgFeedbackEnabled: boolean;
-  onRPGFeedbackEnabledChange: (enabled: boolean) => void;
-  rpgShowInlineFeedback: boolean;
-  onRPGShowInlineFeedbackChange: (enabled: boolean) => void;
-  onResetRPGProfile?: () => void;
-  onOpenRPGProfileModal?: () => void;
   onSkillsChanged?: () => void;
   onClose?: () => void;
-  // Agents
-  onOpenAgent?: (agentId: string, parentChatId?: string) => void;
 }
 
 type SettingsSectionId = 'keys' | 'model' | 'system' | 'tools' | 'manage';
@@ -301,8 +281,8 @@ export function ChatSidebar({
   onLoadChat,
   onNewChat,
   onDeleteChat,
+  onRenameChat,
   onClose,
-  onOpenAgent,
   // Arena props
   appMode,
   onAppModeChange,
@@ -311,88 +291,87 @@ export function ChatSidebar({
   onLoadArenaSession,
   onNewArenaSession,
   onDeleteArenaSession,
-  // Agent props
-  activeAgentId,
-  onSelectAgent,
-}: Pick<SidebarSharedProps, 'savedChats' | 'currentChatId' | 'onLoadChat' | 'onNewChat' | 'onDeleteChat' | 'onClose' | 'onOpenAgent'> & {
-  appMode?: 'chat' | 'arena' | 'agents';
-  onAppModeChange?: (mode: 'chat' | 'arena' | 'agents') => void;
+}: Pick<SidebarSharedProps, 'savedChats' | 'currentChatId' | 'onLoadChat' | 'onNewChat' | 'onDeleteChat' | 'onClose'> & {
+  onRenameChat?: (id: string, newTitle: string) => void;
+  appMode?: 'chat' | 'arena';
+  onAppModeChange?: (mode: 'chat' | 'arena') => void;
   arenaSessions?: Array<{ id: string; title: string; agents: any[]; messages: any[]; createdAt: number; updatedAt: number }>;
   activeArenaSessionId?: string | null;
   onLoadArenaSession?: (id: string) => void;
   onNewArenaSession?: () => void;
   onDeleteArenaSession?: (id: string) => void;
-  activeAgentId?: string | null;
-  onSelectAgent?: (id: string | null) => void;
 }) {
   const formatDate = (ts: number) => new Date(ts).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
   const isArena = appMode === 'arena';
-  const isAgentsMode = appMode === 'agents';
-  
-  // Agents state
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [agentConfigs, setAgentConfigs] = useState<any[]>([]);
-  const [agentThreads, setAgentThreads] = useState<any[]>([]);
+
   const [collapsedChats, setCollapsedChats] = useState<Set<string>>(new Set());
+  // Инлайн-переименование: id чата, находящегося в режиме редактирования
+  const [renamingChatId, setRenamingChatId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
 
-  useEffect(() => {
-    const refresh = () => {
-      setAgents(getAgents());
-      setAgentConfigs(getAgentConfigs().filter(c => c.isPublished));
-      setAgentThreads(getThreads());
-    };
-    refresh();
+  const startRename = (chat: SavedChat) => {
+    setRenamingChatId(chat.id);
+    setRenameDraft(chat.title);
+  };
 
-    window.addEventListener(AGENTS_UPDATED_EVENT, refresh);
-    window.addEventListener(AGENT_THREADS_UPDATED_EVENT, refresh);
-    return () => {
-      window.removeEventListener(AGENTS_UPDATED_EVENT, refresh);
-      window.removeEventListener(AGENT_THREADS_UPDATED_EVENT, refresh);
-    };
-  }, []);  
-  // Группировка чатов по родителям и фильтрация для агентов
+  const commitRename = () => {
+    if (renamingChatId && onRenameChat) {
+      const trimmed = renameDraft.trim();
+      if (trimmed) onRenameChat(renamingChatId, trimmed);
+    }
+    setRenamingChatId(null);
+    setRenameDraft('');
+  };
+
+  // Группировка чатов по родителям
   const { parentChats, subChatsByParent, standaloneChats } = useMemo(() => {
     const parents: SavedChat[] = [];
     const subChats: Record<string, SavedChat[]> = {};
     const standalone: SavedChat[] = [];
-    
-    const filteredChats = isAgentsMode 
-      ? savedChats.filter(chat => chat.agentId === activeAgentId)
-      : savedChats;
+
+    const visibleIds = new Set(savedChats.map(c => c.id));
+    // Подчат группируется только если его родитель реально присутствует в списке
+    const hasVisibleParent = (chat: SavedChat) =>
+      !!(chat.parentChatId && visibleIds.has(chat.parentChatId));
 
     // Сначала собираем все подчаты
-    filteredChats.forEach(chat => {
-      if (chat.isSubChat && chat.parentChatId) {
-        if (!subChats[chat.parentChatId]) {
-          subChats[chat.parentChatId] = [];
+    savedChats.forEach(chat => {
+      if (chat.isSubChat && hasVisibleParent(chat)) {
+        const parentId = chat.parentChatId!;
+        if (!subChats[parentId]) {
+          subChats[parentId] = [];
         }
-        subChats[chat.parentChatId].push(chat);
+        subChats[parentId].push(chat);
       }
     });
-    
+
     // Теперь группируем родительские и standalone чаты
-    filteredChats.forEach(chat => {
-      if (chat.isSubChat) {
+    savedChats.forEach(chat => {
+      if (chat.isSubChat && hasVisibleParent(chat)) {
         // Уже обработан выше
         return;
       }
-      
+
       if (subChats[chat.id] && subChats[chat.id].length > 0) {
         // Это родительский чат с подчатами
         parents.push(chat);
       } else {
-        // Это standalone чат
+        // Это standalone чат (включая осиротевшие подчаты — без родителя
+        // или с удалённым родителем; раньше они бесследно пропадали из списка)
         standalone.push(chat);
       }
     });
-    
-    // Сортируем подчаты по дате создания
+
+    // Канонический порядок: новые сверху (по updatedAt)
+    const byRecency = (a: SavedChat, b: SavedChat) => (b.updatedAt || 0) - (a.updatedAt || 0);
+    parents.sort(byRecency);
+    standalone.sort(byRecency);
     Object.keys(subChats).forEach(parentId => {
-      subChats[parentId].sort((a, b) => a.createdAt - b.createdAt);
+      subChats[parentId].sort(byRecency);
     });
-    
+
     return { parentChats: parents, subChatsByParent: subChats, standaloneChats: standalone };
-  }, [savedChats, isAgentsMode, activeAgentId]);
+  }, [savedChats]);
   
   // Автоматически раскрываем чат с активным подчатом
   useEffect(() => {
@@ -417,8 +396,6 @@ export function ChatSidebar({
       return next;
     });
   };
-  
-  const starredAgents = agents.filter(a => a.starred);
 
   return (
     <SidebarShell
@@ -456,53 +433,6 @@ export function ChatSidebar({
               >
                 ⚡ Arena
               </button>
-              <button
-                onClick={() => onAppModeChange('agents')}
-                className={`flex-1 text-center py-1.5 text-xs font-medium rounded-md transition-all ${
-                  isAgentsMode
-                    ? 'bg-indigo-500/15 text-indigo-400 shadow-sm'
-                    : 'text-[var(--text-dim)] hover:text-[var(--text-muted)]'
-                }`}
-              >
-                🤖 Agents
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Published Agents List — only in Agents Mode */}
-        {isAgentsMode && agentConfigs.length > 0 && (
-          <div className="px-5 pt-4 pb-2">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-indigo-400 mb-3">
-              Агенты
-            </p>
-            <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-2">
-              {agentConfigs.map(config => (
-                <button
-                  key={config.id}
-                  onClick={() => onSelectAgent?.(config.id)}
-                  className={`flex-shrink-0 flex flex-col items-center justify-center w-20 h-24 rounded-2xl border transition-all ${
-                    activeAgentId === config.id
-                      ? 'border-indigo-500 bg-indigo-500/10 shadow-[0_0_15px_rgba(99,102,241,0.2)]'
-                      : 'border-[var(--border)] bg-[var(--surface-2)] hover:bg-[var(--surface-3)]'
-                  }`}
-                >
-                  <div className={`w-10 h-10 rounded-xl mb-2 flex items-center justify-center ${
-                    activeAgentId === config.id ? 'bg-indigo-500/20' : 'bg-[var(--surface-3)]'
-                  }`} style={{ backgroundColor: activeAgentId === config.id ? undefined : config.avatarColor }}>
-                    {activeAgentId === config.id ? (
-                      <Zap size={20} className="text-indigo-400" />
-                    ) : (
-                      <span className="text-xl">{config.avatarEmoji || '🤖'}</span>
-                    )}
-                  </div>
-                  <span className={`text-[10px] font-bold truncate w-full px-2 text-center ${
-                    activeAgentId === config.id ? 'text-indigo-400' : 'text-[var(--text-muted)]'
-                  }`}>
-                    {config.name}
-                  </span>
-                </button>
-              ))}
             </div>
           </div>
         )}
@@ -529,55 +459,14 @@ export function ChatSidebar({
           </button>
         </div>
 
-        {/* Starred agents section - только в режиме чата */}
-        {!isArena && starredAgents.length > 0 && (
-          <>
-            <div className="px-5 pb-2 pt-5 flex items-center justify-between">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-400">
-                ★ Избранные
-              </p>
-              <button
-                className="text-[10px] text-[var(--text-dim)] hover:text-[var(--text-primary)] transition-colors"
-                onClick={() => {
-                  // TODO: открыть модалку со всеми агентами
-                }}
-              >
-                Все агенты →
-              </button>
-            </div>
-
-            <div className="px-3 pb-3">
-              <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-1">
-                {starredAgents.map(agent => (
-                  <button
-                    key={agent.id}
-                    onClick={() => {
-                      onOpenAgent?.(agent.id, currentChatId || undefined);
-                      onClose?.();
-                    }}
-                    className="flex-shrink-0 flex flex-col items-center justify-center w-16 h-20 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] hover:bg-[var(--surface-3)] transition-all"
-                  >
-                    <span className="text-2xl mb-1">{agent.avatarEmoji}</span>
-                    <span className="text-[10px] text-[var(--text-muted)] truncate w-full px-1 text-center">
-                      {agent.name}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-
         {/* Section header */}
         <div className="px-5 pb-3 pt-5">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--text-dim)]">
-            {isArena ? 'Сессии' : isAgentsMode ? 'Агенты' : 'История'}
+            {isArena ? 'Сессии' : 'История'}
           </p>
           <p className="mt-1 text-xs text-[var(--text-muted)]">
             {isArena
               ? (arenaSessions && arenaSessions.length > 0 ? `${arenaSessions.length} сессий` : 'Пока пусто')
-              : isAgentsMode
-              ? (agentConfigs.length > 0 ? `${agentConfigs.length} агентов` : 'Пока пусто')
               : (savedChats.length > 0 ? `${savedChats.length} сохранённых диалогов` : 'Пока пусто')
             }
           </p>
@@ -585,92 +474,7 @@ export function ChatSidebar({
 
         {/* List */}
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-          {isAgentsMode ? (
-            /* Agent configs and threads list */
-            agentConfigs.length === 0 ? (
-              <div className="mx-2 rounded-[24px] border border-dashed border-indigo-500/20 bg-[var(--surface-1)] px-5 py-8 text-center">
-                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-400">
-                  <Zap size={20} />
-                </div>
-                <p className="text-sm font-medium text-[var(--text-primary)]">Нет агентов</p>
-                <p className="mt-2 text-xs leading-relaxed text-[var(--text-muted)]">
-                  Создайте агента в редакторе графов и опубликуйте его.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {agentConfigs.map(config => {
-                  const threads = agentThreads.filter(t => t.agentConfigId === config.id);
-                  const isExpanded = !collapsedChats.has(config.id);
-                  
-                  return (
-                    <div key={config.id} className="space-y-1">
-                      {/* Agent header */}
-                      <div
-                        onClick={() => toggleCollapse(config.id)}
-                        className="group flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer hover:bg-white/[0.04] transition-all"
-                      >
-                        <div
-                          className="w-8 h-8 rounded-lg flex items-center justify-center text-lg flex-shrink-0"
-                          style={{ backgroundColor: config.avatarColor }}
-                        >
-                          {config.avatarEmoji}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-[var(--text-primary)] truncate">{config.name}</p>
-                          <p className="text-[10px] text-[var(--text-dim)]">{threads.length} чатов</p>
-                        </div>
-                        <ChevronDown
-                          size={14}
-                          className={`text-[var(--text-dim)] transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-                        />
-                      </div>
-                      
-                      {/* Threads list */}
-                      {isExpanded && threads.length > 0 && (
-                        <div className="ml-6 space-y-0.5">
-                          {[...threads].reverse().map(thread => (
-                            <div
-                              key={thread.id}
-                              onClick={() => {
-                                window.dispatchEvent(new CustomEvent('agent-chat-load-thread', { 
-                                  detail: { 
-                                    threadId: thread.id,
-                                    agentConfigId: config.id 
-                                  } 
-                                }));
-                                onClose?.();
-                              }}
-                              className="group flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer hover:bg-white/[0.04] text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-all"
-                            >
-                              <MessageSquare size={12} className="flex-shrink-0" />
-                              <div className="min-w-0 flex-1">
-                                <p className="text-xs truncate">{thread.title}</p>
-                                <p className="text-[10px] text-[var(--text-dim)]">
-                                  {thread.messages.length} сообщ. • {formatDate(thread.updatedAt)}
-                                </p>
-                              </div>
-                              <button
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  deleteThread(thread.id);
-                                  setAgentThreads(getThreads());
-                                }}
-                                className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-[var(--text-dim)] opacity-0 hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100 transition-all"
-                                title="Удалить чат"
-                              >
-                                <Trash2 size={10} />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )
-          ) : isArena ? (
+          {isArena ? (
             /* Arena sessions list */
             (!arenaSessions || arenaSessions.length === 0) ? (
               <div className="mx-2 rounded-[24px] border border-dashed border-amber-400/20 bg-[var(--surface-1)] px-5 py-8 text-center">
@@ -684,7 +488,7 @@ export function ChatSidebar({
               </div>
             ) : (
               <div className="space-y-1.5">
-                {[...arenaSessions].reverse().map(session => {
+                {[...arenaSessions].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).map(session => {
                   const isActive = session.id === activeArenaSessionId;
                   return (
                     <div
@@ -735,8 +539,8 @@ export function ChatSidebar({
               </div>
             ) : (
               <div className="space-y-1.5">
-                {/* Parent chats with subchats */}
-                {[...parentChats].reverse().map(parentChat => {
+                {/* Parent chats with subchats (уже отсортированы: новые сверху) */}
+                {parentChats.map(parentChat => {
                   const subChats = subChatsByParent[parentChat.id] || [];
                   const isCollapsed = collapsedChats.has(parentChat.id);
                   const hasActiveSubChat = subChats.some(sc => sc.id === currentChatId);
@@ -766,19 +570,51 @@ export function ChatSidebar({
                         {/* Chat info */}
                         <div
                           onClick={() => {
-                            onLoadChat(parentChat);
-                            onClose?.();
+                            if (renamingChatId !== parentChat.id) {
+                              onLoadChat(parentChat);
+                              onClose?.();
+                            }
                           }}
                           className="flex items-center gap-2.5 min-w-0 flex-1"
                         >
                           <MessageSquare size={14} className={`flex-shrink-0 ${isParentActive ? 'text-white' : 'text-[var(--text-dim)]'}`} />
                           <div className="min-w-0 flex-1">
-                            <p className="truncate text-[13px] font-semibold">{parentChat.title}</p>
+                            {renamingChatId === parentChat.id ? (
+                              <input
+                                autoFocus
+                                value={renameDraft}
+                                onChange={e => setRenameDraft(e.target.value)}
+                                onClick={e => e.stopPropagation()}
+                                onBlur={commitRename}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') commitRename();
+                                  if (e.key === 'Escape') { setRenamingChatId(null); setRenameDraft(''); }
+                                }}
+                                className="w-full rounded-md border border-[var(--border-strong)] bg-[var(--surface-3)] px-2 py-1 text-[13px] font-semibold text-[var(--text-primary)] outline-none focus:border-[var(--gem-teal)]"
+                                placeholder="Название чата"
+                              />
+                            ) : (
+                              <p className="truncate text-[13px] font-semibold">{parentChat.title}</p>
+                            )}
                             <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">
                               {parentChat.messages.length} • {formatDate(parentChat.updatedAt)}
                             </p>
                           </div>
                         </div>
+
+                        {/* Rename button */}
+                        {renamingChatId !== parentChat.id && onRenameChat && (
+                          <button
+                            onClick={event => {
+                              event.stopPropagation();
+                              startRename(parentChat);
+                            }}
+                            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-100 transition-all hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)] sm:opacity-0 sm:group-hover:opacity-100"
+                            title="Переименовать"
+                          >
+                            <Edit2 size={12} />
+                          </button>
+                        )}
 
                         {/* Delete button */}
                         <button
@@ -795,7 +631,7 @@ export function ChatSidebar({
                               onDeleteChat(parentChat.id);
                             }
                           }}
-                          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] group-hover:opacity-100"
+                          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-100 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] sm:opacity-0 sm:group-hover:opacity-100"
                           title="Удалить чат"
                         >
                           <Trash2 size={12} />
@@ -808,7 +644,6 @@ export function ChatSidebar({
                           {subChats.map((subChat, idx) => {
                             const isActive = subChat.id === currentChatId;
                             const isLast = idx === subChats.length - 1;
-                            const agent = subChat.agentId ? agents.find(a => a.id === subChat.agentId) : null;
 
                             return (
                               <div
@@ -825,21 +660,55 @@ export function ChatSidebar({
                               >
                                 {/* Tree line */}
                                 <span className="absolute -left-2 top-1/2 w-2 h-px bg-[var(--border)]" />
-                                
+
                                 {/* Icon */}
-                                {agent ? (
-                                  <span className="flex-shrink-0 text-sm">{agent.avatarEmoji}</span>
-                                ) : (
-                                  <MessageSquare size={12} className={`flex-shrink-0 ${isActive ? 'text-white' : 'text-[var(--text-dim)]'}`} />
-                                )}
+                                <MessageSquare size={12} className={`flex-shrink-0 ${isActive ? 'text-white' : 'text-[var(--text-dim)]'}`} />
 
                                 {/* Info */}
-                                <div className="min-w-0 flex-1">
-                                  <p className="truncate text-[12px] font-medium">{subChat.title}</p>
+                                <div
+                                  onClick={() => {
+                                    if (renamingChatId !== subChat.id) {
+                                      onLoadChat(subChat);
+                                      onClose?.();
+                                    }
+                                  }}
+                                  className="min-w-0 flex-1"
+                                >
+                                  {renamingChatId === subChat.id ? (
+                                    <input
+                                      autoFocus
+                                      value={renameDraft}
+                                      onChange={e => setRenameDraft(e.target.value)}
+                                      onClick={e => e.stopPropagation()}
+                                      onBlur={commitRename}
+                                      onKeyDown={e => {
+                                        if (e.key === 'Enter') commitRename();
+                                        if (e.key === 'Escape') { setRenamingChatId(null); setRenameDraft(''); }
+                                      }}
+                                      className="w-full rounded-md border border-[var(--border-strong)] bg-[var(--surface-3)] px-2 py-0.5 text-[12px] font-medium text-[var(--text-primary)] outline-none focus:border-[var(--gem-teal)]"
+                                      placeholder="Название подчата"
+                                    />
+                                  ) : (
+                                    <p className="truncate text-[12px] font-medium">{subChat.title}</p>
+                                  )}
                                   <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">
                                     {subChat.messages.length} • {formatDate(subChat.updatedAt)}
                                   </p>
                                 </div>
+
+                                {/* Rename button */}
+                                {renamingChatId !== subChat.id && onRenameChat && (
+                                  <button
+                                    onClick={event => {
+                                      event.stopPropagation();
+                                      startRename(subChat);
+                                    }}
+                                    className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-100 transition-all hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)] sm:opacity-0 sm:group-hover:opacity-100"
+                                    title="Переименовать подчат"
+                                  >
+                                    <Edit2 size={10} />
+                                  </button>
+                                )}
 
                                 {/* Delete button */}
                                 <button
@@ -847,7 +716,7 @@ export function ChatSidebar({
                                     event.stopPropagation();
                                     onDeleteChat(subChat.id);
                                   }}
-                                  className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] group-hover:opacity-100"
+                                  className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-100 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] sm:opacity-0 sm:group-hover:opacity-100"
                                   title="Удалить подчат"
                                 >
                                   <Trash2 size={10} />
@@ -861,16 +730,18 @@ export function ChatSidebar({
                   );
                 })}
 
-                {/* Standalone chats (no subchats) */}
-                {[...standaloneChats].reverse().map(chat => {
+                {/* Standalone chats (no subchats) — новые сверху */}
+                {standaloneChats.map(chat => {
                   const isActive = chat.id === currentChatId;
 
                   return (
                     <div
                       key={chat.id}
                       onClick={() => {
-                        onLoadChat(chat);
-                        onClose?.();
+                        if (renamingChatId !== chat.id) {
+                          onLoadChat(chat);
+                          onClose?.();
+                        }
                       }}
                       className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 cursor-pointer transition-all ${
                         isActive
@@ -880,17 +751,45 @@ export function ChatSidebar({
                     >
                       <MessageSquare size={14} className={`flex-shrink-0 ${isActive ? 'text-white' : 'text-[var(--text-dim)]'}`} />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-[13px] font-medium">{chat.title}</p>
+                        {renamingChatId === chat.id ? (
+                          <input
+                            autoFocus
+                            value={renameDraft}
+                            onChange={e => setRenameDraft(e.target.value)}
+                            onClick={e => e.stopPropagation()}
+                            onBlur={commitRename}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') commitRename();
+                              if (e.key === 'Escape') { setRenamingChatId(null); setRenameDraft(''); }
+                            }}
+                            className="w-full rounded-md border border-[var(--border-strong)] bg-[var(--surface-3)] px-2 py-1 text-[13px] font-medium text-[var(--text-primary)] outline-none focus:border-[var(--gem-teal)]"
+                            placeholder="Название чата"
+                          />
+                        ) : (
+                          <p className="truncate text-[13px] font-medium">{chat.title}</p>
+                        )}
                         <p className="mt-0.5 text-[10px] text-[var(--text-dim)]">
                           {chat.messages.length} • {formatDate(chat.updatedAt)}
                         </p>
                       </div>
+                      {renamingChatId !== chat.id && onRenameChat && (
+                        <button
+                          onClick={event => {
+                            event.stopPropagation();
+                            startRename(chat);
+                          }}
+                          className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-100 transition-all hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)] sm:opacity-0 sm:group-hover:opacity-100"
+                          title="Переименовать"
+                        >
+                          <Edit2 size={12} />
+                        </button>
+                      )}
                       <button
                         onClick={event => {
                           event.stopPropagation();
                           onDeleteChat(chat.id);
                         }}
-                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] group-hover:opacity-100"
+                        className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--text-dim)] opacity-100 transition-all hover:bg-red-500/10 hover:text-[var(--gem-red)] sm:opacity-0 sm:group-hover:opacity-100"
                         title="Удалить чат"
                       >
                         <Trash2 size={12} />
@@ -932,7 +831,6 @@ export function SettingsSidebar({
   onOpenMemoryModal,
   onOpenContextInspector,
   onOpenSkillsMarket,
-  onOpenHFSpaces,
   deepThinkSystemPrompt,
   onDeepThinkSystemPromptChange,
   temperature,
@@ -951,18 +849,8 @@ export function SettingsSidebar({
   onMaxToolRoundsChange,
   maxMemoryCalls,
   onMaxMemoryCallsChange,
-  ghostNudgeEnabled,
-  onGhostNudgeEnabledChange,
-  ghostNudgeMaxRetries,
-  onGhostNudgeMaxRetriesChange,
   maxUploadSizeMB,
   onMaxUploadSizeMBChange,
-  rpgFeedbackEnabled,
-  onRPGFeedbackEnabledChange,
-  rpgShowInlineFeedback,
-  onRPGShowInlineFeedbackChange,
-  onResetRPGProfile,
-  onOpenRPGProfileModal,
   onSkillsChanged,
   onClose,
 }: SidebarSharedProps) {
@@ -979,6 +867,9 @@ export function SettingsSidebar({
 
   const [savedPrompts, setSavedPrompts] = useState<SavedSystemPrompt[]>([]);
   const [promptDropdownOpen, setPromptDropdownOpen] = useState(false);
+  const [selectedPromptId, setSelectedPromptId] = useState<string | null>(null);
+  const [renamingPromptId, setRenamingPromptId] = useState<string | null>(null);
+  const [renamePromptDraft, setRenamePromptDraft] = useState('');
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   
   const currentProviderKeys = apiKeys[activeProviderTab] || [];
@@ -1099,6 +990,20 @@ export function SettingsSidebar({
   const savePrompts = (prompts: SavedSystemPrompt[]) => {
     setSavedPrompts(prompts);
     saveSystemPrompts(prompts);
+  };
+
+  const startRenamePrompt = (prompt: SavedSystemPrompt) => {
+    setRenamingPromptId(prompt.id);
+    setRenamePromptDraft(prompt.name);
+  };
+
+  const commitRenamePrompt = () => {
+    if (renamingPromptId && renamePromptDraft.trim()) {
+      const trimmed = renamePromptDraft.trim();
+      savePrompts(savedPrompts.map(p => p.id === renamingPromptId ? { ...p, name: trimmed } : p));
+    }
+    setRenamingPromptId(null);
+    setRenamePromptDraft('');
   };
 
   const deleteTool = (toolId: string) => {
@@ -1769,120 +1674,16 @@ export function SettingsSidebar({
                     </div>
                   </details>
 
-                  {/* Ghost Nudge Protocol */}
-                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[13px]">👻</span>
-                        <span className="text-xs font-medium text-[var(--text-primary)]">Ghost Nudge Protocol</span>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={ghostNudgeEnabled}
-                          onChange={e => onGhostNudgeEnabledChange(e.target.checked)}
-                          className="sr-only peer"
-                        />
-                        <div className="w-9 h-5 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
-                      </label>
-                    </div>
-                    <p className="text-[10px] text-[var(--text-muted)] leading-relaxed mb-2">
-                      Gemini иногда присылает пустой ответ. GNP автоматически повторяет запрос
-                    </p>
-                    {ghostNudgeEnabled && (
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-[11px] text-[var(--text-muted)]">Попыток:</span>
-                          <div className="flex gap-1">
-                            {[1, 2, 3, 4, 5].map(n => (
-                              <button
-                                key={n}
-                                onClick={() => onGhostNudgeMaxRetriesChange(n)}
-                                className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-all ${
-                                  ghostNudgeMaxRetries === n
-                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                                    : 'bg-[var(--surface-3)] text-[var(--text-muted)] border border-transparent hover:bg-[var(--surface-4)]'
-                                }`}
-                              >
-                                {n}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* RPG Feedback Settings */}
-                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] p-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[13px]">🎭</span>
-                        <span className="text-xs font-medium text-[var(--text-primary)]">RPG Feedback</span>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={rpgFeedbackEnabled}
-                          onChange={e => onRPGFeedbackEnabledChange(e.target.checked)}
-                          className="sr-only peer"
-                        />
-                        <div className="w-9 h-5 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-purple-500"></div>
-                      </label>
-                    </div>
-                    <p className="text-[10px] text-[var(--text-muted)] leading-relaxed mb-2">
-                      Система обратной связи для RPG-чатов. Лайки/дизлайки влияют на стиль генерации
-                    </p>
-                    {rpgFeedbackEnabled && (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] text-[var(--text-muted)]">Inline виджеты</span>
-                          <label className="relative inline-flex items-center cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={rpgShowInlineFeedback}
-                              onChange={e => onRPGShowInlineFeedbackChange(e.target.checked)}
-                              className="sr-only peer"
-                            />
-                            <div className="w-7 h-4 bg-[var(--surface-4)] peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[1px] after:left-[1px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-purple-500"></div>
-                          </label>
-                        </div>
-                        <button
-                          onClick={() => onOpenRPGProfileModal?.()}
-                          className="w-full px-3 py-2 rounded-lg text-[10px] font-medium text-purple-400 bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/20 transition-all"
-                        >
-                          Управление профилем
-                        </button>
-                        {onResetRPGProfile && (
-                          <button
-                            onClick={onResetRPGProfile}
-                            className="w-full px-3 py-2 rounded-lg text-[10px] font-medium text-red-400 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-all"
-                          >
-                            Сбросить профиль
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
                   {/* Skills - встроенные инструменты */}
                   <SkillsSection onSkillsChanged={onSkillsChanged} />
 
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => onOpenSkillsMarket?.()}
-                      className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-xs text-[var(--text-muted)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
-                    >
-                      <Plus size={13} />
-                      Скиллы
-                    </button>
-                    <button
-                      onClick={() => onOpenHFSpaces?.()}
-                      className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-xs text-[var(--text-muted)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
-                    >
-                      🤗 HF Spaces
-                    </button>
-                  </div>
+                  <button
+                    onClick={() => onOpenSkillsMarket?.()}
+                    className="flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-xs text-[var(--text-muted)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+                  >
+                    <Plus size={13} />
+                    Скиллы
+                  </button>
 
                   {tools.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-5 py-6 text-center">
@@ -1974,40 +1775,91 @@ export function SettingsSidebar({
                           <p className="px-4 py-4 text-xs text-[var(--text-dim)]">Нет сохранённых промптов</p>
                         ) : (
                           <div className="max-h-56 overflow-y-auto p-2">
-                            {savedPrompts.map(prompt => (
-                              <div key={prompt.id} className="group mb-1 flex items-center rounded-xl last:mb-0 hover:bg-white/[0.05]">
-                                <button
-                                  onClick={() => {
-                                    onSystemPromptChange(prompt.content);
-                                    setPromptDropdownOpen(false);
-                                  }}
-                                  className="flex-1 truncate px-3 py-2.5 text-left text-[13px] text-[var(--text-primary)]"
+                            {savedPrompts.map(prompt => {
+                              const isSelected = selectedPromptId === prompt.id;
+                              const isRenaming = renamingPromptId === prompt.id;
+
+                              return (
+                                <div
+                                  key={prompt.id}
+                                  className={`group mb-1 flex items-center rounded-xl last:mb-0 transition-colors ${
+                                    isSelected
+                                      ? 'bg-emerald-500/10 border border-emerald-500/25'
+                                      : 'hover:bg-white/[0.05]'
+                                  }`}
                                 >
-                                  {prompt.name}
-                                </button>
-                                <div className="flex items-center gap-0.5 px-2 opacity-0 transition-opacity group-hover:opacity-100">
-                                  <button
-                                    onClick={() => {
-                                      const cloned = cloneSystemPrompt(prompt);
-                                      savePrompts([...savedPrompts, cloned]);
-                                    }}
-                                    className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-dim)] transition-colors hover:text-[var(--text-primary)]"
-                                    title="Клонировать"
-                                  >
-                                    <Copy size={11} />
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      savePrompts(savedPrompts.filter(item => item.id !== prompt.id));
-                                    }}
-                                    className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-dim)] transition-colors hover:text-[var(--gem-red)]"
-                                    title="Удалить"
-                                  >
-                                    <Trash2 size={11} />
-                                  </button>
+                                  {isRenaming ? (
+                                    <input
+                                      autoFocus
+                                      value={renamePromptDraft}
+                                      onChange={e => setRenamePromptDraft(e.target.value)}
+                                      onClick={e => e.stopPropagation()}
+                                      onBlur={commitRenamePrompt}
+                                      onKeyDown={e => {
+                                        if (e.key === 'Enter') commitRenamePrompt();
+                                        if (e.key === 'Escape') { setRenamingPromptId(null); setRenamePromptDraft(''); }
+                                      }}
+                                      className="flex-1 rounded-md border border-[var(--border-strong)] bg-[var(--surface-3)] px-2 py-1 text-[12px] text-[var(--text-primary)] outline-none focus:border-emerald-400 m-1"
+                                      placeholder="Название промпта"
+                                    />
+                                  ) : (
+                                    <button
+                                      onClick={() => {
+                                        onSystemPromptChange(prompt.content);
+                                        setSelectedPromptId(prompt.id);
+                                        setPromptDropdownOpen(false);
+                                      }}
+                                      className={`flex-1 truncate px-3 py-2.5 text-left text-[13px] ${
+                                        isSelected
+                                          ? 'text-emerald-400 font-medium'
+                                          : 'text-[var(--text-primary)]'
+                                      }`}
+                                    >
+                                      {isSelected && <span className="mr-1.5 inline-block text-[10px] text-emerald-400">●</span>}
+                                      {prompt.name}
+                                    </button>
+                                  )}
+
+                                  <div className="flex items-center gap-0.5 px-2 opacity-0 transition-opacity group-hover:opacity-100">
+                                    {!isRenaming && (
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          startRenamePrompt(prompt);
+                                        }}
+                                        className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-dim)] transition-colors hover:text-[var(--text-primary)]"
+                                        title="Переименовать"
+                                      >
+                                        <Edit2 size={11} />
+                                      </button>
+                                    )}
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        const cloned = cloneSystemPrompt(prompt);
+                                        savePrompts([...savedPrompts, cloned]);
+                                      }}
+                                      className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-dim)] transition-colors hover:text-[var(--text-primary)]"
+                                      title="Клонировать"
+                                    >
+                                      <Copy size={11} />
+                                    </button>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (!confirm(`Удалить системный промпт "${prompt.name}"?`)) return;
+                                        savePrompts(savedPrompts.filter(item => item.id !== prompt.id));
+                                        if (selectedPromptId === prompt.id) setSelectedPromptId(null);
+                                      }}
+                                      className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-dim)] transition-colors hover:text-[var(--gem-red)]"
+                                      title="Удалить"
+                                    >
+                                      <Trash2 size={11} />
+                                    </button>
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -2024,13 +1876,39 @@ export function SettingsSidebar({
                   />
 
                   {systemPrompt.trim() && (
-                    <button
-                      onClick={() => onOpenSavePromptDialog?.()}
-                      className="flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-xs text-[var(--text-dim)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
-                    >
-                      <Save size={12} />
-                      Сохранить промпт
-                    </button>
+                    selectedPromptId && savedPrompts.some(p => p.id === selectedPromptId) ? (
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => {
+                            const updated = savedPrompts.map(p => p.id === selectedPromptId ? { ...p, content: systemPrompt } : p);
+                            savePrompts(updated);
+                          }}
+                          className="flex flex-1 items-center justify-center gap-2 rounded-2xl border border-emerald-500/30 bg-emerald-500/15 px-4 py-3 text-xs font-semibold text-emerald-400 transition-all hover:bg-emerald-500/25 active:scale-[0.99]"
+                        >
+                          <RefreshCw size={12} />
+                          Обновить «{savedPrompts.find(p => p.id === selectedPromptId)?.name}»
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedPromptId(null);
+                            onOpenSavePromptDialog?.();
+                          }}
+                          className="flex items-center justify-center gap-1.5 rounded-2xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-3 text-xs text-[var(--text-dim)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+                          title="Сохранить как новый промпт"
+                        >
+                          <Plus size={12} />
+                          Как новый
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => onOpenSavePromptDialog?.()}
+                        className="flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-[var(--border)] bg-[var(--surface-2)] px-4 py-3 text-xs text-[var(--text-dim)] transition-all hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+                      >
+                        <Save size={12} />
+                        Сохранить промпт
+                      </button>
+                    )
                   )}
 
                   <div className="mt-3 space-y-2">

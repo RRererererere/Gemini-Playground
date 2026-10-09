@@ -43,7 +43,6 @@ interface ContextInspectorModalProps {
   deepThinkEnhancedPrompt?: string | null;
   onOpenMemory?: () => void;
   onOpenSkills?: () => void;
-  onOpenRPG?: () => void;
   onOpenDeepThink?: () => void;
   onOpenSystem?: () => void;
 }
@@ -63,7 +62,6 @@ export function ContextInspectorModal({
   deepThinkEnhancedPrompt,
   onOpenMemory,
   onOpenSkills,
-  onOpenRPG,
   onOpenDeepThink,
   onOpenSystem,
 }: ContextInspectorModalProps) {
@@ -73,7 +71,6 @@ export function ContextInspectorModal({
   const [editingId, setEditingId] = useState<ContextLayerId | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const [copied, setCopied] = useState(false);
-  const [rpgOverride, setRpgOverride] = useState<string | null>(null);
   const [imageOverride, setImageOverride] = useState<string | null>(null);
 
   useEffect(() => {
@@ -81,7 +78,6 @@ export function ContextInspectorModal({
       setConfig(loadContextLayersConfig());
       setTab('layers');
       setEditingId(null);
-      setRpgOverride(null);
       setImageOverride(null);
     }
   }, [open]);
@@ -96,10 +92,9 @@ export function ContextInspectorModal({
         config,
         handleSkillEvent,
         deepThinkEnhancedPrompt,
-        rpgStyleOverride: rpgOverride,
         imageContextOverride: imageOverride,
       }),
-    [messages, systemPrompt, chatId, memoryEnabled, config, handleSkillEvent, deepThinkEnhancedPrompt, rpgOverride, imageOverride]
+    [messages, systemPrompt, chatId, memoryEnabled, config, handleSkillEvent, deepThinkEnhancedPrompt, imageOverride]
   );
 
   const apiMessages = useMemo(
@@ -129,9 +124,6 @@ export function ContextInspectorModal({
       setEditDraft(loadMemoryInstructionsOverride() || getMemInstr());
     } else if (layer.id === 'user_system') {
       setEditDraft(systemPrompt);
-    } else if (layer.id === 'rpg_style') {
-      setEditDraft(layer.content || '');
-      setRpgOverride(layer.content || '');
     } else if (layer.id === 'image_context') {
       setEditDraft(layer.content || '');
       setImageOverride(layer.content || '');
@@ -147,15 +139,6 @@ export function ContextInspectorModal({
       saveMemoryInstructionsOverride(editDraft);
     } else if (editingId === 'user_system') {
       onSystemPromptChange(editDraft);
-    } else if (editingId === 'rpg_style') {
-      persist({
-        ...config,
-        layers: {
-          ...config.layers,
-          rpg_style: { ...config.layers.rpg_style, customText: editDraft },
-        },
-      });
-      setRpgOverride(null);
     } else if (editingId === 'image_context') {
       persist({
         ...config,
@@ -173,13 +156,6 @@ export function ContextInspectorModal({
     if (id === 'memory_instructions') {
       saveMemoryInstructionsOverride(null);
       setEditDraft(getMemInstr());
-    } else if (id === 'rpg_style') {
-      persist({
-        ...config,
-        layers: { ...config.layers, rpg_style: { ...config.layers.rpg_style, customText: null } },
-      });
-      setRpgOverride(null);
-      setEditDraft('');
     } else if (id === 'image_context') {
       persist({
         ...config,
@@ -194,7 +170,6 @@ export function ContextInspectorModal({
     onClose();
     if (link === 'memory') onOpenMemory?.();
     else if (link === 'skills') onOpenSkills?.();
-    else if (link === 'rpg') onOpenRPG?.();
     else if (link === 'deepthink') onOpenDeepThink?.();
     else if (link === 'system') onOpenSystem?.();
   };
@@ -357,7 +332,7 @@ export function ContextInspectorModal({
             <div className="p-4 space-y-3">
               {built.layers.find(l => l.id === 'deepthink_enhanced')?.content && (
                 <div className="rounded-xl border border-purple-500/30 bg-purple-500/10 px-4 py-3 text-xs text-purple-200">
-                  DeepThink активен: итоговый промпт заменяет базовые слои (память, скиллы, RPG).
+                  DeepThink активен: итоговый промпт заменяет базовые слои (память, скиллы).
                   Базовый стек ({built.baseBeforeDeepThink.length} симв.) передаётся только анализатору.
                 </div>
               )}
@@ -433,7 +408,6 @@ export function ContextInspectorModal({
             onClick={() => {
               const reset = resetContextLayersConfig();
               setConfig(reset);
-              setRpgOverride(null);
               setImageOverride(null);
             }}
             className="flex items-center gap-1.5 text-xs text-[var(--text-dim)] hover:text-[var(--text-primary)] px-3 py-2 rounded-xl hover:bg-[var(--surface-3)]"

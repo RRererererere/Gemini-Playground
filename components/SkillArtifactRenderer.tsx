@@ -6,22 +6,19 @@ import { Download, X, ZoomIn, ChevronLeft, ChevronRight, FileText } from 'lucide
 import ImageLightbox from './ImageLightbox';
 import AnnotationOverlay from './AnnotationOverlay';
 import { VideoFrameIndicator } from './VideoFrameIndicator';
-import AgentCard from './AgentCard';
 
 interface Props {
   artifact: SkillArtifact;
   onAnnotationClick?: (annotation: AnnotationItem) => void;
-  onOpenAgentChat?: (agentId: string) => void;
 }
 
 interface GroupProps {
   artifacts: SkillArtifact[];
   onAnnotationClick?: (annotation: AnnotationItem) => void;
-  onOpenAgentChat?: (agentId: string) => void;
 }
 
 // Группировка артефактов по типу для красивого отображения
-export function SkillArtifactsGroup({ artifacts, onAnnotationClick, onOpenAgentChat }: GroupProps) {
+export function SkillArtifactsGroup({ artifacts, onAnnotationClick }: GroupProps) {
   // Группируем изображения вместе
   const images = artifacts.filter(a => a.type === 'image');
   const others = artifacts.filter(a => a.type !== 'image');
@@ -30,37 +27,20 @@ export function SkillArtifactsGroup({ artifacts, onAnnotationClick, onOpenAgentC
     <>
       {images.length > 0 && (
         images.length === 1 ? (
-          <SkillArtifactRenderer artifact={images[0]} onAnnotationClick={onAnnotationClick} onOpenAgentChat={onOpenAgentChat} />
+          <SkillArtifactRenderer artifact={images[0]} onAnnotationClick={onAnnotationClick} />
         ) : (
           <ImageGallery artifacts={images} onAnnotationClick={onAnnotationClick} />
         )
       )}
       {others.map(artifact => (
-        <SkillArtifactRenderer key={artifact.id} artifact={artifact} onAnnotationClick={onAnnotationClick} onOpenAgentChat={onOpenAgentChat} />
+        <SkillArtifactRenderer key={artifact.id} artifact={artifact} onAnnotationClick={onAnnotationClick} />
       ))}
     </>
   );
 }
 
-export function SkillArtifactRenderer({ artifact, onAnnotationClick, onOpenAgentChat }: Props) {
+export function SkillArtifactRenderer({ artifact, onAnnotationClick }: Props) {
   switch (artifact.type) {
-    case 'agent_card':
-      if (artifact.data.kind === 'agent' && onOpenAgentChat) {
-        return (
-          <div className="my-3">
-            <AgentCard
-              agentId={artifact.data.agentId}
-              name={artifact.data.name}
-              description={artifact.data.description}
-              avatarEmoji={artifact.data.avatarEmoji}
-              model={artifact.data.model}
-              enabledSkillIds={artifact.data.enabledSkillIds}
-              onOpenChat={onOpenAgentChat}
-            />
-          </div>
-        );
-      }
-      return null;
     case 'image':
       return <ArtifactImage artifact={artifact} onAnnotationClick={onAnnotationClick} />;
     case 'annotated_image':

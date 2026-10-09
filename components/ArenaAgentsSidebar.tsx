@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronDown, Download, Plus, Trash2, X, Zap, Brain } from 
 import type { ArenaAgent, ArenaSession } from '@/lib/arena-types';
 import { AGENT_EMOJIS, AGENT_COLORS } from '@/lib/arena-types';
 import type { UniversalModel, ApiKeyEntry, SavedChat, Provider } from '@/types';
+import { loadSystemPrompts } from '@/lib/storage';
 
 function getApiKeySuffix(key?: string) {
   if (!key) return '—';
@@ -227,7 +228,28 @@ function AgentCard({
 
         {/* System Prompt */}
         <div>
-          <label className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)] mb-1.5 block">Системный промпт</label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)] block">Системный промпт</label>
+            {(() => {
+              const savedPrompts = typeof window !== 'undefined' ? loadSystemPrompts() : [];
+              if (savedPrompts.length === 0) return null;
+              return (
+                <select
+                  value=""
+                  onChange={e => {
+                    const found = savedPrompts.find(p => p.id === e.target.value);
+                    if (found) setDraft({ ...draft, systemPrompt: found.content });
+                  }}
+                  className="text-[10px] rounded-lg border border-[var(--border)] bg-[var(--surface-4)] px-2 py-0.5 text-[var(--text-muted)] hover:text-[var(--text-primary)] focus:outline-none max-w-[170px] truncate cursor-pointer"
+                >
+                  <option value="" disabled>Из сохранённых...</option>
+                  {savedPrompts.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              );
+            })()}
+          </div>
           <textarea
             value={draft.systemPrompt}
             onChange={e => setDraft({ ...draft, systemPrompt: e.target.value })}
@@ -480,7 +502,28 @@ export default function ArenaAgentsSidebar({
         <div className="border-t border-[var(--border-subtle)] px-5 py-4 space-y-4">
           {/* Global System Prompt */}
           <div>
-            <label className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)] mb-1.5 block">Правила Арены (System Prompt)</label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)] block">Правила Арены (System Prompt)</label>
+              {(() => {
+                const savedPrompts = typeof window !== 'undefined' ? loadSystemPrompts() : [];
+                if (savedPrompts.length === 0) return null;
+                return (
+                  <select
+                    value=""
+                    onChange={e => {
+                      const found = savedPrompts.find(p => p.id === e.target.value);
+                      if (found) onUpdateSessionPrompt(found.content);
+                    }}
+                    className="text-[10px] rounded-lg border border-[var(--border)] bg-[var(--surface-4)] px-2 py-0.5 text-[var(--text-muted)] hover:text-[var(--text-primary)] focus:outline-none max-w-[170px] truncate cursor-pointer"
+                  >
+                    <option value="" disabled>Из сохранённых...</option>
+                    {savedPrompts.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                );
+              })()}
+            </div>
             <textarea
               value={session.systemPrompt || ''}
               onChange={e => onUpdateSessionPrompt(e.target.value)}

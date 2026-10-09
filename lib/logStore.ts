@@ -26,7 +26,9 @@ export type LogEventType =
   | 'delete_message'    // удалено сообщение
   | 'regenerate'        // перегенерация ответа модели
   | 'branch'            // создание ветки/альтернативы
-  // Фидбек
+  | 'continue'          // продолжение генерации точкой
+  | 'merge'             // слияние сообщений модели
+  // Фидбек (исторические логи; фича удалена)
   | 'feedback'          // like/dislike
   // Чат- lifecycle
   | 'load_chat'
@@ -43,7 +45,6 @@ export interface LogMessageSnapshot {
   thinking?: string;
   deepThinking?: string;
   deepThinkAnalysis?: object;
-  feedback?: { rating: 'like' | 'dislike'; comment?: string; timestamp: number };
   finishReason?: string;
   modelName?: string;
   arenaAgentId?: string;
@@ -145,7 +146,6 @@ export function serializeMessage(msg: Message): LogMessageSnapshot {
   if (msg.thinking) snap.thinking = msg.thinking;
   if (msg.deepThinking) snap.deepThinking = msg.deepThinking;
   if (msg.deepThinkAnalysis) snap.deepThinkAnalysis = msg.deepThinkAnalysis;
-  if (msg.feedback) snap.feedback = msg.feedback;
   if (msg.finishReason) snap.finishReason = msg.finishReason;
   if (msg.modelName) snap.modelName = msg.modelName;
   if (msg.arenaAgentId) snap.arenaAgentId = msg.arenaAgentId;

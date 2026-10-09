@@ -146,20 +146,6 @@ export interface Message {
   forceEdit?: boolean;
   // Arena: ID агента-отправителя (только в Arena режиме для model-сообщений)
   arenaAgentId?: string;
-  // RPG Feedback: оценка сообщения пользователем
-  feedback?: {
-    rating: 'like' | 'dislike';
-    comment?: string;
-    timestamp: number;
-    appliedToRegeneration?: boolean;
-  };
-  // ─────────────────────────────────────────────────────────────────────────────
-  // Ghost Nudge Protocol — ephemeral, не сохраняется в IndexedDB
-  ghostRetrying?: boolean;       // перегенерация после пустого ответа
-  ghostRetryAttempt?: number;    // текущая попытка (1, 2, 3...)
-  ghostRetryMax?: number;        // максимум попыток из настроек
-  ghostRetryFailed?: boolean;    // все попытки исчерпаны
-  ghostNudgeActive?: boolean;    // GNP умное продолжение активно (показываем "Ghost Protocol")
   // Continue Generation
   isPartial?: boolean;
   interruptedChunk?: InterruptedChunk;

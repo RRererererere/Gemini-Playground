@@ -3,7 +3,7 @@ import type { Message, Provider, ApiKeyEntry, UniversalModel, ActiveModel, ChatT
 import { useDeepThink } from '@/lib/useDeepThink';
 import { useArena } from '@/lib/useArena';
 import { useSkillsUI } from '@/lib/useSkillsUI';
-import { useScroll, useTokenCounter, useMemory, useFileEditor, useRPGProfile } from '@/lib/hooks';
+import { useScroll, useTokenCounter, useMemory, useFileEditor } from '@/lib/hooks';
 import { useSettings } from '@/lib/hooks/useSettings';
 import { useChat } from '@/lib/hooks/useChat';
 import {
@@ -15,8 +15,6 @@ import {
 } from '@/lib/providerStorage';
 import {
   loadSavedChats, getActiveChatId, loadDeepThinkSystemPrompt, loadSystemPrompts,
-  loadGhostNudgeEnabled, saveGhostNudgeEnabled,
-  loadGhostNudgeMaxRetries, saveGhostNudgeMaxRetries,
   saveChatToStorage,
 } from '@/lib/storage';
 import { DEFAULT_DEEPTHINK_SYSTEM_PROMPT } from '@/lib/gemini';
@@ -71,18 +69,8 @@ export interface UseAppStateReturn {
   setMaxToolRounds: React.Dispatch<React.SetStateAction<number>>;
   maxMemoryCalls: number;
   setMaxMemoryCalls: React.Dispatch<React.SetStateAction<number>>;
-  ghostNudgeEnabled: boolean;
-  setGhostNudgeEnabled: React.Dispatch<React.SetStateAction<boolean>>;
-  ghostNudgeMaxRetries: number;
-  setGhostNudgeMaxRetries: React.Dispatch<React.SetStateAction<number>>;
   maxUploadSizeMB: number;
   setMaxUploadSizeMB: React.Dispatch<React.SetStateAction<number>>;
-  // RPG Feedback Settings
-  rpgFeedbackEnabled: boolean;
-  setRPGFeedbackEnabled: React.Dispatch<React.SetStateAction<boolean>>;
-  rpgShowInlineFeedback: boolean;
-  setRPGShowInlineFeedback: React.Dispatch<React.SetStateAction<boolean>>;
-  resetRPGProfile: () => void;
   savedPrompts: SavedSystemPrompt[];
   setSavedPrompts: React.Dispatch<React.SetStateAction<SavedSystemPrompt[]>>;
 
@@ -146,10 +134,8 @@ export interface UseAppStateReturn {
   setPendingCanvasElement: React.Dispatch<React.SetStateAction<any>>;
 
   // Arena
-  appMode: 'chat' | 'arena' | 'agents';
-  setAppMode: React.Dispatch<React.SetStateAction<'chat' | 'arena' | 'agents'>>;
-  activeAgentId: string | null;
-  setActiveAgentId: React.Dispatch<React.SetStateAction<string | null>>;
+  appMode: 'chat' | 'arena';
+  setAppMode: React.Dispatch<React.SetStateAction<'chat' | 'arena'>>;
   arena: ReturnType<typeof useArena>;
 
   // UI State
@@ -173,8 +159,6 @@ export interface UseAppStateReturn {
   setIsMobile: React.Dispatch<React.SetStateAction<boolean>>;
   showSkillsMarket: boolean;
   setShowSkillsMarket: React.Dispatch<React.SetStateAction<boolean>>;
-  showHFSpaces: boolean;
-  setShowHFSpaces: React.Dispatch<React.SetStateAction<boolean>>;
   showContextInspector: boolean;
   setShowContextInspector: React.Dispatch<React.SetStateAction<boolean>>;
   skillsRevision: number;
@@ -230,11 +214,7 @@ export function useAppState(): UseAppStateReturn {
     maxOutputTokens, setMaxOutputTokens,
     memoryEnabled, setMemoryEnabled, maxToolRounds, setMaxToolRounds,
     maxMemoryCalls, setMaxMemoryCalls,
-    ghostNudgeEnabled, setGhostNudgeEnabled, ghostNudgeMaxRetries, setGhostNudgeMaxRetries,
     maxUploadSizeMB, setMaxUploadSizeMB,
-    rpgFeedbackEnabled, setRPGFeedbackEnabled,
-    rpgShowInlineFeedback, setRPGShowInlineFeedback,
-    resetRPGProfile,
     savedPrompts, setSavedPrompts,
     onModelsLoad, onRefreshModels,
   } = settings;
@@ -287,8 +267,7 @@ export function useAppState(): UseAppStateReturn {
   // ═══════════════════════════════════════════
   // ARENA MODE
   // ═══════════════════════════════════════════
-  const [appMode, setAppMode] = useState<'chat' | 'arena' | 'agents'>('chat');
-  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
+  const [appMode, setAppMode] = useState<'chat' | 'arena'>('chat');
 
   // ═══════════════════════════════════════════
   // UI STATE (dialogs, modals, sidebar)
@@ -305,7 +284,6 @@ export function useAppState(): UseAppStateReturn {
 
   // Skills state
   const [showSkillsMarket, setShowSkillsMarket] = useState(false);
-  const [showHFSpaces, setShowHFSpaces] = useState(false);
   const [showContextInspector, setShowContextInspector] = useState(false);
   const [skillsRevision, setSkillsRevision] = useState(0);
   const { handleSkillEvent } = useSkillsUI();
@@ -330,10 +308,8 @@ export function useAppState(): UseAppStateReturn {
     chatKey: fileEditorChatKey,
   } = useFileEditor(currentChatId);
 
-  const rpgProfile = useRPGProfile(model, selectedApiKey);
-
   const deepThink = useDeepThink();
-  const arena = useArena(apiKeys, providers, activeModel, allModels, { enabled: ghostNudgeEnabled, maxRetries: ghostNudgeMaxRetries });
+  const arena = useArena(apiKeys, providers, activeModel, allModels);
 
   // ═══════════════════════════════════════════
   // INIT: Delegate to child hooks + load chat
@@ -368,9 +344,8 @@ export function useAppState(): UseAppStateReturn {
 
   // Restore & persist appMode
   useEffect(() => {
-    const saved = localStorage.getItem('gemini_app_mode') as 'chat' | 'arena' | 'agents' | null;
+    const saved = localStorage.getItem('gemini_app_mode') as 'chat' | 'arena' | null;
     if (saved === 'arena') setAppMode('arena');
-    else if (saved === 'agents') setAppMode('agents');
   }, []);
   useEffect(() => { localStorage.setItem('gemini_app_mode', appMode); }, [appMode]);
 
@@ -479,7 +454,6 @@ export function useAppState(): UseAppStateReturn {
     onOpenMemoryModal: () => setShowMemoryModal(true),
     onOpenContextInspector: () => setShowContextInspector(true),
     onOpenSkillsMarket: () => setShowSkillsMarket(true),
-    onOpenHFSpaces: () => setShowHFSpaces(true),
     deepThinkSystemPrompt,
     onDeepThinkSystemPromptChange: setDeepThinkSystemPrompt,
     temperature,
@@ -503,18 +477,8 @@ export function useAppState(): UseAppStateReturn {
     onMaxToolRoundsChange: setMaxToolRounds,
     maxMemoryCalls,
     onMaxMemoryCallsChange: setMaxMemoryCalls,
-    ghostNudgeEnabled,
-    onGhostNudgeEnabledChange: setGhostNudgeEnabled,
-    ghostNudgeMaxRetries,
-    onGhostNudgeMaxRetriesChange: setGhostNudgeMaxRetries,
     maxUploadSizeMB,
     onMaxUploadSizeMBChange: setMaxUploadSizeMB,
-    rpgFeedbackEnabled,
-    onRPGFeedbackEnabledChange: setRPGFeedbackEnabled,
-    rpgShowInlineFeedback,
-    onRPGShowInlineFeedbackChange: setRPGShowInlineFeedback,
-    onResetRPGProfile: resetRPGProfile,
-    onOpenRPGProfileModal: null as any, // будет установлен из page.tsx
     onSkillsChanged: () => setSkillsRevision(r => r + 1),
   };
 
@@ -547,11 +511,7 @@ export function useAppState(): UseAppStateReturn {
     maxOutputTokens, setMaxOutputTokens,
     memoryEnabled, setMemoryEnabled, maxToolRounds, setMaxToolRounds,
     maxMemoryCalls, setMaxMemoryCalls,
-    ghostNudgeEnabled, setGhostNudgeEnabled, ghostNudgeMaxRetries, setGhostNudgeMaxRetries,
     maxUploadSizeMB, setMaxUploadSizeMB,
-    rpgFeedbackEnabled, setRPGFeedbackEnabled,
-    rpgShowInlineFeedback, setRPGShowInlineFeedback,
-    resetRPGProfile,
     savedPrompts, setSavedPrompts,
 
     // Chat — delegated to useChat hook
@@ -582,7 +542,7 @@ export function useAppState(): UseAppStateReturn {
     mobileCanvasState, setMobileCanvasState, pendingCanvasElement, setPendingCanvasElement,
 
     // Arena
-    appMode, setAppMode, activeAgentId, setActiveAgentId, arena,
+    appMode, setAppMode, arena,
 
     // UI State
     showToolBuilder, setShowToolBuilder, editingTool, setEditingTool,
@@ -591,7 +551,7 @@ export function useAppState(): UseAppStateReturn {
     chatSidebarOpen, setChatSidebarOpen,
     settingsSidebarOpen, setSettingsSidebarOpen,
     isMobile, setIsMobile,
-    showSkillsMarket, setShowSkillsMarket, showHFSpaces, setShowHFSpaces,
+    showSkillsMarket, setShowSkillsMarket,
     showContextInspector, setShowContextInspector,
     skillsRevision, setSkillsRevision,
     handleSkillEvent,

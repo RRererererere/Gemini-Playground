@@ -6,8 +6,6 @@ import {
 } from '@/lib/memory-prompt';
 import { buildSkillsSystemPrompt } from '@/lib/skills';
 import { buildImageContext } from '@/lib/image-context';
-import { loadRPGProfile, getStyleInjection } from '@/lib/rpg-style-profile';
-import { buildFLoveInjection, loadFLoveProfile } from '@/lib/f-love-profile';
 import {
   type ContextLayerId,
   type ContextLayersConfig,
@@ -37,8 +35,6 @@ export interface BuildSystemPromptParams {
   handleSkillEvent: (event: unknown) => void;
   /** DeepThink enhanced prompt — если есть, заменяет базовые слои при enabled */
   deepThinkEnhancedPrompt?: string | null;
-  /** RPG injection override (для редактирования в UI) */
-  rpgStyleOverride?: string | null;
   /** Image context override */
   imageContextOverride?: string | null;
 }
@@ -117,24 +113,6 @@ export function buildSystemPromptLayers(params: BuildSystemPromptParams): BuiltS
     : '';
   layers.push(layerPreview('skills', skillsContent, skillsEnabled, config));
   if (skillsEnabled && skillsContent.trim()) stackParts.push(skillsContent.trim());
-
-  // RPG style + F-Love (personal form preferences)
-  const rpgEnabled = config.layers.rpg_style.enabled;
-  let rpgContent = '';
-  if (rpgEnabled) {
-    if (params.rpgStyleOverride !== undefined && params.rpgStyleOverride !== null) {
-      rpgContent = params.rpgStyleOverride;
-    } else if (config.layers.rpg_style.customText !== null) {
-      rpgContent = config.layers.rpg_style.customText;
-    } else {
-      const rpg = getStyleInjection(loadRPGProfile()) || '';
-      // Always merge F-Love style profile (learns from edits/likes/stop)
-      const flove = buildFLoveInjection(loadFLoveProfile());
-      rpgContent = [rpg, flove].filter(Boolean).join('\n\n');
-    }
-  }
-  layers.push(layerPreview('rpg_style', rpgContent, rpgEnabled, config));
-  if (rpgEnabled && rpgContent.trim()) stackParts.push(rpgContent.trim());
 
   const baseBeforeDeepThink = stackParts.join('\n\n');
 

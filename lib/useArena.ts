@@ -22,7 +22,7 @@ function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers: Provider[], activeModel: import('@/types').ActiveModel | null, allModels: import('@/types').UniversalModel[] = [], gnpOptions?: { enabled: boolean; maxRetries: number }) {
+export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers: Provider[], activeModel: import('@/types').ActiveModel | null, allModels: import('@/types').UniversalModel[] = []) {
   const globalModel = activeModel?.modelId || '';
   const globalProviderId = activeModel?.providerId || 'google';
   const [sessions, setSessions] = useState<ArenaSession[]>([]);
@@ -323,17 +323,6 @@ export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers
           updateUI({ ...activeSession, messages: currentMessages, updatedAt: Date.now() });
         },
         signal: abort.signal,
-        // GNP
-        gnpEnabled: gnpOptions?.enabled,
-        gnpMaxRetries: gnpOptions?.maxRetries,
-        onGhostRetry: (attempt, max) => {
-          currentMessages = currentMessages.map(m =>
-            m.id === messageId ? {
-              ...m, ghostRetrying: true, ghostRetryAttempt: attempt, ghostRetryMax: max
-            } : m
-          );
-          updateUI({ ...activeSession, messages: currentMessages, updatedAt: Date.now() });
-        },
       });
     } finally {
       setIsStreaming(false);
@@ -434,17 +423,6 @@ export function useArena(globalApiKeys: Record<string, ApiKeyEntry[]>, providers
           });
         },
         signal: abort.signal,
-        // GNP
-        gnpEnabled: gnpOptions?.enabled,
-        gnpMaxRetries: gnpOptions?.maxRetries,
-        onGhostRetry: (attempt, max) => {
-          currentMessages = currentMessages.map(m =>
-            m.id === targetMessageId ? {
-              ...m, ghostRetrying: true, ghostRetryAttempt: attempt, ghostRetryMax: max
-            } : m
-          );
-          onUpdate({ ...updatedSession, messages: currentMessages });
-        },
       });
     } finally {
       setIsStreaming(false);

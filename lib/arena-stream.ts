@@ -42,19 +42,11 @@ export async function streamArenaAgent(params: {
   onDone: (parts: Part[], thinking?: string) => void;
   onError: (error: string, type?: string) => void;
   signal?: AbortSignal;
-  // Ghost Nudge Protocol
-  gnpEnabled?: boolean;
-  gnpMaxRetries?: number;
-  onGhostRetry?: (attempt: number, max: number) => void;
 }): Promise<void> {
   const {
     agent, session, messages, globalApiKeys, providers, targetMessageId,
     onChunk, onDone, onError, signal,
-    gnpEnabled, gnpMaxRetries, onGhostRetry,
   } = params;
-
-  const MAX_RETRIES = gnpMaxRetries ?? 3;
-  let ghostRetryCount = 0;
 
   // Провайдер агента
   const providerId = agent.providerId || 'google';
@@ -190,26 +182,11 @@ export async function streamArenaAgent(params: {
     }
   }
 
-  // Основная логика с retry
-  let contentsForRequest = buildChatRequestMessages(agentHistory);
-  let success = await attemptStream(contentsForRequest);
-
-  // GNP retry только для Gemini провайдеров
-  const isGeminiProvider = providerType === 'gemini';
-  while (!success && gnpEnabled && isGeminiProvider && ghostRetryCount < MAX_RETRIES) {
-    ghostRetryCount++;
-    if (onGhostRetry) onGhostRetry(ghostRetryCount, MAX_RETRIES);
-    console.log(`👻 [GNP/Arena:${agent.name}] Retry ${ghostRetryCount}/${MAX_RETRIES}`);
-
-    contentsForRequest = [
-      ...contentsForRequest,
-      { role: 'model' as const, parts: [{ text: '...' }] },
-      { role: 'user'  as const, parts: [{ text: '...' }] },
-    ];
-    success = await attemptStream(contentsForRequest);
-  }
+  // Один attempt: пустой ответ больше не ретраим (GNP удалён)
+  const contentsForRequest = buildChatRequestMessages(agentHistory);
+  const success = await attemptStream(contentsForRequest);
 
   if (!success) {
-    onError('👻 Gemini не смог сгенерировать ответ после нескольких попыток', 'empty_response');
+    onError('Модель не вернула ответ', 'empty_response');
   }
 }

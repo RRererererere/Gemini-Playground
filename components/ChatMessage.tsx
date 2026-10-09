@@ -12,7 +12,7 @@ import {
   User, Sparkles, Copy, Check, Edit2, Trash2, RefreshCw,
   ChevronDown, ChevronUp, FileText, Image as ImageIcon, Volume2, Braces,
   Brain, ShieldAlert, AlertOctagon, Loader2, AlertCircle, Square, Wrench, Video, MonitorPlay,
-  Send, Calculator, ClipboardList, MessageSquare, Globe, GitBranch, Ghost
+  Send, Calculator, ClipboardList, MessageSquare, Globe, GitBranch, Merge
 } from 'lucide-react';
 import type { Message, AttachedFile, Part, DeepThinkAnalysis, BridgePayload } from '@/types';
 import MemoryPill from './MemoryPill';
@@ -22,8 +22,8 @@ import ImageMemorySearchPill from './ImageMemorySearchPill';
 import { SkillArtifactsGroup } from './SkillArtifactRenderer';
 import AnnotationRefDisplay from './AnnotationRefDisplay';
 import ImageLightbox from './ImageLightbox';
-import MessageFeedback from './MessageFeedback';
 import { SceneStatePanel } from './SceneStatePanel';
+import { getVisibleMessageText } from '@/lib/gemini';
 
 interface ChatMessageProps {
   message: Message;
@@ -42,12 +42,6 @@ interface ChatMessageProps {
   onEditDeepThinkAnalysis?: (id: string, analysis: DeepThinkAnalysis) => void;
   onPlayHTML?: (html: string) => void;
   onAnnotationClick?: (annotation: import('@/types').AnnotationItem) => void;
-  onOpenAgentChat?: (agentId: string) => void;
-  onFeedback?: (messageId: string, rating: 'like' | 'dislike', comment?: string) => void;
-  onRegenerateWithFeedback?: (messageId: string, comment: string) => void;
-  onRememberStyle?: (messageId: string) => void;
-  onShorter?: (messageId: string) => void;
-  onContinueFromCursor?: (messageId: string) => void;
   onRegenerateTextOnly?: (messageId: string) => void;
   onDismissBlocked?: (messageId: string) => void;
   onEditDeepThinking?: (messageId: string, newThinking: string) => void;
@@ -58,6 +52,9 @@ interface ChatMessageProps {
   onToggleSceneStatePin?: () => void;
   onRequestSceneCategory?: (request: { id: string; content: string }) => void;
   hideActions?: boolean;
+  // Слияние: true, если предыдущее видимое сообщение тоже от модели
+  canMergeWithPrevious?: boolean;
+  onMergeWithPrevious?: (messageId: string) => void;
 }
 
 function FilePreview({ file }: { file: AttachedFile }) {
@@ -1676,8 +1673,9 @@ function BridgeDataBlock({ bridgeData }: { bridgeData: BridgePayload }) {
 
 export default function ChatMessage({
   message, index, isLast, isStreaming,
-  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onOpenAgentChat, onFeedback, onRegenerateWithFeedback, onRememberStyle, onShorter, onContinueFromCursor, onRegenerateTextOnly, onDismissBlocked, onEditDeepThinking, onContinueDeepThink, onSkipDeepThink,
-  onSceneStateSettingsOpen, isSceneStatePinned, onToggleSceneStatePin, onRequestSceneCategory, hideActions = false
+  canRegenerate, onEdit, onDelete, onRegenerate, onContinue, onSubmitToolResults, onEditDeepThinkAnalysis, onEditPreviousUserMessage, onClearForceEdit, onPlayHTML, onAnnotationClick, onBranch, onRegenerateTextOnly, onDismissBlocked, onEditDeepThinking, onContinueDeepThink, onSkipDeepThink,
+  onSceneStateSettingsOpen, isSceneStatePinned, onToggleSceneStatePin, onRequestSceneCategory, hideActions = false,
+  canMergeWithPrevious = false, onMergeWithPrevious,
 }: ChatMessageProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -1688,8 +1686,7 @@ export default function ChatMessage({
   const [animateKey, setAnimateKey] = useState(0);
 
   const isUser = message.role === 'user';
-  const textPart = message.parts.find(p => 'text' in p) as { text: string } | undefined;
-  const messageText = textPart?.text || '';
+  const messageText = getVisibleMessageText(message.parts);
   const isLong = messageText.length > 3000;
   const isBlocked = message.isBlocked;
   const thinking = message.thinking;
@@ -1832,9 +1829,9 @@ export default function ChatMessage({
           />
         )}
         {isStreaming && isLast && !isUser && (
-          <span className="text-[10px] flex items-center gap-1" style={{ color: message.ghostNudgeActive ? 'var(--gem-purple, #a78bfa)' : 'var(--gem-green)' }}>
-            <span className={`inline-block w-1 h-1 rounded-full animate-pulse`} style={{ background: message.ghostNudgeActive ? 'var(--gem-purple, #a78bfa)' : 'var(--gem-green)' }} />
-            {message.ghostNudgeActive ? '\u{1F47B} Ghost Protocol' : 'Генерация'}
+          <span className="text-[10px] flex items-center gap-1" style={{ color: 'var(--gem-green)' }}>
+            <span className={`inline-block w-1 h-1 rounded-full animate-pulse`} style={{ background: 'var(--gem-green)' }} />
+            Генерация
           </span>
         )}
       </div>
@@ -1849,45 +1846,6 @@ export default function ChatMessage({
           </div>
         )}
 
-        {/* Ghost Nudge Protocol: индикатор перегенерации */}
-        {message.ghostRetrying && (
-          <div className="flex items-center gap-2 py-2 px-3 mb-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm text-amber-400/80 animate-in fade-in duration-300">
-            <RefreshCw size={14} className="animate-spin shrink-0" />
-            <span>
-              Gemini вернул пустой ответ · Перегенерация
-              <span className="text-amber-400/50 ml-1">
-                ({message.ghostRetryAttempt}/{message.ghostRetryMax})
-              </span>
-            </span>
-          </div>
-        )}
-
-        {/* Ghost Nudge Protocol: все попытки исчерпаны */}
-        {message.ghostRetryFailed && !message.ghostRetrying && (
-          <div className="flex flex-col gap-2 py-2 px-3 mb-2 rounded-lg bg-red-500/10 border border-red-500/20">
-            <div className="flex items-center gap-2 text-sm text-red-400/70">
-              <Ghost size={14} className="shrink-0" />
-              <span>
-                Gemini не смог ответить после {message.ghostRetryMax} попыток
-              </span>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => onRegenerate()}
-                className="text-xs px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 transition-colors text-red-300/80"
-              >
-                ↺ Попробовать ещё раз
-              </button>
-              <button
-                onClick={() => onDelete(message.id)}
-                className="text-xs px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 transition-colors text-red-400/70"
-              >
-                ✕ Убрать
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Annotation References */}
         {message.annotationRefs && message.annotationRefs.length > 0 && (
           <div className={`mb-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -1898,7 +1856,7 @@ export default function ChatMessage({
         {/* Skill Artifacts */}
         {message.skillArtifacts && message.skillArtifacts.length > 0 && (
           <div className={`mb-2 ${isUser ? 'text-right' : 'text-left'}`}>
-            <SkillArtifactsGroup artifacts={message.skillArtifacts} onAnnotationClick={onAnnotationClick} onOpenAgentChat={onOpenAgentChat} />
+            <SkillArtifactsGroup artifacts={message.skillArtifacts} onAnnotationClick={onAnnotationClick} />
           </div>
         )}
 
@@ -2148,13 +2106,10 @@ export default function ChatMessage({
 
       {/* Actions */}
       {!hideActions && !isEditing && !isStreaming && (() => {
-        const hasFeedback = !isUser && !!message.feedback?.rating;
         return (
-          <div className={`flex items-center gap-0.5 mt-1.5 transition-opacity ${
-            hasFeedback
-              ? 'opacity-100'
-              : 'opacity-0 group-hover:opacity-100'
-          } ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+          <div className={`flex items-center gap-0.5 mt-1.5 transition-opacity opacity-0 group-hover:opacity-100 ${
+            isUser ? 'flex-row-reverse' : 'flex-row'
+          }`}>
             {messageText && (
               <button
                 onClick={copyText}
@@ -2226,17 +2181,16 @@ export default function ChatMessage({
             </div>
           )}
 
-          {/* Feedback кнопки - только для model сообщений */}
-          {!isUser && onFeedback && onRegenerateWithFeedback && (
-            <MessageFeedback
-              message={message}
-              isLast={isLast}
-              onFeedback={onFeedback}
-              onRegenerateWithFeedback={onRegenerateWithFeedback}
-              onRememberStyle={onRememberStyle}
-              onShorter={onShorter}
-              onContinueFromCursor={onContinueFromCursor}
-            />
+          {/* Слияние: между этим и предыдущим сообщением нет user-сообщения */}
+          {!isUser && canMergeWithPrevious && onMergeWithPrevious && (
+            <button
+              onClick={() => onMergeWithPrevious(message.id)}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 rounded-md transition-all shadow-sm"
+              title="Слить этот ответ с предыдущим"
+            >
+              <Merge size={11} className="text-emerald-400" />
+              <span>Слияние</span>
+            </button>
           )}
 
           <button

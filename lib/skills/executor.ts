@@ -10,31 +10,14 @@ import type {
 import { isSkillActive, getSkillConfig, createSkillStorage, getSkillCustomization } from './registry';
 import { BUILT_IN_SKILLS } from './built-in';
 import { loadFileData } from '@/lib/fileStorage';
-import { loadHFSpaceSkills } from './hf-space';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Skill catalog — все доступные скиллы (встроенные + кастомные + HF Spaces)
+// Skill catalog — все доступные скиллы (встроенные + кастомные)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SKILL_CATALOG = new Map<string, Skill>(
   BUILT_IN_SKILLS.map(s => [s.id, s])
 );
-
-// Загружаем HF Space скиллы из localStorage и регистрируем
-export function reloadHFSpaceSkills(): void {
-  // Удаляем старые HF skills из каталога
-  for (const [id] of Array.from(SKILL_CATALOG)) {
-    if (id.startsWith('hf_')) SKILL_CATALOG.delete(id);
-  }
-  
-  // Загружаем актуальные
-  for (const skill of loadHFSpaceSkills()) {
-    SKILL_CATALOG.set(skill.id, skill);
-  }
-}
-
-// Вызываем при инициализации
-reloadHFSpaceSkills();
 
 export function getSkillCatalog(): Skill[] {
   return Array.from(SKILL_CATALOG.values());

@@ -139,23 +139,21 @@ export function useChat(): UseChatReturn {
     await saveChatToStorage(chatObj);
 
     // Оптимизация: обновляем savedChats локально
+    // Канонический порядок: самые свежие чаты сверху (по updatedAt) — как в storage
     setSavedChats(prev => {
-      const idx = prev.findIndex(c => c.id === chatId);
-      if (idx >= 0) {
-        const updated = [...prev];
-        updated[idx] = chatObj;
-        return updated;
-      }
-      return [...prev, chatObj];
+      const withoutCurrent = prev.filter(c => c.id !== chatId);
+      return [chatObj, ...withoutCurrent].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     });
 
+    // Состояние сессии трогаем только при сохранении ТЕКУЩЕГО чата:
+    // фоновое сохранение старого чата не должно откатывать currentChatId/заголовок
     if (opts.updateCurrentId !== false) {
       setCurrentChatId(chatId);
       setActiveChatId(chatId);
       setChatTitle(chatObj.title);
+      setUnsaved(false);
     }
 
-    setUnsaved(false);
     return chatObj;
   }, []);
 
@@ -192,8 +190,12 @@ export function useChat(): UseChatReturn {
 
   // Update saved chats order
   const updateSavedChats = useCallback(async (chats: SavedChat[]) => {
-    setSavedChats(chats);
-    await Promise.all(chats.map(c => saveChatToStorage(c)));
+    // Канонический порядок: новые сверху — иначе после перезагрузки список "прыгает"
+    const ordered = [...chats].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    setSavedChats(ordered);
+    // saveChatToStorage сериализованы внутренней очередью мутаций — гонки при
+    // параллельном сохранении нескольких чатов больше не теряют данные
+    await Promise.all(ordered.map(c => saveChatToStorage(c)));
   }, []);
 
   return {

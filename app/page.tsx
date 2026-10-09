@@ -40,7 +40,7 @@ import {
   loadProviders, saveCustomProvider, removeProvider, loadModelsCache, saveModelsCache, getActiveProviderId, setActiveProviderId, getActiveModel, setActiveModel, migrateOldModelSelection, GOOGLE_PROVIDER,
 } from '@/lib/providerStorage';
 import {
-  loadSavedChats, saveChatToStorage, deleteChatFromStorage,
+  loadSavedChats, saveChatToStorage, deleteChatFromStorage, renameChatInStorage,
   getActiveChatId, setActiveChatId,
   loadDeepThinkSystemPrompt,
   saveDeepThinkSystemPrompt,
@@ -48,8 +48,6 @@ import {
   saveSystemPrompts,
   createSystemPrompt,
   revokePreviewUrls,
-  loadGhostNudgeEnabled, saveGhostNudgeEnabled,
-  loadGhostNudgeMaxRetries, saveGhostNudgeMaxRetries,
   checkAndRepairStorage,
 } from '@/lib/storage';
 import { addLogEntry, serializeMessage } from '@/lib/logStore';
@@ -66,7 +64,6 @@ import { buildSystemPromptLayers } from '@/lib/context-layers';
 import { loadContextLayersConfig } from '@/lib/context-layers-storage';
 import { MEMORY_TOOLS, IMAGE_MEMORY_TOOLS } from '@/lib/memory-tools';
 import { saveMemory, updateMemory, forgetMemory, getMemories } from '@/lib/memory-store';
-import { getAgents } from '@/lib/agents/agent-store';
 import { 
   saveImageMemory, 
   searchImageMemories, 
@@ -78,53 +75,24 @@ import { getImageDimensions } from '@/lib/image-utils';
 import { collectImages } from '@/lib/image-context';
 import { cropAndScale } from '@/lib/skills/built-in/image-analyser/cropper';
 import { generateImageId } from '@/lib/imageId';
-import {
-  loadRPGProfile,
-  saveRPGProfile,
-  addFeedbackEntry,
-  needsCondensation,
-  buildCondensationPrompt,
-} from '@/lib/rpg-style-profile';
-import {
-  recordStyleEdit,
-  recordStyleFeedback,
-  recordAbortAccepted,
-  addCustomRule,
-  SHORTER_HINT,
-} from '@/lib/f-love-profile';
-import { installSkill, isSkillActive } from '@/lib/skills/registry';
-import {
-  loadRPGFeedbackSettings,
-  saveRPGFeedbackSettings,
-  DEFAULT_RPG_FEEDBACK_SETTINGS,
-} from '@/lib/rpg-feedback-settings';
 // Skills system
 import {
   collectSkillTools,
   executeSkillToolCall,
   notifySkillsMessageComplete,
   isSkillToolCall,
-  reloadHFSpaceSkills,
 } from '@/lib/skills';
 import { useSkillsUI } from '@/lib/useSkillsUI';
 import { useAppState } from '@/lib/useAppState';
 import { useWindowedMessages } from '@/lib/hooks/useWindowedMessages';
-import { AgentsHistory } from '@/components/agent-editor/AgentsHistory';
-import { GraphExecutor } from '@/lib/agent-engine/executor';
-import { getGraphById } from '@/lib/agent-engine/graph-storage';
-import type { AgentGraph, AgentRun } from '@/lib/agent-engine/types';
 
 const ToolBuilderModal = dynamicImport(() => import('@/components/ToolBuilder').then(module => module.ToolBuilderModal));
 const MemoryModal = dynamicImport(() => import('@/components/MemoryModal'));
-const RPGProfileModal = dynamicImport(() => import('@/components/RPGProfileModal').then(module => module.RPGProfileModal));
 const CommandPalette = dynamicImport(() => import('@/components/CommandPalette').then(module => module.CommandPalette));
-const AgentChatPage = dynamicImport(() => import('@/components/agent-chat/AgentChatPage').then(module => module.AgentChatPage));
-const AgentChatList = dynamicImport(() => import('@/components/agent-chat/AgentChatList').then(module => module.AgentChatList));
 const DeepThinkSettingsDialog = dynamicImport(() => import('@/components/DeepThinkSettingsDialog').then(module => module.DeepThinkSettingsDialog));
 const SceneStateSettingsModal = dynamicImport(() => import('@/components/SceneStateSettingsModal').then(module => module.SceneStateSettingsModal));
 const ContextInspectorModal = dynamicImport(() => import('@/components/ContextInspectorModal').then(module => module.ContextInspectorModal));
 const SkillsMarket = dynamicImport(() => import('@/components/SkillsMarket').then(module => module.SkillsMarket));
-const HFSpaceManager = dynamicImport(() => import('@/components/HFSpaceManager').then(module => module.HFSpaceManager));
 const SelectionToolbar = dynamicImport(() => import('@/components/SelectionToolbar').then(module => module.SelectionToolbar));
 
 function generateId() {
@@ -144,37 +112,6 @@ function generateToolCallId(name: string, args: unknown) {
 
 function getApiKeySuffix(key?: string | null): string {
   return key ? key.slice(-4) : '';
-}
-
-// Вспомогательная функция для одиночного вызова Gemini без стриминга
-async function callGeminiOnce(
-  apiKey: string,
-  model: string,
-  prompt: string,
-  maxTokens: number
-): Promise<string> {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: {
-          maxOutputTokens: maxTokens,
-          temperature: 0.7,
-        },
-      }),
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Gemini API error: ${response.status}`);
-  }
-
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  return text;
 }
 
 function sanitizeApiKeys(keys: ApiKeyEntry[]): ApiKeyEntry[] {
@@ -240,7 +177,7 @@ export default function Home() {
     deepThinkApiKeyIndex, setDeepThinkApiKeyIndex,
     temperature, setTemperature, thinkingBudget, setThinkingBudget,
     maxOutputTokens, maxMemoryCalls, maxToolRounds,
-    memoryEnabled, setMemoryEnabled, ghostNudgeEnabled, ghostNudgeMaxRetries,
+    memoryEnabled, setMemoryEnabled,
     savedPrompts, setSavedPrompts,
     messages, setMessages, messagesRef,
     savedChats, setSavedChats,
@@ -256,14 +193,14 @@ export default function Home() {
     acceptFileEditorEdits, rejectFileEditorEdits, manualFileEditorEdit,
     closeFileEditorFile, revertFileEditorFile, fileEditorChatKey,
     mobileCanvasState, setMobileCanvasState, pendingCanvasElement, setPendingCanvasElement,
-    appMode, setAppMode, activeAgentId, setActiveAgentId, arena,
+    appMode, setAppMode, arena,
     showToolBuilder, setShowToolBuilder, editingTool, setEditingTool,
     showSavePromptDialog, setShowSavePromptDialog, newPromptName, setNewPromptName,
     showDeepThinkDialog, setShowDeepThinkDialog, deepThinkDraft, setDeepThinkDraft,
     chatSidebarOpen, setChatSidebarOpen,
     settingsSidebarOpen, setSettingsSidebarOpen,
     isMobile,
-    showSkillsMarket, setShowSkillsMarket, showHFSpaces, setShowHFSpaces,
+    showSkillsMarket, setShowSkillsMarket,
     showContextInspector, setShowContextInspector,
     skillsRevision, setSkillsRevision,
     handleSkillEvent,
@@ -276,20 +213,6 @@ export default function Home() {
     chatSidebarArenaProps,
   } = app;
 
-  // Agent Chat State
-  const [agentTrace, setAgentTrace] = useState<{ id: string; name: string; status: 'running' | 'success' | 'error'; startTime: number; duration?: number }[]>([]);
-  const [agentInputRequest, setAgentInputRequest] = useState<{ source: string; context: any; resolve: (val: any) => void } | null>(null);
-  const [currentExecutor, setCurrentExecutor] = useState<GraphExecutor | null>(null);
-
-  // Agent Chat 2.0 State
-  const [agentChatAgentId, setAgentChatAgentId] = useState<string | null>(null);
-  const [agentChatThreadId, setAgentChatThreadId] = useState<string | null>(null);
-  const [agentChatRenderKey, setAgentChatRenderKey] = useState(0); // Для принудительного ре-рендера
-  const [isAgentRunning, setIsAgentRunning] = useState(false);
-  
-  // RPG Profile Modal
-  const [showRPGProfileModal, setShowRPGProfileModal] = useState(false);
-
   // ============ STORAGE REPAIR ============
   useEffect(() => {
     const result = checkAndRepairStorage();
@@ -297,58 +220,6 @@ export default function Home() {
       console.warn('[storage] Repair result:', result.warning);
     }
   }, []); // только один раз при маунте
-
-  // F-Love skill always available (style learning)
-  useEffect(() => {
-    try {
-      if (!isSkillActive('f-love')) {
-        installSkill('f-love');
-        setSkillsRevision(r => r + 1);
-      }
-    } catch { /* ignore */ }
-  }, [setSkillsRevision]);
-
-  useEffect(() => {
-    const handleStatus = (e: Event) => {
-      const { running, title } = (e as CustomEvent).detail;
-      setIsAgentRunning(running);
-      if (title) {
-        const el = document.getElementById('agent-thread-title');
-        if (el) el.innerText = title;
-      }
-    };
-    const onLoadThread = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (typeof detail === 'object' && detail.threadId && detail.agentConfigId) {
-        setAgentChatAgentId(detail.agentConfigId);
-        setAgentChatThreadId(detail.threadId);
-        setAgentChatRenderKey(prev => prev + 1); // Принудительный ре-рендер
-      } else {
-        setAgentChatThreadId(detail);
-        setAgentChatRenderKey(prev => prev + 1); // Принудительный ре-рендер
-      }
-    };
-    const onNewThread = () => {
-      setAgentChatThreadId(null); // Сбрасываем тред для создания нового
-      setAgentChatRenderKey(prev => prev + 1); // Принудительный ре-рендер
-    };
-    window.addEventListener('agent-chat-status', handleStatus);
-    window.addEventListener('agent-chat-load-thread', onLoadThread);
-    window.addEventListener('agent-chat-new-thread', onNewThread);
-    return () => {
-      window.removeEventListener('agent-chat-status', handleStatus);
-      window.removeEventListener('agent-chat-load-thread', onLoadThread);
-      window.removeEventListener('agent-chat-new-thread', onNewThread);
-    };
-  }, []);
-
-  // Arena: add onOpenAgent to chatSidebarArenaProps
-  const chatSidebarArenaPropsWithAgent = {
-    ...chatSidebarArenaProps,
-    onOpenAgent: null as any, // будет установлен ниже
-    activeAgentId: agentChatAgentId,
-    onSelectAgent: (id: string | null) => setAgentChatAgentId(id),
-  };
 
   const { state: deepThinkState, toggle: toggleDeepThink, analyze: deepThinkAnalyze, abort: abortDeepThink } = deepThink;
 
@@ -442,61 +313,24 @@ export default function Home() {
     }
     
     // Оптимизация: обновляем savedChats локально вместо перезагрузки всех чатов
+    // Канонический порядок: самые свежие чаты сверху (по updatedAt) — как в storage
     setSavedChats((prev: SavedChat[]) => {
-      const idx = prev.findIndex((c: SavedChat) => c.id === chatId);
-      if (idx >= 0) {
-        const updated = [...prev];
-        updated[idx] = chatObj;
-        return updated;
-      }
-      return [...prev, chatObj];
+      const withoutCurrent = prev.filter((c: SavedChat) => c.id !== chatId);
+      return [chatObj, ...withoutCurrent].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     });
     
-    // Обновляем currentChatId только если это не создание нового чата
+    // Обновляем состояние сессии только если это не фоновое сохранение старого чата.
+    // Иначе асинхронный хвост сохранения вернёт currentChatId/заголовок обратно
+    // и "перетащит" пользователя в прежний чат (гонка при загрузке чата/создании ветки).
     if (updateCurrentId) {
       setCurrentChatId(chatId);
       setActiveChatId(chatId);
       setChatTitle(chatObj.title);
+      setUnsaved(false);
     }
     
-    setUnsaved(false);
     return chatObj;
   }, [currentChatId, chatTitle, model, systemPrompt, deepThinkSystemPrompt, tools, temperature, savedChats, fileEditorChatKey]);
-
-  // ============ GNP HELPERS ============
-  // Ghost Nudge Protocol v2: вспомогательные функции
-
-  // Взять последние N слов из текста (для хвоста инъекции)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const gnpGetTailWords = useCallback((text: string, wordCount: number = 3): string => {
-    const words = text.trim().split(/\s+/);
-    return words.slice(-wordCount).join(' ');
-  }, []);
-
-  // Срезать хвост (tailWords) из начала continuation текста
-  // Нейронка продолжает с tailWords, поэтому они будут в начале continuation
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const gnpTrimContinuation = useCallback((continuation: string, tail: string): string => {
-    if (!tail.trim()) return continuation;
-
-    // Нормализуем tail: убираем лишние пробелы
-    const normalizedTail = tail.trim();
-
-    // Ищем tail в начале continuation (возможно с ведущим пробелом)
-    const trimmed = continuation.trimStart();
-    if (trimmed.toLowerCase().startsWith(normalizedTail.toLowerCase())) {
-      return trimmed.slice(normalizedTail.length);
-    }
-
-    // Фаллбэк: попробуем по словам — ищем первое совпадение tail в тексте
-    const idx = continuation.toLowerCase().indexOf(normalizedTail.toLowerCase());
-    if (idx !== -1 && idx < 30) { // хвост должен быть в начале (первые 30 символов)
-      return continuation.slice(idx + normalizedTail.length);
-    }
-
-    // Если не нашли — возвращаем как есть (без потерь)
-    return continuation;
-  }, []);
 
   // ============ STREAMING ============
   const streamGeneration = useCallback(async (
@@ -730,24 +564,6 @@ export default function Home() {
       let forceFileEditorTools = hasOpenEditorFiles(editorChatId);
       let fileEditorMutated = false;
 
-      // ── Ghost Nudge Protocol ──
-      const activeProviderInfo = providers.find(p => p.id === (activeModel?.providerId || ''));
-      const gnpEnabled = ghostNudgeEnabled && activeProviderInfo?.type !== 'openai' && activeProviderInfo?.type !== 'anthropic';
-      const MAX_GHOST_RETRIES = ghostNudgeMaxRetries;
-      let ghostRetryCount = 0;
-      let ghostNudgePending = false;
-      // Флаги умного продолжения GNP v2
-      let gnpSmartMode = false;       // true = это умное продолжение (не просто retry пустого)
-      let gnpOriginalText = '';       // текст до обрыва
-      let gnpTailWords = '';          // 3 последних слова для инъекции
-      let gnpContinuationAcc = '';    // накопленный текст continuation
-      // Локальные флаги для детекции ответа (сбрасываются каждую итерацию)
-      let localAccText = '';
-      let localHadToolCalls = false;
-      let localHadError = false;
-      let localWasBlocked = false;
-      let localFinishReason: string | null = null; // последний finishReason из стрима
-
       while (shouldContinueLoop) {
         // ЗАЩИТА: ограничиваем максимальное количество раундов
         if (toolRoundCount >= MAX_TOOL_ROUNDS_LOCAL) {
@@ -759,20 +575,8 @@ export default function Home() {
 
         shouldContinueLoop = false; // по умолчанию — выходим после одного прохода
 
-        // ── Сброс локальных флагов GNP ──
-        localAccText = '';
-        localHadToolCalls = false;
-        localHadError = false;
-        localWasBlocked = false;
-        localFinishReason = null;
-        // Сброс continuation аккумулятора для нового раунда GNP
-        if (gnpSmartMode) gnpContinuationAcc = '';
-
         // Строим историю
-        const historyForRequest = gnpSmartMode 
-          ? history.filter(m => m.id !== targetMessageId) 
-          : history;
-        const messagesForRequest = buildChatRequestMessages(historyForRequest, messageFilters);
+        const messagesForRequest = buildChatRequestMessages(history, messageFilters);
 
         // Если есть завершённые раунды — добавляем их как отдельные model/user turns
         let contentsForRequest = messagesForRequest;
@@ -802,25 +606,6 @@ export default function Home() {
                 ...round.responses.flatMap(tr => tr.extraParts || []),
               ],
             });
-          }
-        }
-
-        // ── Ghost Nudge инъекция (если pending) ──
-        if (ghostNudgePending) {
-          ghostNudgePending = false;
-          if (gnpSmartMode && gnpTailWords) {
-            // ✨ Умное продолжение: инъекция ghost turns
-            console.log(`👻 [GNP] Smart continuation (attempt ${ghostRetryCount}/${MAX_GHOST_RETRIES}), tail: "${gnpTailWords}"`);
-            
-            // Сначала добавляем саму неоконченную реплику ассистента как model turn
-            contentsForRequest.push({ role: 'model', parts: [{ text: gnpOriginalText }] });
-            
-            // Добавляем ghost user turn (нудж) и ghost model turn (хвост)
-            contentsForRequest.push({ role: 'user', parts: [{ text: '.' }] });
-            contentsForRequest.push({ role: 'model', parts: [{ text: gnpTailWords }] });
-          } else {
-            // Простой retry (пустой ответ)
-            console.log(`👻 [GNP] Retrying empty response (attempt ${ghostRetryCount}/${MAX_GHOST_RETRIES})`);
           }
         }
 
@@ -892,7 +677,8 @@ export default function Home() {
           temperature,
           apiKey: key,
           maxOutputTokens,
-          includeThoughts: deepThinkState.enabled === true,
+          // Gemini: всегда запрашиваем thought-парты — иначе размышления не приходят вовсе
+          includeThoughts: true,
         };
 
         // Force function calling while file needs editing
@@ -1066,27 +852,6 @@ export default function Home() {
           requestAnimationFrame(flush);
         };
 
-        // GNP: особый flush — заменяет ВЕСЬ текст сообщения (для сшивки continuation)
-        const gnpFlushFull = () => {
-          if (!pendingText) return;
-          const fullText = pendingText;
-          pendingText = '';
-          setMessages(prev => prev.map(m => {
-            if (m.id !== targetMessageId) return m;
-            const hasTextPart = m.parts.some(p => 'text' in p && !('thought' in p));
-            if (hasTextPart) {
-              return {
-                ...m,
-                parts: m.parts.map(p =>
-                  'text' in p && !('thought' in p) ? { text: fullText } : p
-                ),
-                isStreaming: true,
-              };
-            }
-            return { ...m, parts: [...m.parts, { text: fullText }], isStreaming: true };
-          }));
-        };
-
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -1106,7 +871,6 @@ export default function Home() {
 
             // Ошибка (Gemini / сеть / quota / invalid key ...)
             if (parsed.error) {
-              localHadError = true;  // GNP flag
               const errMsg = String(parsed.error || 'Gemini API error');
               const isRl = Boolean(parsed.isRateLimit) || isRateLimitError(errMsg);
               const errType = (parsed.errorType as Message['errorType']) || (isRl ? 'rate_limit' : 'unknown');
@@ -1142,7 +906,6 @@ export default function Home() {
 
             // Контент заблокирован
             if (parsed.isBlocked) {
-              localWasBlocked = true;  // GNP flag
               setMessages(prev => prev.map(m =>
                 m.id !== targetMessageId ? m : {
                   ...m,
@@ -1171,11 +934,6 @@ export default function Home() {
                   }
                 }
               ));
-            }
-
-            // GNP: трекаем finishReason для детекции обрыва
-            if (parsed.finishReason) {
-              localFinishReason = parsed.finishReason;
             }
 
             // Размышления
@@ -1784,20 +1542,8 @@ export default function Home() {
 
             // Текст ответа
             if (parsed.text) {
-              localAccText += parsed.text;  // GNP: трекаем для детекции пустого ответа
-              if (gnpSmartMode) {
-                // GNP умное продолжение: накапливаем continuation отдельно
-                gnpContinuationAcc += parsed.text;
-                // Показываем юзеру сшитый текст в реальном времени
-                const trimmedSoFar = gnpTrimContinuation(gnpContinuationAcc, gnpTailWords);
-                const stitchedSoFar = gnpOriginalText + trimmedSoFar;
-                pendingText = stitchedSoFar; // перезаписываем, не накапливаем
-                // Особый flush: заменяем весь текст, а не накапливаем
-                gnpFlushFull();
-              } else {
-                pendingText += parsed.text;
-                scheduleFlush();
-              }
+              pendingText += parsed.text;
+              scheduleFlush();
             }
           } catch {}
         }
@@ -1805,11 +1551,6 @@ export default function Home() {
         // Flush any buffered chunks before finishing.
         flush();
         addLogEntry({ type: 'stream_done', source: 'chat', provider: _logProvider, model: _logModel, status: 'ok', statusCode: 200, durationMs: Date.now() - _logTs, chatId: currentChatId || undefined, messageId: targetMessageId });
-
-        // GNP: отмечаем если были tool calls
-        if (roundToolCalls.length > 0) {
-          localHadToolCalls = true;
-        }
 
         // Если были tool calls в этом раунде — сохраняем раунд для следующей итерации
         if (roundToolCalls.length > 0 && roundToolResponses.length > 0) {
@@ -1829,133 +1570,6 @@ export default function Home() {
             }
             return { ...m, isStreaming: true };
           }));
-        }
-
-        // ── Ghost Nudge Protocol v2 ──
-
-        // Случай 1: Пустой ответ — простой retry
-        if (
-          gnpEnabled &&
-          !localAccText.trim() &&
-          !localHadToolCalls &&
-          !localHadError &&
-          !localWasBlocked &&
-          !gnpSmartMode && // не повторяем retry если уже в smart mode
-          !shouldContinueLoop
-        ) {
-          if (ghostRetryCount < MAX_GHOST_RETRIES) {
-            ghostRetryCount++;
-            console.log(`👻 [GNP] Empty response — retry ${ghostRetryCount}/${MAX_GHOST_RETRIES}`);
-            ghostNudgePending = true;
-            gnpSmartMode = false;
-            shouldContinueLoop = true;
-
-            // Показываем индикатор перегенерации
-            setMessages(prev => prev.map(m =>
-              m.id === targetMessageId ? {
-                ...m,
-                isStreaming: true,
-                ghostRetrying: true,
-                ghostRetryAttempt: ghostRetryCount,
-                ghostRetryMax: MAX_GHOST_RETRIES,
-              } : m
-            ));
-          } else {
-            console.warn(`👻 [GNP] All ${MAX_GHOST_RETRIES} retries exhausted`);
-            setMessages(prev => prev.map(m =>
-              m.id === targetMessageId ? {
-                ...m,
-                ghostRetrying: false,
-                ghostRetryFailed: true,
-                isStreaming: false,
-                error: 'Gemini не смог сгенерировать ответ после нескольких попыток',
-                errorType: 'unknown' as const,
-              } : m
-            ));
-          }
-        }
-
-        // Случай 2: Умное продолжение — обрыв генерации (есть текст, но finishReason ≠ STOP)
-        else if (
-          gnpEnabled &&
-          localAccText.trim() &&
-          !localHadToolCalls &&
-          !localHadError &&
-          !localWasBlocked &&
-          !shouldContinueLoop &&
-          localFinishReason !== null &&
-          localFinishReason !== 'STOP'
-        ) {
-          if (ghostRetryCount < MAX_GHOST_RETRIES) {
-            ghostRetryCount++;
-            gnpSmartMode = true;
-
-            // Если уже был smart mode — сшиваем предыдущий результат в gnpOriginalText
-            if (gnpOriginalText) {
-              const trimmedPrev = gnpTrimContinuation(localAccText, gnpTailWords);
-              gnpOriginalText = gnpOriginalText + trimmedPrev;
-            } else {
-              // Первый раз: сохраняем весь текст до обрыва
-              gnpOriginalText = localAccText;
-            }
-
-            // Берём последние 3 слова как хвост для инъекции
-            gnpTailWords = gnpGetTailWords(gnpOriginalText, 3);
-
-            console.log(`👻 [GNP] Smart continuation — truncated at ${localFinishReason}, attempt ${ghostRetryCount}/${MAX_GHOST_RETRIES}`);
-            console.log(`👻 [GNP] Original tail: "${gnpTailWords}"`);
-
-            ghostNudgePending = true;
-            shouldContinueLoop = true;
-
-            // Показываем юзеру спец. индикатор Ghost Protocol (не обычный retry)
-            setMessages(prev => prev.map(m =>
-              m.id === targetMessageId ? {
-                ...m,
-                isStreaming: true,
-                ghostNudgeActive: true,
-                ghostRetrying: false,
-                // Сбрасываем isPartial — GNP возьмёт на себя продолжение
-                isPartial: false,
-                interruptedChunk: undefined,
-              } : m
-            ));
-          } else {
-            console.warn(`👻 [GNP] Smart continuation exhausted all ${MAX_GHOST_RETRIES} retries`);
-            // Оставляем что есть — финальный сшитый текст уже показан
-            setMessages(prev => prev.map(m =>
-              m.id === targetMessageId ? {
-                ...m,
-                ghostNudgeActive: false,
-                ghostRetrying: false,
-                isStreaming: false,
-              } : m
-            ));
-          }
-        }
-
-        // Случай 3: Умное продолжение завершилось корректно (STOP)
-        else if (gnpSmartMode && localFinishReason === 'STOP') {
-          // Финальная сшивка
-          const trimmedFinal = gnpTrimContinuation(localAccText, gnpTailWords);
-          const stitchedFinal = gnpOriginalText + trimmedFinal;
-          console.log(`👻 [GNP] Smart continuation complete. Stitched ${gnpOriginalText.length} + ${trimmedFinal.length} chars`);
-
-          // Устанавливаем финальный сшитый текст
-          setMessages(prev => prev.map(m => {
-            if (m.id !== targetMessageId) return m;
-            return {
-              ...m,
-              parts: m.parts.map(p =>
-                'text' in p && !('thought' in p)
-                  ? { text: stitchedFinal }
-                  : p
-              ),
-              ghostNudgeActive: false,
-              isStreaming: true, // will be set to false in finally
-            };
-          }));
-          gnpSmartMode = false;
         }
       } // конец while (shouldContinueLoop)
     } // конец try
@@ -1977,7 +1591,7 @@ export default function Home() {
       
       // Помечаем сообщение завершённым
       setMessages(prev => prev.map(m =>
-        m.id === targetMessageId ? { ...m, isStreaming: false, ghostRetrying: false, ghostNudgeActive: false } : m
+        m.id === targetMessageId ? { ...m, isStreaming: false } : m
       ));
       
       // Небольшая задержка чтобы дать React время обновить messagesRef
@@ -2005,7 +1619,7 @@ export default function Home() {
         }
       }, 100); // 100ms достаточно для React batching
     }
-  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, fileEditorChatKey, memoryEnabled, activeProvider, maxOutputTokens, handleSkillEvent, maxToolRounds, maxMemoryCalls, gnpGetTailWords, gnpTrimContinuation]);
+  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, fileEditorChatKey, memoryEnabled, activeProvider, maxOutputTokens, handleSkillEvent, maxToolRounds, maxMemoryCalls]);
 
   // Auto-open sheet for ai_interactive sites when streaming ends
   useEffect(() => {
@@ -2119,220 +1733,136 @@ export default function Home() {
     await streamGeneration(messages.slice(0, actualIdx), newMsgId, false);
   }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix, currentChatId]);
 
-  const handleContinue = useCallback(async (chunk?: import('@/types').InterruptedChunk) => {
+  // Continue: отправляет точку в чат и сразу запускает новую генерацию.
+  // (Старый append-режим streamGeneration больше не поддерживается Gemini API)
+  const handleContinue = useCallback(async () => {
     if (isStreaming) return;
     const lastMsg = messages[messages.length - 1];
     if (!lastMsg || lastMsg.role !== 'model') return;
+    if (!selectedApiKeyEntry?.key) {
+      setError('Выберите API ключ в настройках.');
+      return;
+    }
 
-    const lastText = getVisibleMessageText(lastMsg.parts);
-
-    // Очищаем флаги прерывания перед продолжением
-    setMessages(prev => prev.map((m, i) => {
-      if (i === prev.length - 1) {
+    // Очищаем флаги прерывания у последнего сообщения
+    const cleaned = messages.map((m, i) => {
+      if (i === messages.length - 1 && (m.isPartial || m.interruptedChunk)) {
         const resetMsg = { ...m };
         delete resetMsg.isPartial;
         delete resetMsg.interruptedChunk;
         return resetMsg;
       }
       return m;
-    }));
-
-    // Если последнее сообщение модели — это DeepThink без финального текста,
-    // создаём новое сообщение модели (обычная генерация)
-    if (!lastText && lastMsg.deepThinkAnalysis) {
-      const newMsgId = generateId();
-      const assistantMsg: Message = {
-        id: newMsgId,
-        role: 'model',
-        parts: [{ text: '' }],
-        isStreaming: true,
-        modelName: model,
-        apiKeySuffix: selectedApiKeySuffix || undefined,
-      };
-      // История: всё до DeepThink-сообщения включительно, кроме него
-      const historyUpTo = messages.slice(0, messages.length - 1);
-      setMessages(prev => [...prev, assistantMsg]);
-      await streamGeneration(historyUpTo, newMsgId, false);
-      return;
-    }
-
-    await streamGeneration(messages, lastMsg.id, true);
-  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
-
-  // ============ RPG FEEDBACK + F-LOVE ============
-  const handleFeedback = useCallback((
-    messageId: string,
-    rating: 'like' | 'dislike',
-    comment?: string
-  ) => {
-    const msg = messages.find(m => m.id === messageId);
-    if (!msg) return;
-
-    const isToggleOff = msg.feedback?.rating === rating;
-
-    if (!isToggleOff) {
-      const excerpt = getVisibleMessageText(msg.parts).slice(0, 200);
-      addFeedbackEntry({
-        rating,
-        comment: comment || '',
-        excerpt,
-        timestamp: Date.now()
-      });
-      // F-Love profile (primary style learner)
-      try {
-        recordStyleFeedback({ rating, comment, excerpt, source: 'thumb' });
-      } catch { /* ignore */ }
-    }
-
-    addLogEntry({
-      type: 'feedback', source: 'chat',
-      chatId: currentChatId || undefined,
-      messageId,
-      before: serializeMessage(msg),
-      after: serializeMessage(
-        isToggleOff
-          ? { ...msg, feedback: undefined }
-          : { ...msg, feedback: { rating, comment, timestamp: Date.now() } }
-      ),
     });
 
-    setMessages(prev => prev.map(m =>
-      m.id !== messageId ? m :
-      isToggleOff
-        ? { ...m, feedback: undefined }
-        : { ...m, feedback: { rating, comment, timestamp: Date.now() } }
-    ));
-  }, [messages, currentChatId]);
-
-  const handleRememberStyle = useCallback((messageId: string) => {
-    const msg = messages.find(m => m.id === messageId);
-    if (!msg || msg.role !== 'model') return;
-    const text = getVisibleMessageText(msg.parts);
-    try {
-      recordStyleFeedback({
-        rating: 'like',
-        comment: 'Эталон стиля (кнопка «Стиль»)',
-        excerpt: text.slice(0, 200),
-        source: 'edit',
-      });
-      if (text.length < 400) addCustomRule('Эталонные ответы — короткие (до ~400 символов, если контекст позволяет).');
-      if (!/\*[^*\n]+\*/.test(text)) addCustomRule('Не использовать *действия* в звёздочках (эталон без них).');
-      if (!/\*\*/.test(text)) addCustomRule('Без **markdown** жирного, если не просили.');
-    } catch (e) {
-      console.error('[F-Love] remember style', e);
-    }
-    handleFeedback(messageId, 'like', 'Запомненный стиль');
-  }, [messages, handleFeedback]);
-
-  const handleShorter = useCallback(async (messageId: string) => {
-    if (isStreaming) return;
-    const msgIdx = messages.findIndex(m => m.id === messageId);
-    if (msgIdx === -1) return;
-    const badMessage = messages[msgIdx];
-    const historyBefore = messages.slice(0, msgIdx);
-    recordStyleFeedback({
-      rating: 'dislike',
-      comment: 'Слишком длинно — нужна короче',
-      excerpt: getVisibleMessageText(badMessage.parts).slice(0, 120),
-      source: 'shorter',
-    });
-
-    const hint: Message = {
+    const dotMsg: Message = {
       id: generateId(),
       role: 'user',
-      parts: [{ text: SHORTER_HINT }],
-      kind: 'bridge_data',
+      parts: [{ text: '.' }],
     };
     const newMsgId = generateId();
-    setMessages([
-      ...historyBefore,
-      { ...badMessage, kind: 'regenerated_hidden' },
-      hint,
-      {
-        id: newMsgId,
-        role: 'model',
-        parts: [{ text: '' }],
-        isStreaming: true,
-        modelName: model,
-        apiKeySuffix: selectedApiKeySuffix || undefined,
-      },
-    ]);
-    await streamGeneration([...historyBefore, hint], newMsgId, false);
-  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix]);
-
-  const handleContinueFromCursor = useCallback(async (messageId: string) => {
-    if (isStreaming) return;
-    const msg = messages.find(m => m.id === messageId);
-    if (!msg || msg.role !== 'model') return;
-    // Append-mode continue from current text (after manual edit / stop)
-    await streamGeneration(messages, messageId, true);
-  }, [isStreaming, messages, streamGeneration]);
-
-  const handleRegenerateWithFeedback = useCallback(async (
-    messageId: string,
-    dislikeComment: string
-  ) => {
-    if (isStreaming) return;
-
-    // 1. Найти индекс плохого сообщения
-    const msgIdx = messages.findIndex(m => m.id === messageId);
-    if (msgIdx === -1) return;
-
-    const badMessage = messages[msgIdx];
-    const badText = getVisibleMessageText(badMessage.parts).slice(0, 400);
-
-    // 2. История ДО плохого сообщения
-    const historyBefore = messages.slice(0, msgIdx);
-
-    // 3. Сформировать скрытый хинт-сообщение
-    const feedbackHint: Message = {
-      id: generateId(),
-      role: 'user',
-      parts: [{
-        text: `[SYSTEM FEEDBACK - не упоминай это в ответе] Твой предыдущий ответ был: "${badText}${badText.length === 400 ? '...' : ''}"
-
-Пользователь поставил дизлайк.${dislikeComment ? `\nПричина: "${dislikeComment}"` : ''}
-
-Напиши принципиально иначе. Учти замечание.`,
-      }],
-      kind: 'bridge_data', // переиспользуем существующий механизм скрытия
+    const assistantMsg: Message = {
+      id: newMsgId,
+      role: 'model',
+      parts: [{ text: '' }],
+      isStreaming: true,
+      modelName: model,
+      apiKeySuffix: selectedApiKeySuffix || undefined,
     };
 
-    // 4. Сохранить оригинальное сообщение с дизлайком как скрытое (для аналитики)
-    const hiddenBadMessage: Message = {
-      ...badMessage,
-      kind: 'regenerated_hidden', // скрытое, но доступное для аналитики
-      feedback: { ...badMessage.feedback!, appliedToRegeneration: true }
-    };
-
-    // 5. Создать новое пустое сообщение модели
-    const newMsgId = generateId();
-    const newMessages = [
-      ...historyBefore,
-      hiddenBadMessage, // ← СОХРАНЯЕМ оригинал для аналитики
-      feedbackHint,
-      { 
-        id: newMsgId, 
-        role: 'model' as const, 
-        parts: [{ text: '' }], 
-        isStreaming: true, 
-        modelName: model, 
-        apiKeySuffix: selectedApiKeySuffix || undefined 
-      },
-    ];
-    setMessages(newMessages);
+    const historyForApi = [...cleaned, dotMsg];
+    setMessages([...historyForApi, assistantMsg]);
+    setUnsaved(true);
 
     addLogEntry({
-      type: 'branch', source: 'chat',
+      type: 'continue', source: 'chat',
       chatId: currentChatId || undefined,
       messageId: newMsgId,
-      before: serializeMessage(badMessage),
-      affectedMessageIds: [messageId, newMsgId],
     });
 
-    // 6. Стримить. История для API: всё до плохого + хинт (БЕЗ hiddenBadMessage)
-    await streamGeneration([...historyBefore, feedbackHint], newMsgId, false);
-  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix, currentChatId]);
+    await streamGeneration(historyForApi, newMsgId, false);
+  }, [isStreaming, messages, streamGeneration, model, selectedApiKeySuffix, selectedApiKeyEntry, currentChatId, setUnsaved, setError]);
+
+  // ============ MERGE MESSAGES ============
+  // Слияние: если между двумя model-сообщениями нет user-сообщения,
+  // нижнее можно слить в верхнее (текст нижнего добавляется к верхнему).
+  const handleMergeWithPrevious = useCallback((messageId: string) => {
+    if (isStreaming) return;
+    setMessages(prev => {
+      const idx = prev.findIndex(m => m.id === messageId);
+      if (idx <= 0) return prev;
+      const current = prev[idx];
+      if (current.role !== 'model' || current.isStreaming) return prev;
+
+      // Ищем предыдущее ВИДИМОЕ сообщение (пропускаем скрытые kind)
+      let prevIdx = -1;
+      for (let i = idx - 1; i >= 0; i--) {
+        const m = prev[i];
+        if (m.kind === 'tool_response' || m.kind === 'bridge_data') continue;
+        prevIdx = i;
+        break;
+      }
+      if (prevIdx === -1) return prev;
+      const target = prev[prevIdx];
+      if (target.role !== 'model') return prev;
+
+      // Извлекаем чистый текст обоих сообщений
+      const targetText = getVisibleMessageText(target.parts);
+      const currentText = getVisibleMessageText(current.parts);
+
+      // Склеиваем через два переноса строки
+      const combinedText = targetText && currentText
+        ? `${targetText}\n\n${currentText}`
+        : (targetText || currentText || '');
+
+      // Сохраняем нетекстовые части (мысли и т.д.)
+      const nonTextPartsTarget = target.parts.filter(p => isThoughtPart(p) || !('text' in p));
+      const nonTextPartsCurrent = current.parts.filter(p => isThoughtPart(p) || !('text' in p));
+
+      const mergedParts: Part[] = [
+        ...nonTextPartsTarget,
+        ...nonTextPartsCurrent,
+        { text: combinedText },
+      ];
+
+      const mergedFiles = [
+        ...(target.files || []),
+        ...(current.files || []),
+      ];
+
+      const mergedArtifacts = [
+        ...(target.skillArtifacts || []),
+        ...(current.skillArtifacts || []),
+      ];
+
+      const mergedTarget: Message = {
+        ...target,
+        parts: mergedParts,
+        files: mergedFiles.length > 0 ? mergedFiles : undefined,
+        skillArtifacts: mergedArtifacts.length > 0 ? mergedArtifacts : undefined,
+        thinking: [target.thinking, current.thinking].filter(Boolean).join('\n\n---\n\n') || undefined,
+        deepThinking: [target.deepThinking, current.deepThinking].filter(Boolean).join('\n\n---\n\n') || undefined,
+      };
+
+      const next = [...prev];
+      next[prevIdx] = mergedTarget;
+      next.splice(idx, 1);
+
+      addLogEntry({
+        type: 'merge', source: 'chat',
+        chatId: currentChatId || undefined,
+        messageId: target.id,
+        before: serializeMessage(current),
+        after: serializeMessage(mergedTarget),
+      });
+
+      if (currentChatId) {
+        saveCurrentChat(next, undefined, false).catch(console.error);
+      }
+      return next;
+    });
+    setUnsaved(true);
+  }, [isStreaming, currentChatId, saveCurrentChat, setUnsaved]);
 
   // ============ DEEPTHINK IMPROVEMENTS ============
   
@@ -2467,7 +1997,9 @@ export default function Home() {
     if (msgIdx === -1) return;
     
     if (messages.length > 0) {
-      saveCurrentChat(messages).catch(console.error);
+      // updateCurrentId=false: иначе асинхронный хвост сохранения старого чата
+      // отменит создание ветки (вернёт currentChatId, заголовок и unsaved)
+      saveCurrentChat(messages, undefined, false).catch(console.error);
     }
     
     const branchMessages = messages.slice(0, msgIdx + 1).map(m => ({ ...m }));
@@ -2566,17 +2098,6 @@ export default function Home() {
       chatId: currentChatId || undefined,
       messageId: id, before, after,
     });
-
-    // F-Love: учимся на правках model-сообщений
-    if (msg.role === 'model') {
-      try {
-        const beforeText = before.text || getVisibleMessageText(msg.parts);
-        const afterText = after.text || getVisibleMessageText(newParts);
-        recordStyleEdit({ messageId: id, before: beforeText, after: afterText });
-      } catch (e) {
-        console.error('[F-Love] record edit failed', e);
-      }
-    }
 
     if (msg.role === 'user') {
       setMessages(prev => prev.map(m =>
@@ -2677,127 +2198,22 @@ export default function Home() {
   }, [messages, streamGeneration]);
 
   const handleStop = useCallback(() => {
-    // Abort-as-accept: partial model text is treated as accepted style signal
+    // Помечаем оборванное сообщение как partial — для кнопки "Продолжить"
     try {
       const streaming = messagesRef.current.find(m => m.isStreaming && m.role === 'model');
       const partial = streaming ? getVisibleMessageText(streaming.parts) : '';
-      if (partial.trim().length > 20) {
-        recordAbortAccepted(partial);
-        if (streaming) {
-          setMessages(prev => prev.map(m =>
-            m.id === streaming.id
-              ? {
-                  ...m,
-                  isPartial: true,
-                  feedback: m.feedback || { rating: 'like' as const, comment: 'Стоп = принять', timestamp: Date.now() },
-                }
-              : m
-          ));
-        }
+      if (partial.trim().length > 20 && streaming) {
+        setMessages(prev => prev.map(m =>
+          m.id === streaming.id ? { ...m, isPartial: true } : m
+        ));
       }
     } catch (e) {
-      console.error('[F-Love] abort-accept', e);
+      console.error('stop marking failed', e);
     }
 
     abortControllerRef.current?.abort();
     abortDeepThink();
-    if (currentExecutor) {
-      currentExecutor.cancel();
-      setCurrentExecutor(null);
-    }
-  }, [abortDeepThink, currentExecutor]);
-
-  const handleAgentSend = useCallback(async (text: string, files: AttachedFile[]) => {
-    if (!activeAgentId || isStreaming) return;
-    
-    const graph = getGraphById(activeAgentId);
-    if (!graph) {
-      setError('Agent graph not found');
-      return;
-    }
-
-    setError('');
-    setIsStreaming(true);
-    setAgentTrace([]);
-    
-    // 1. Создаем ID чата если его нет
-    const chatId = currentChatId || `agent_chat_${activeAgentId}_${Date.now()}`;
-    if (!currentChatId) {
-      setCurrentChatId(chatId);
-      setActiveChatId(chatId);
-    }
-
-    // 2. Добавляем сообщение пользователя
-    const userMsg: Message = {
-      id: generateId(),
-      role: 'user',
-      parts: [{ text }],
-      files: files.length > 0 ? files : undefined,
-    };
-    
-    // 3. Создаем пустое сообщение агента для стриминга
-    const assistantMsgId = generateId();
-    const assistantMsg: Message = {
-      id: assistantMsgId,
-      role: 'model',
-      parts: [{ text: '' }],
-      isStreaming: true,
-      modelName: 'Agent Graph',
-    };
-
-    const newMessages = [...messages, userMsg, assistantMsg];
-    setMessages(newMessages);
-
-    // 4. Запускаем Executor
-    const executor = new GraphExecutor(graph, {
-      chatId: chatId,
-      onNodeStart: (nodeId, nodeName) => {
-        setAgentTrace(prev => [...prev, { id: nodeId, name: nodeName, status: 'running', startTime: Date.now() }]);
-      },
-      onNodeComplete: (nodeId, output) => {
-        setAgentTrace(prev => prev.map(t => t.id === nodeId ? { ...t, status: 'success', duration: Date.now() - t.startTime } : t));
-      },
-      onNodeError: (nodeId, error) => {
-        setAgentTrace(prev => prev.map(t => t.id === nodeId ? { ...t, status: 'error' } : t));
-        setError(`Error in node ${nodeId}: ${error}`);
-      },
-      onNodeStream: (nodeId, chunk) => {
-        setMessages(prev => prev.map(m => {
-          if (m.id !== assistantMsgId) return m;
-          const textPart = m.parts.find(p => 'text' in p);
-          if (textPart) {
-            return {
-              ...m,
-              parts: m.parts.map(p => 'text' in p ? { text: (p as any).text + chunk } : p)
-            };
-          }
-          return { ...m, parts: [...m.parts, { text: chunk }] };
-        }));
-      },
-      onChatInputRequest: async (source, options) => {
-        // Human-in-the-loop: ставим на паузу и ждем ввода
-        setIsStreaming(false);
-        return new Promise((resolve) => {
-          setAgentInputRequest({ source, context: options, resolve });
-        });
-      }
-    });
-
-    setCurrentExecutor(executor);
-    
-    try {
-      const run = await executor.run(text);
-      // Финальное сохранение чата
-      saveCurrentChat([...messages, userMsg, { ...assistantMsg, isStreaming: false }]);
-    } catch (e: any) {
-      console.error('Agent execution failed:', e);
-      setError(e.message || 'Agent execution failed');
-    } finally {
-      setIsStreaming(false);
-      setStreamingId(null);
-      setCurrentExecutor(null);
-    }
-  }, [activeAgentId, isStreaming, messages, currentChatId, saveCurrentChat]);
+  }, [abortDeepThink]);
 
   /** Пустой ход модели — для ручного ввода/правки ответа ассистента (не user). */
   const handleAddModelMessage = useCallback(() => {
@@ -2893,7 +2309,9 @@ export default function Home() {
   const handleLoadChat = useCallback((chat: SavedChat) => {
     if (isStreaming) return;
     if (messages.length > 0 && unsaved) {
-      saveCurrentChat(messages).catch(err => {
+      // updateCurrentId=false: фоновое сохранение СТАРОГО чата не должно
+      // возвращать currentChatId/заголовок после загрузки нового чата
+      saveCurrentChat(messages, undefined, false).catch(err => {
         console.error('Failed to save current chat before loading:', err);
         // TODO: показать toast пользователю
       });
@@ -2929,77 +2347,6 @@ export default function Home() {
     });
   }, [isStreaming, messages, unsaved, saveCurrentChat, allModels, resetMessageWindow, scrollToBottomImmediate]);
 
-  const handleOpenAgent = useCallback((agentId: string, parentChatId?: string) => {
-    if (isStreaming) return;
-    
-    // Автосохранение текущего чата
-    if (messages.length > 0) {
-      saveCurrentChat(messages, undefined, false).catch(console.error);
-    }
-    
-    // Загружаем агента
-    const agent = getAgents().find(a => a.id === agentId);
-    if (!agent) {
-      console.error('Agent not found:', agentId);
-      return;
-    }
-    
-    // Создаём новый подчат
-    const subChatId = generateId();
-    const newChat: SavedChat = {
-      id: subChatId,
-      title: agent.name,
-      messages: [],
-      model: agent.model,
-      systemPrompt: agent.systemPrompt,
-      deepThinkSystemPrompt: loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT,
-      tools: [],
-      temperature: agent.temperature,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      parentChatId: parentChatId || currentChatId || undefined,
-      agentId: agent.id,
-      isSubChat: true,
-    };
-    
-    // Сохраняем подчат
-    saveChatToStorage(newChat).then(() => {
-      // Обновляем список чатов
-      loadSavedChats().then(chats => {
-        setSavedChats(chats);
-      });
-    });
-    
-    // Очищаем текущий чат и загружаем подчат
-    clearChatState();
-    setMessages([]);
-    setCurrentChatId(subChatId);
-    setChatTitle(agent.name);
-    
-    // Устанавливаем модель агента
-    const agentModel = allModels.find(m => m.id === agent.model);
-    if (agentModel) {
-      setActiveProviderIdState(agentModel.providerId);
-      setActiveModelState({ providerId: agentModel.providerId, modelId: agentModel.id });
-    } else {
-      setActiveModelState({ providerId: 'google', modelId: agent.model });
-    }
-    
-    setSystemPrompt(agent.systemPrompt);
-    setTemperature(agent.temperature);
-    setActiveChatId(subChatId);
-    setUnsaved(false);
-    
-    // Сбрасываем canvas
-    setLiveCode('');
-    setWebsiteType(null);
-    setShowLiveCanvas(false);
-    
-    // TODO: Загрузить референсные изображения из image memory если есть
-    // TODO: Активировать скиллы агента
-    
-  }, [isStreaming, messages, saveCurrentChat, clearChatState, allModels, currentChatId, generateId, loadSavedChats, setSavedChats]);
-
   const handleDeleteSavedChat = useCallback(async (id: string) => {
     // Получаем чат перед удалением для очистки URL
     const chat = savedChats.find(c => c.id === id);
@@ -3025,18 +2372,28 @@ export default function Home() {
     setSavedChats((prev: SavedChat[]) => prev.filter((c: SavedChat) => c.id !== id));
     
     if (currentChatId === id) {
-      handleClearChat();
+      // clearChatState напрямую: удаление чата уже подтверждено пользователем,
+      // дополнительный confirm "Очистить текущий чат?" не нужен
+      clearChatState();
     }
-  }, [currentChatId, handleClearChat, savedChats]);
+  }, [currentChatId, clearChatState, savedChats]);
 
-  const handleSavedChatsChange = useCallback(async (chats: SavedChat[]) => {
-    // Оптимизация: сохраняем только изменённые чаты
-    // Предполагаем что chats — это новый порядок, сохраняем всё
-    setSavedChats(chats);
-    
-    // Сохраняем параллельно вместо последовательно
-    await Promise.all(chats.map(c => saveChatToStorage(c)));
-  }, []);
+  // Переименование сохранённого чата (title обновляется в storage без перезаписи сообщений)
+  const handleRenameChat = useCallback(async (id: string, newTitle: string) => {
+    const title = newTitle.trim();
+    if (!title) return;
+    await renameChatInStorage(id, title);
+    setSavedChats((prev: SavedChat[]) =>
+      prev
+        .map((c: SavedChat) => (c.id === id ? { ...c, title, updatedAt: Date.now() } : c))
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    );
+    // Если это открытый чат — обновляем заголовок сессии
+    if (currentChatId === id) {
+      setChatTitle(title);
+    }
+    addLogEntry({ type: 'edit_message', source: 'chat', chatId: id });
+  }, [currentChatId, setSavedChats, setChatTitle]);
 
   // Auto-save when streaming stops
   useEffect(() => {
@@ -3111,7 +2468,6 @@ export default function Home() {
   settingsSidebarProps.onLoadChat = handleLoadChat;
   settingsSidebarProps.onNewChat = handleNewChat;
   settingsSidebarProps.onDeleteChat = handleDeleteSavedChat;
-  settingsSidebarProps.onOpenRPGProfileModal = () => setShowRPGProfileModal(true);
 
   // Messages to display: in arena mode use arena session messages
   const displayMessages = appMode === 'arena'
@@ -3154,8 +2510,9 @@ export default function Home() {
               onLoadChat={handleLoadChat}
               onNewChat={handleNewChat}
               onDeleteChat={handleDeleteSavedChat}
+              onRenameChat={handleRenameChat}
               onClose={() => setChatSidebarOpen(false)}
-              {...chatSidebarArenaPropsWithAgent}
+              {...chatSidebarArenaProps}
             />
           </div>
         </div>
@@ -3200,7 +2557,8 @@ export default function Home() {
               onLoadChat={handleLoadChat}
               onNewChat={handleNewChat}
               onDeleteChat={handleDeleteSavedChat}
-              {...chatSidebarArenaPropsWithAgent}
+              onRenameChat={handleRenameChat}
+              {...chatSidebarArenaProps}
             />
           </div>
         </div>
@@ -3261,10 +2619,6 @@ export default function Home() {
             <div className="hidden md:flex items-center gap-1 mx-2 bg-[var(--surface-2)] p-0.5 rounded-lg border border-[var(--border)]">
               <button onClick={() => setAppMode('chat')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'chat' ? 'bg-[var(--surface-4)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Chat</button>
               <button onClick={() => setAppMode('arena')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'arena' ? 'bg-amber-400/20 text-amber-400 shadow-sm border border-amber-400/30' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Arena</button>
-              <button onClick={() => setAppMode('agents')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors flex items-center gap-1 ${appMode === 'agents' ? 'bg-indigo-500/20 text-indigo-400 shadow-sm border border-indigo-500/30' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>
-                <Zap size={11} className={appMode === 'agents' ? 'fill-indigo-400/20' : ''} />
-                Agents
-              </button>
             </div>            <div className="flex items-center gap-2 min-w-0">
               {appMode === 'arena' && (
                 <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-full flex-shrink-0">
@@ -3275,10 +2629,6 @@ export default function Home() {
               {appMode === 'arena' ? (
                 <span className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px] md:max-w-xs">
                   {arena.activeSession?.title || 'Новая арена'}
-                </span>
-              ) : appMode === 'agents' && agentChatAgentId ? (
-                <span id="agent-thread-title" className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px]">
-                  Агентный чат
                 </span>
               ) : chatTitle ? (
                 <span className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px] md:max-w-xs">
@@ -3307,50 +2657,20 @@ export default function Home() {
           </div>
 
           <div className="flex items-center gap-1">
-            {appMode === 'agents' && agentChatAgentId && (
-              <>
-                <button
-                  onClick={() => window.dispatchEvent(new CustomEvent('agent-chat-new-thread'))}
-                  className="flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-xs text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)] transition-all"
-                >
-                  <MessageSquarePlus size={11} />
-                  <span className="hidden md:block">Новый чат</span>
-                </button>
-                <button
-                  onClick={() => setAgentChatAgentId(null)}
-                  className="flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-xs text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)] transition-all"
-                >
-                  <X size={11} />
-                  <span className="hidden md:block">К списку</span>
-                </button>
-              </>
-            )}
-            {appMode === 'agents' && (
-              <button
-                onClick={() => window.location.href = '/agents'}
-                className="flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-xs text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)] transition-all"
-                title="Редактор графов"
-              >
-                <Pencil size={11} />
-                <span className="hidden md:block">Редактор</span>
-              </button>
-            )}
-            {appMode !== 'agents' && (
-              <button
-                onClick={toggleSettingsSidebar}
-                className={`flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-all ${
-                  settingsSidebarOpen
-                    ? appMode === 'arena'
-                      ? 'border-amber-400/30 bg-amber-400/10 text-amber-400'
-                      : 'border-[var(--border-strong)] bg-[var(--surface-3)] text-[var(--text-primary)]'
-                    : 'border-transparent text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
-                }`}
-                title={appMode === 'arena' ? 'Агенты' : 'Настройки'}
-              >
-                {appMode === 'arena' ? <Zap size={13} /> : <SlidersHorizontal size={13} />}
-                <span className="hidden md:block">{appMode === 'arena' ? 'Агенты' : 'Настройки'}</span>
-              </button>
-            )}
+            <button
+              onClick={toggleSettingsSidebar}
+              className={`flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-xs transition-all ${
+                settingsSidebarOpen
+                  ? appMode === 'arena'
+                    ? 'border-amber-400/30 bg-amber-400/10 text-amber-400'
+                    : 'border-[var(--border-strong)] bg-[var(--surface-3)] text-[var(--text-primary)]'
+                  : 'border-transparent text-[var(--text-dim)] hover:border-[var(--border)] hover:bg-[var(--surface-3)] hover:text-[var(--text-primary)]'
+              }`}
+              title={appMode === 'arena' ? 'Агенты' : 'Настройки'}
+            >
+              {appMode === 'arena' ? <Zap size={13} /> : <SlidersHorizontal size={13} />}
+              <span className="hidden md:block">{appMode === 'arena' ? 'Агенты' : 'Настройки'}</span>
+            </button>
             
             {messages.length > 0 && (
               <button
@@ -3411,28 +2731,7 @@ export default function Home() {
           className="flex-1 overflow-y-auto chat-messages-area px-6 py-8 relative"
           onScroll={handleScroll}
         >
-          {appMode === 'agents' ? (
-            agentChatAgentId ? (
-              <AgentChatPage
-                key={agentChatRenderKey}
-                agentConfigId={agentChatAgentId}
-                threadId={agentChatThreadId || undefined}
-                onBack={() => {
-                  setAgentChatAgentId(null);
-                  setAgentChatThreadId(null);
-                  setAgentChatRenderKey(prev => prev + 1);
-                }}
-              />
-            ) : (
-              <AgentChatList
-                onSelectAgent={(configId) => {
-                  setAgentChatAgentId(configId);
-                  setAgentChatThreadId(null);
-                  setAgentChatRenderKey(prev => prev + 1); // Принудительный ре-рендер
-                }}
-              />
-            )
-          ) : showLiveCanvas ? (
+          {showLiveCanvas ? (
             <LivePreviewPanel
               code={liveCode}
               onClose={() => setShowLiveCanvas(false)}
@@ -3566,12 +2865,14 @@ export default function Home() {
                           (window as any).__chatInputAddAnnotation(annotationRef);
                         }
                       }}
-                      onOpenAgentChat={(agentId) => handleOpenAgent(agentId, currentChatId || undefined)}
-                      onFeedback={appMode === 'arena' ? undefined : handleFeedback}
-                      onRegenerateWithFeedback={appMode === 'arena' ? undefined : handleRegenerateWithFeedback}
-                      onRememberStyle={appMode === 'arena' ? undefined : handleRememberStyle}
-                      onShorter={appMode === 'arena' ? undefined : handleShorter}
-                      onContinueFromCursor={appMode === 'arena' ? undefined : handleContinueFromCursor}
+                      canMergeWithPrevious={
+                        appMode !== 'arena' &&
+                        message.role === 'model' &&
+                        !message.isStreaming &&
+                        idx > 0 &&
+                        msgList[idx - 1].role === 'model'
+                      }
+                      onMergeWithPrevious={handleMergeWithPrevious}
                       onRegenerateTextOnly={appMode === 'arena' ? undefined : handleRegenerateTextOnly}
                       onDismissBlocked={appMode === 'arena' ? undefined : handleDismissBlocked}
                       onEditDeepThinking={appMode === 'arena' ? undefined : handleEditDeepThinking}
@@ -3590,7 +2891,7 @@ export default function Home() {
           )}
           
           {/* Плавающая кнопка скролла вниз */}
-          {showScrollBottom && messages.length > 0 && appMode !== 'agents' && (
+          {showScrollBottom && messages.length > 0 && (
             <button
               onClick={scrollToBottom}
               className="fixed bottom-24 p-2.5 bg-[var(--surface-3)] text-[var(--text-primary)] border border-[var(--border)] rounded-full shadow-glow-sm hover:bg-[var(--surface-4)] transition-all animate-fade-in z-20"
@@ -3614,7 +2915,7 @@ export default function Home() {
         </div>
 
         {/* Input */}
-        <div className={`flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper ${appMode === 'agents' && !agentChatAgentId ? 'hidden' : ''}`}>
+        <div className="flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper">
           {appMode === 'chat' && (
             <div className="px-4 mb-2 flex items-center justify-end gap-2">
               <DeepThinkToggle
@@ -3637,14 +2938,12 @@ export default function Home() {
           <ChatInput
             onSend={appMode === 'arena'
               ? (text, files) => arena.sendUserMessage(text, files)
-              : appMode === 'agents'
-              ? (text: string) => window.dispatchEvent(new CustomEvent('agent-chat-send', { detail: text }))
               : handleSend
             }
-            onStop={appMode === 'arena' ? arena.stopStreaming : appMode === 'agents' ? () => window.dispatchEvent(new CustomEvent('agent-chat-stop')) : handleStop}
+            onStop={appMode === 'arena' ? arena.stopStreaming : handleStop}
             onAddUserMessage={appMode === 'arena' ? () => {} : handleAddModelMessage}
-            isStreaming={appMode === 'arena' ? arena.isStreaming : appMode === 'agents' ? isAgentRunning : isStreaming}
-            disabled={appMode === 'arena' ? !arena.activeSession : appMode === 'agents' ? !agentChatAgentId : !hasApiAndModel}
+            isStreaming={appMode === 'arena' ? arena.isStreaming : isStreaming}
+            disabled={appMode === 'arena' ? !arena.activeSession : !hasApiAndModel}
             canContinue={appMode === 'arena' ? (
               arena.activeSession?.messages.some(m => m.role === 'model' && !m.isStreaming && m.parts.some(p => 'text' in p && (p as {text:string}).text.length > 0)) ?? false
             ) : canContinue}
@@ -4076,16 +3375,6 @@ export default function Home() {
         chatId={currentChatId || undefined}
       />
 
-      {/* RPG Profile Modal */}
-      <RPGProfileModal
-        open={showRPGProfileModal}
-        onClose={() => setShowRPGProfileModal(false)}
-        onNavigateToChat={(chatId) => {
-          const chat = savedChats.find(c => c.id === chatId);
-          if (chat) handleLoadChat(chat);
-        }}
-      />
-
       {/* Skills Market Modal */}
       <SkillsMarket
         open={showSkillsMarket}
@@ -4094,16 +3383,6 @@ export default function Home() {
         messages={messages}
         onUIEvent={handleSkillEvent}
         onSkillsChanged={() => setSkillsRevision(r => r + 1)}
-      />
-
-      {/* HF Spaces Manager Modal */}
-      <HFSpaceManager
-        open={showHFSpaces}
-        onClose={() => setShowHFSpaces(false)}
-        onSpacesChanged={() => {
-          reloadHFSpaceSkills();
-          setSkillsRevision(r => r + 1);
-        }}
       />
 
       {/* Command Palette */}
@@ -4143,7 +3422,6 @@ export default function Home() {
         }
         onOpenMemory={() => setShowMemoryModal(true)}
         onOpenSkills={() => setShowSkillsMarket(true)}
-        onOpenRPG={() => setShowRPGProfileModal(true)}
         onOpenDeepThink={() => setShowDeepThinkDialog(true)}
         onOpenSystem={() => setSettingsSidebarOpen(true)}
       />
