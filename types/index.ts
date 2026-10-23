@@ -156,7 +156,7 @@ export interface Message {
 // Артефакт скилла (импортируется из lib/skills/types.ts в рантайме)
 export interface SkillArtifact {
   id: string;
-  type: 'image' | 'video' | 'audio' | 'document' | 'code' | 'table' | 'chart' | 'text' | 'custom' | 'annotated_image' | 'agent_card' | 'file_edit';
+  type: 'image' | 'video' | 'audio' | 'document' | 'code' | 'table' | 'chart' | 'text' | 'custom' | 'decision' | 'annotated_image' | 'agent_card' | 'file_edit';
   label?: string;
   data: 
     | { kind: 'base64'; mimeType: string; base64: string }

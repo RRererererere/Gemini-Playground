@@ -15,6 +15,7 @@ export type {
 export {
   getInstalledSkills,
   getInstalledSkill,
+  isSkillInstalled,
   isSkillActive,
   installSkill,
   uninstallSkill,

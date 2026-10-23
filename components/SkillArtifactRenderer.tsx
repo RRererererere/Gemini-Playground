@@ -49,6 +49,8 @@ export function SkillArtifactRenderer({ artifact, onAnnotationClick }: Props) {
       return <ArtifactVideo artifact={artifact} />;
     case 'audio':
       return <ArtifactAudio artifact={artifact} />;
+    case 'decision':
+      return <ArtifactDecision artifact={artifact} />;
     case 'code':
       return <ArtifactCode artifact={artifact} />;
     case 'text':
@@ -597,6 +599,26 @@ function ArtifactAudio({ artifact }: Props) {
       <audio controls className="w-full max-w-md">
         <source src={src} type={artifact.data.kind === 'base64' ? artifact.data.mimeType : undefined} />
       </audio>
+    </div>
+  );
+}
+
+function ArtifactDecision({ artifact }: Props) {
+  if (artifact.data.kind !== 'json') return null;
+  const value = artifact.data.value as { model?: string; answers?: Record<string, any>; usage?: any };
+  const answers = value.answers || {};
+  const displayValue = (answer: any) => {
+    if (!answer || typeof answer !== 'object') return String(answer ?? '—');
+    if (answer.type === 'choice') return answer.choice;
+    if (answer.type === 'noul') return answer.noul ? 'Да' : 'Нет';
+    if (answer.type === 'score') return String(answer.score);
+    if (answer.type === 'box') return `(${answer.box?.left ?? '—'}, ${answer.box?.top ?? '—'}) → (${answer.box?.right ?? '—'}, ${answer.box?.bottom ?? '—'})`;
+    return JSON.stringify(answer);
+  };
+  return (
+    <div className="my-3 rounded-xl border border-cyan-300/20 bg-cyan-300/5 p-3">
+      <div className="mb-3 flex items-center justify-between gap-3"><div><div className="text-xs font-medium text-cyan-100">{artifact.label || 'Mercury Decide'}</div><div className="mt-0.5 font-mono text-[10px] text-cyan-100/50">{value.model || 'inception/mercury-decide:free'}</div></div><span className="rounded-full border border-cyan-300/20 px-2 py-0.5 text-[10px] uppercase tracking-wider text-cyan-200/70">structured</span></div>
+      <div className="grid gap-2 sm:grid-cols-2">{Object.entries(answers).map(([id, answer]) => <div key={id} className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2"><div className="flex items-center justify-between gap-2"><span className="font-mono text-[11px] text-[var(--text-muted)]">{id}</span><span className="text-[10px] text-cyan-200/60">{answer?.type || 'answer'}</span></div><div className="mt-1 text-sm text-[var(--text-primary)]">{displayValue(answer)}</div></div>)}</div>
     </div>
   );
 }

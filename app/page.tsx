@@ -30,6 +30,7 @@ import DeepThinkToggle from '@/components/DeepThinkToggle';
 import AgentMessageHeader from '@/components/AgentMessageHeader';
 import ArenaInputBar from '@/components/ArenaInputBar';
 import ArenaAgentsSidebar from '@/components/ArenaAgentsSidebar';
+import MercuryDecisionLab from '@/components/MercuryDecisionLab';
 import { useArena } from '@/lib/useArena';
 import { loadSceneStateConfig, saveSceneStateConfig } from '@/lib/scene-state-storage';
 import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, ToolResponse, SavedSystemPrompt, SkillArtifact, CanvasElement, Provider, UniversalModel, ActiveModel, Message, AttachedFile, Part, DeepThinkAnalysis, WebsiteType, OpenFile, FileDiffOp } from '@/types';
@@ -534,16 +535,22 @@ export default function Home() {
       } = await import('@/lib/file-editor-bridge');
       const editorChatId = fileEditorChatKey || resolveEditorChatId(currentChatId);
 
-      // Ensure skill is active + editable attachments are open before first request
-      try {
-        const { isSkillActive, installSkill } = await import('@/lib/skills/registry');
-        if (!isSkillActive('file-editor')) installSkill('file-editor');
-      } catch { /* ignore */ }
+      const { isSkillActive, isSkillInstalled, installSkill } = await import('@/lib/skills/registry');
 
       const historyFiles = history
         .filter(m => m.role === 'user' && m.files?.length)
         .flatMap(m => m.files || [])
         .filter(f => isEditableFile(f.mimeType, f.name));
+
+      // Авто-установка ТОЛЬКО если пользователь прикрепил редактируемые файлы и скилл
+      // ещё никогда не ставился. Если стоит но выключен — уважаем выбор юзера,
+      // раньше installSkill() молча включал его обратно перед каждым запросом.
+      if (historyFiles.length > 0 && !isSkillInstalled('file-editor')) {
+        try {
+          installSkill('file-editor');
+        } catch { /* ignore */ }
+      }
+
       if (historyFiles.length > 0) {
         try {
           await openEditableAttachments(
@@ -560,8 +567,16 @@ export default function Home() {
         }
       }
 
-      // Force tools until at least one successful file-editor mutation this generation
-      let forceFileEditorTools = hasOpenEditorFiles(editorChatId);
+      // Форсим file-editor tools только когда скилл активен, файлы открыты и в ТЕКУЩЕМ
+      // ходе реально прикреплён редактируемый файл. Иначе модель принуждают звать
+      // edit_file на обычные вопросы — она и «правит» несуществующие файлы.
+      const fileEditorActive = isSkillActive('file-editor');
+      const lastUserTurn = [...history].reverse().find(m => m.role === 'user');
+      const editableAttachedThisTurn = Boolean(
+        lastUserTurn?.files?.some(f => isEditableFile(f.mimeType, f.name))
+      );
+      let forceFileEditorTools =
+        fileEditorActive && editableAttachedThisTurn && hasOpenEditorFiles(editorChatId);
       let fileEditorMutated = false;
 
       while (shouldContinueLoop) {
@@ -609,19 +624,9 @@ export default function Home() {
           }
         }
 
-        // Собираем skill tools (file-editor must be present if files open)
-        let skillTools = collectSkillTools();
-        if (forceFileEditorTools || hasOpenEditorFiles(editorChatId)) {
-          const names = new Set(skillTools.map((t: any) => t.name));
-          if (!FILE_EDITOR_TOOL_NAMES.some(n => names.has(n))) {
-            // Skill tools missing — re-collect after forced install
-            try {
-              const { installSkill } = await import('@/lib/skills/registry');
-              installSkill('file-editor');
-            } catch { /* ignore */ }
-            skillTools = collectSkillTools();
-          }
-        }
+        // Собираем skill tools. File-editor tools приходят только если скилл активен —
+        // принудительно не переустанавливаем (это включало выключенный скилл).
+        const skillTools = collectSkillTools();
         
         // Пересобираем промпт внутри цикла (image context обновляется после zoom)
         // chatId = editorChatId so OPEN FILES section matches bridge storage
@@ -2619,6 +2624,7 @@ export default function Home() {
             <div className="hidden md:flex items-center gap-1 mx-2 bg-[var(--surface-2)] p-0.5 rounded-lg border border-[var(--border)]">
               <button onClick={() => setAppMode('chat')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'chat' ? 'bg-[var(--surface-4)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Chat</button>
               <button onClick={() => setAppMode('arena')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'arena' ? 'bg-amber-400/20 text-amber-400 shadow-sm border border-amber-400/30' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Arena</button>
+              <button onClick={() => setAppMode('decide')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'decide' ? 'bg-cyan-300/15 text-cyan-200 shadow-sm border border-cyan-300/25' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Mercury</button>
             </div>            <div className="flex items-center gap-2 min-w-0">
               {appMode === 'arena' && (
                 <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-full flex-shrink-0">
@@ -2626,7 +2632,9 @@ export default function Home() {
                   Arena
                 </span>
               )}
-              {appMode === 'arena' ? (
+              {appMode === 'decide' ? (
+                <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-cyan-200 bg-cyan-400/10 border border-cyan-400/20 px-2 py-0.5 rounded-full flex-shrink-0">◈ Mercury Decide</span>
+              ) : appMode === 'arena' ? (
                 <span className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px] md:max-w-xs">
                   {arena.activeSession?.title || 'Новая арена'}
                 </span>
@@ -2731,7 +2739,9 @@ export default function Home() {
           className="flex-1 overflow-y-auto chat-messages-area px-6 py-8 relative"
           onScroll={handleScroll}
         >
-          {showLiveCanvas ? (
+          {appMode === 'decide' ? (
+            <MercuryDecisionLab defaultApiKey={selectedApiKey || ''} />
+          ) : showLiveCanvas ? (
             <LivePreviewPanel
               code={liveCode}
               onClose={() => setShowLiveCanvas(false)}
@@ -2915,7 +2925,7 @@ export default function Home() {
         </div>
 
         {/* Input */}
-        <div className="flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper">
+        <div className={`flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper ${appMode === 'decide' ? 'hidden' : ''}`}>
           {appMode === 'chat' && (
             <div className="px-4 mb-2 flex items-center justify-end gap-2">
               <DeepThinkToggle

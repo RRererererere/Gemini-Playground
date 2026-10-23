@@ -90,10 +90,11 @@ export function useFileEditor(currentChatId: string | null) {
       const editable = files.filter(f => isEditableFile(f.mimeType, f.name));
       if (editable.length === 0) return;
 
-      // Авто-включение скилла, иначе AI не получит tools
+      // Авто-установка скилла только если он ещё никогда не ставился.
+      // Если пользователь явно выключил — не включаем обратно.
       try {
-        const { isSkillActive, installSkill } = await import('@/lib/skills/registry');
-        if (!isSkillActive('file-editor')) {
+        const { isSkillInstalled, installSkill } = await import('@/lib/skills/registry');
+        if (!isSkillInstalled('file-editor')) {
           installSkill('file-editor');
         }
       } catch {

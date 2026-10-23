@@ -35,6 +35,12 @@ export function getInstalledSkill(id: string): InstalledSkillRecord | null {
   return readRegistry()[id] ?? null;
 }
 
+/** Установлен ли скилл вообще (независимо от enabled).
+ *  Отличает «никогда не ставили» от «пользователь явно выключил». */
+export function isSkillInstalled(id: string): boolean {
+  return readRegistry()[id] !== undefined;
+}
+
 /** Установлен и включён? */
 export function isSkillActive(id: string): boolean {
   const record = getInstalledSkill(id);
