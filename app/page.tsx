@@ -30,7 +30,7 @@ import DeepThinkToggle from '@/components/DeepThinkToggle';
 import AgentMessageHeader from '@/components/AgentMessageHeader';
 import ArenaInputBar from '@/components/ArenaInputBar';
 import ArenaAgentsSidebar from '@/components/ArenaAgentsSidebar';
-import MercuryDecisionLab from '@/components/MercuryDecisionLab';
+import JevDecisionLab from '@/components/JevDecisionLab';
 import { useArena } from '@/lib/useArena';
 import { loadSceneStateConfig, saveSceneStateConfig } from '@/lib/scene-state-storage';
 import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, ToolResponse, SavedSystemPrompt, SkillArtifact, CanvasElement, Provider, UniversalModel, ActiveModel, Message, AttachedFile, Part, DeepThinkAnalysis, WebsiteType, OpenFile, FileDiffOp } from '@/types';
@@ -2624,7 +2624,7 @@ export default function Home() {
             <div className="hidden md:flex items-center gap-1 mx-2 bg-[var(--surface-2)] p-0.5 rounded-lg border border-[var(--border)]">
               <button onClick={() => setAppMode('chat')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'chat' ? 'bg-[var(--surface-4)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Chat</button>
               <button onClick={() => setAppMode('arena')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'arena' ? 'bg-amber-400/20 text-amber-400 shadow-sm border border-amber-400/30' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Arena</button>
-              <button onClick={() => setAppMode('decide')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'decide' ? 'bg-cyan-300/15 text-cyan-200 shadow-sm border border-cyan-300/25' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Mercury</button>
+              <button onClick={() => setAppMode('jev')} className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${appMode === 'jev' ? 'bg-violet-400/15 text-violet-200 shadow-sm border border-violet-400/25' : 'text-[var(--text-dim)] hover:text-[var(--text-primary)] hover:bg-[var(--surface-3)]'}`}>Jev</button>
             </div>            <div className="flex items-center gap-2 min-w-0">
               {appMode === 'arena' && (
                 <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-full flex-shrink-0">
@@ -2632,8 +2632,8 @@ export default function Home() {
                   Arena
                 </span>
               )}
-              {appMode === 'decide' ? (
-                <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-cyan-200 bg-cyan-400/10 border border-cyan-400/20 px-2 py-0.5 rounded-full flex-shrink-0">◈ Mercury Decide</span>
+              {appMode === 'jev' ? (
+                <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-violet-200 bg-violet-400/10 border border-violet-400/20 px-2 py-0.5 rounded-full flex-shrink-0">◈ Jev Decisions</span>
               ) : appMode === 'arena' ? (
                 <span className="text-sm font-medium text-[var(--text-primary)] truncate max-w-[200px] md:max-w-xs">
                   {arena.activeSession?.title || 'Новая арена'}
@@ -2739,8 +2739,8 @@ export default function Home() {
           className="flex-1 overflow-y-auto chat-messages-area px-6 py-8 relative"
           onScroll={handleScroll}
         >
-          {appMode === 'decide' ? (
-            <MercuryDecisionLab defaultApiKey={selectedApiKey || ''} />
+          {appMode === 'jev' ? (
+            <JevDecisionLab defaultApiKey={selectedApiKey || ''} />
           ) : showLiveCanvas ? (
             <LivePreviewPanel
               code={liveCode}
@@ -2925,7 +2925,7 @@ export default function Home() {
         </div>
 
         {/* Input */}
-        <div className={`flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper ${appMode === 'decide' ? 'hidden' : ''}`}>
+        <div className={`flex-shrink-0 max-w-3xl mx-auto w-full chat-input-wrapper ${appMode === 'jev' ? 'hidden' : ''}`}>
           {appMode === 'chat' && (
             <div className="px-4 mb-2 flex items-center justify-end gap-2">
               <DeepThinkToggle
