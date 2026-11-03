@@ -1,7 +1,8 @@
-import { NextRequest } from 'next/server';
+import type { NextRequest } from 'next/server';
 import type { ChatTool } from '@/types';
 import { toolToDeclaration } from '@/lib/gemini';
 import { classifyGeminiError, extractRetryAfterSeconds } from '@/lib/gemini-errors';
+import { buildGeminiThinkingConfig } from '@/lib/gemini-thinking';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -112,6 +113,7 @@ export async function POST(request: NextRequest) {
       model,
       systemInstruction,
       temperature,
+      topP,
       apiKey,
       tools,
       memoryTools, // Инструменты памяти (уже в формате Gemini API)
@@ -216,6 +218,7 @@ export async function POST(request: NextRequest) {
       contents,
       generationConfig: {
         temperature: typeof temperature === 'number' ? temperature : 1.0,
+        ...(typeof topP === 'number' && topP >= 0 && topP <= 1 && { topP }),
         maxOutputTokens: typeof maxOutputTokens === 'number' ? maxOutputTokens : 8192,
       },
     };
@@ -253,24 +256,8 @@ export async function POST(request: NextRequest) {
       requestBody.toolConfig = toolConfig;
     }
 
-    // Режим размышлений для Gemini (Gemini 2.5, thinking-exp, 3.x).
-    // Поддерживает настройки thinkingBudget: 0 = выключить, -1 = авто/динамический, >0 = заданный бюджет токенов.
-    const isThinkingModel =
-      modelId.toLowerCase().includes('thinking') ||
-      modelId.toLowerCase().includes('2.5') ||
-      modelId.toLowerCase().includes('3.');
-
-    if (isThinkingModel) {
-      const budget = typeof thinkingBudget === 'number' ? thinkingBudget : -1;
-      requestBody.generationConfig.thinkingConfig = {
-        thinkingBudget: budget,
-      };
-    } else if (includeThoughts === true && thinkingBudget !== undefined) {
-      const budget = typeof thinkingBudget === 'number' ? thinkingBudget : -1;
-      requestBody.generationConfig.thinkingConfig = {
-        thinkingBudget: budget,
-      };
-    }
+    const thinkingConfig = buildGeminiThinkingConfig(modelId, thinkingBudget, includeThoughts === true);
+    if (thinkingConfig) requestBody.generationConfig.thinkingConfig = thinkingConfig;
 
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}&alt=sse`;
 

@@ -59,6 +59,8 @@ export interface UseAppStateReturn {
   setDeepThinkApiKeyIndex: (idx: number) => void;
   temperature: number;
   setTemperature: React.Dispatch<React.SetStateAction<number>>;
+  topP: number | undefined;
+  setTopP: React.Dispatch<React.SetStateAction<number | undefined>>;
   thinkingBudget: number;
   setThinkingBudget: React.Dispatch<React.SetStateAction<number>>;
   maxOutputTokens: number;
@@ -210,7 +212,7 @@ export function useAppState(): UseAppStateReturn {
     deepThinkProviderId, setDeepThinkProviderId,
     deepThinkModelId, setDeepThinkModelId,
     deepThinkApiKeyIndex, setDeepThinkApiKeyIndex,
-    temperature, setTemperature, thinkingBudget, setThinkingBudget,
+    temperature, setTemperature, topP, setTopP, thinkingBudget, setThinkingBudget,
     maxOutputTokens, setMaxOutputTokens,
     memoryEnabled, setMemoryEnabled, maxToolRounds, setMaxToolRounds,
     maxMemoryCalls, setMaxMemoryCalls,
@@ -325,6 +327,7 @@ export function useAppState(): UseAppStateReturn {
         if (loadedChat.deepThinkSystemPrompt) setDeepThinkSystemPrompt(loadedChat.deepThinkSystemPrompt);
         if (loadedChat.tools) setTools(loadedChat.tools);
         if (loadedChat.temperature != null) setTemperature(loadedChat.temperature);
+        setTopP(loadedChat.topP);
         if (loadedChat.model) {
           setActiveModel({ providerId: getActiveProviderId(), modelId: loadedChat.model });
         }
@@ -458,6 +461,11 @@ export function useAppState(): UseAppStateReturn {
     onDeepThinkSystemPromptChange: setDeepThinkSystemPrompt,
     temperature,
     onTemperatureChange: setTemperature,
+    topP,
+    onTopPChange: (value: number | undefined) => {
+      setTopP(value);
+      if (messages.length > 0) setUnsaved(true);
+    },
     thinkingBudget,
     onThinkingBudgetChange: setThinkingBudget,
     tokenCount,
@@ -507,7 +515,7 @@ export function useAppState(): UseAppStateReturn {
     deepThinkProviderId, setDeepThinkProviderId,
     deepThinkModelId, setDeepThinkModelId,
     deepThinkApiKeyIndex, setDeepThinkApiKeyIndex,
-    temperature, setTemperature, thinkingBudget, setThinkingBudget,
+    temperature, setTemperature, topP, setTopP, thinkingBudget, setThinkingBudget,
     maxOutputTokens, setMaxOutputTokens,
     memoryEnabled, setMemoryEnabled, maxToolRounds, setMaxToolRounds,
     maxMemoryCalls, setMaxMemoryCalls,

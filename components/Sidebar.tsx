@@ -38,6 +38,7 @@ import {
   import type { ChatTool, GeminiModel, ApiKeyEntry, SavedChat, SavedSystemPrompt, Provider, UniversalModel, ActiveModel } from '@/types';
   import { addApiKey, removeApiKey, getKeyStatus, timeUntilUnblock, unblockKey } from '@/lib/apiKeyManager';
 import { loadProviders, saveCustomProvider, removeProvider, loadModelsCache, saveModelsCache, clearModelsCache } from '@/lib/providerStorage';
+import { getGeminiThinkingLevel, usesGeminiThinkingLevels } from '@/lib/gemini-thinking';
 import { ProviderModal } from './AddProviderModal';
 import {
   exportAllSettings,
@@ -150,6 +151,8 @@ export interface SidebarSharedProps {
   onDeepThinkSystemPromptChange: (prompt: string) => void;
   temperature: number;
   onTemperatureChange: (temp: number) => void;
+  topP: number | undefined;
+  onTopPChange: (value: number | undefined) => void;
   thinkingBudget: number;
   onThinkingBudgetChange: (v: number) => void;
   tokenCount: number;
@@ -835,6 +838,8 @@ export function SettingsSidebar({
   onDeepThinkSystemPromptChange,
   temperature,
   onTemperatureChange,
+  topP,
+  onTopPChange,
   thinkingBudget,
   onThinkingBudgetChange,
   tokenCount,
@@ -1055,7 +1060,20 @@ export function SettingsSidebar({
   const modelDisplayName = selectedModel?.displayName || activeModel?.modelId || 'Выбрать модель';
   const tempLabel = temperature < 0.4 ? 'Точно' : temperature < 0.8 ? 'Баланс' : temperature < 1.4 ? 'Творчески' : 'Хаос';
   const tempColor = temperature < 0.4 ? '#2dd4bf' : temperature < 0.8 ? '#4ade80' : temperature < 1.4 ? '#f59e0b' : '#ef4444';
-  const thinkingLabel = thinkingBudget === 0 ? 'Выкл' : thinkingBudget === -1 ? 'Авто' : `${thinkingBudget} токенов`;
+  const thinkingModelId = activeProvider?.type === 'gemini' ? activeModel?.modelId || '' : '';
+  const usesThinkingLevels = usesGeminiThinkingLevels(thinkingModelId);
+  const thinkingLevel = getGeminiThinkingLevel(thinkingModelId, thinkingBudget);
+  const thinkingLevelLabels = { MINIMAL: 'Мин.', LOW: 'Мало', MEDIUM: 'Средне', HIGH: 'Много' };
+  const thinkingPresets = usesThinkingLevels
+    ? Array.from(new Map([-1, 0, 512, 4096, 8192].map(value => [getGeminiThinkingLevel(thinkingModelId, value), value])),
+        ([level, value]) => ({ value, label: level ? thinkingLevelLabels[level] : 'Авто', selected: level === thinkingLevel }))
+    : [
+        { label: 'Выкл', value: 0 },
+        { label: 'Авто', value: -1 },
+        { label: 'Мало', value: 512 },
+        { label: 'Много', value: 8192 },
+      ].map(preset => ({ ...preset, selected: preset.value === thinkingBudget }));
+  const thinkingLabel = thinkingPresets.find(preset => preset.selected)?.label || `${thinkingBudget} токенов`;
   
   // Group models by provider
   const modelsByProvider = allModels.reduce((acc, model) => {
@@ -1512,6 +1530,26 @@ export function SettingsSidebar({
                   {activeProvider?.type === 'gemini' && (
                     <div>
                       <div className="mb-2 flex items-center justify-between">
+                        <span className="text-[10px] uppercase tracking-[0.16em] text-[var(--text-dim)]">Top P</span>
+                        <button
+                          type="button"
+                          onClick={() => onTopPChange(undefined)}
+                          disabled={topP === undefined}
+                          className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] text-[var(--text-primary)] disabled:opacity-60"
+                        >
+                          Авто
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input type="range" min="0" max="1" step="0.01" value={topP ?? 1} onChange={event => onTopPChange(event.target.valueAsNumber)} aria-label="Top P" />
+                        <span className="text-xs font-mono text-[var(--text-primary)]">{topP?.toFixed(2) ?? 'Авто'}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeProvider?.type === 'gemini' && (
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
                         <div className="flex items-center gap-2 text-[var(--text-dim)]">
                           <Brain size={12} />
                           <span className="text-[10px] uppercase tracking-[0.16em]">Размышления</span>
@@ -1519,18 +1557,13 @@ export function SettingsSidebar({
                         <span className="rounded-md border border-[var(--border)] bg-[var(--surface-2)] px-1.5 py-0.5 text-[10px] font-mono text-[var(--text-primary)]">{thinkingLabel}</span>
                       </div>
 
-                      <div className="mb-2 grid grid-cols-4 gap-1.5">
-                        {[
-                          { label: 'Выкл', value: 0 },
-                          { label: 'Авто', value: -1 },
-                          { label: 'Мало', value: 512 },
-                          { label: 'Много', value: 8192 },
-                        ].map(option => (
+                      <div className="mb-2 flex flex-wrap gap-1.5">
+                        {thinkingPresets.map(option => (
                           <button
                             key={option.label}
                             onClick={() => onThinkingBudgetChange(option.value)}
-                            className={`rounded-xl border px-2 py-2 text-[10px] transition-all ${
-                              thinkingBudget === option.value ? 'border-white bg-white text-black' : 'border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-dim)] hover:text-[var(--text-primary)]'
+                            className={`flex-1 rounded-xl border px-2 py-2 text-[10px] transition-all ${
+                              option.selected ? 'border-white bg-white text-black' : 'border-[var(--border)] bg-[var(--surface-2)] text-[var(--text-dim)] hover:text-[var(--text-primary)]'
                             }`}
                           >
                             {option.label}
@@ -1538,7 +1571,7 @@ export function SettingsSidebar({
                         ))}
                       </div>
 
-                      {thinkingBudget > 0 && (
+                      {!usesThinkingLevels && thinkingBudget > 0 && (
                         <input type="range" min="128" max="32768" step="128" value={thinkingBudget} onChange={event => onThinkingBudgetChange(parseInt(event.target.value, 10))} />
                       )}
                     </div>

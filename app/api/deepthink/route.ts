@@ -4,6 +4,7 @@ import { classifyGeminiError, extractRetryAfterSeconds } from '@/lib/gemini-erro
 import { getEnabledCategoryIdsForPrompt } from '@/lib/scene-state-storage';
 import { convertGeminiToOpenAI } from '@/lib/message-converter';
 import { normalizeApiBaseUrl } from '@/lib/api-base-url';
+import { buildGeminiThinkingConfig } from '@/lib/gemini-thinking';
 
 export const maxDuration = 30;
 export const dynamic = 'force-dynamic';
@@ -137,8 +138,6 @@ export async function POST(request: NextRequest) {
     const turnIndex = historyContents.filter(m => m.role === 'user').length;
 
     const modelId = (model || 'gemini-2.0-flash').replace('models/', '');
-    // Поддерживают ли модели режим размышлений (thinkingConfig)
-    const isThinkingModel = modelId.toLowerCase().includes('thinking') || modelId.toLowerCase().includes('thinking-exp');
 
     // Ограничиваем историю чтобы не упереться в лимит контекста
     const MAX_HISTORY_MESSAGES = 20;
@@ -189,6 +188,7 @@ export async function POST(request: NextRequest) {
       });
     } else {
       // ── Gemini Formatting ───────────────────────────────────────────────────
+      const thinkingConfig = buildGeminiThinkingConfig(modelId, -1, true);
       const requestBody: any = {
         contents: [
           ...limitedHistory,
@@ -201,15 +201,11 @@ export async function POST(request: NextRequest) {
           parts: [{ text: deepThinkSystemPrompt || DEFAULT_DEEPTHINK_SYSTEM }],
         },
         generationConfig: {
-          temperature: 0.7,
+          temperature: modelId.toLowerCase().includes('thinking') ? 1.0 : 0.7,
           maxOutputTokens: 16384,
+          ...(thinkingConfig && { thinkingConfig }),
         },
       };
-
-      if (isThinkingModel) {
-        requestBody.generationConfig.thinkingConfig = { includeThoughts: true };
-        requestBody.generationConfig.temperature = 1.0;
-      }
 
       const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}&alt=sse`;
       response = await fetch(geminiUrl, {

@@ -251,6 +251,7 @@ export interface SavedChat {
   deepThinkSystemPrompt?: string;
   tools?: ChatTool[];
   temperature: number;
+  topP?: number;
   createdAt: number;
   updatedAt: number;
   // Agent Creator: подчаты

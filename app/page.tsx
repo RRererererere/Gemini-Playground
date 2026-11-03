@@ -176,7 +176,7 @@ export default function Home() {
     deepThinkProviderId, setDeepThinkProviderId,
     deepThinkModelId, setDeepThinkModelId,
     deepThinkApiKeyIndex, setDeepThinkApiKeyIndex,
-    temperature, setTemperature, thinkingBudget, setThinkingBudget,
+    temperature, setTemperature, topP, setTopP, thinkingBudget, setThinkingBudget,
     maxOutputTokens, maxMemoryCalls, maxToolRounds,
     memoryEnabled, setMemoryEnabled,
     savedPrompts, setSavedPrompts,
@@ -294,6 +294,7 @@ export default function Home() {
       deepThinkSystemPrompt,
       tools,
       temperature,
+      topP,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -331,7 +332,7 @@ export default function Home() {
     }
     
     return chatObj;
-  }, [currentChatId, chatTitle, model, systemPrompt, deepThinkSystemPrompt, tools, temperature, savedChats, fileEditorChatKey]);
+  }, [currentChatId, chatTitle, model, systemPrompt, deepThinkSystemPrompt, tools, temperature, topP, savedChats, fileEditorChatKey]);
 
   // ============ STREAMING ============
   const streamGeneration = useCallback(async (
@@ -709,6 +710,7 @@ export default function Home() {
         } else {
           // Только для Gemini
           requestBody.thinkingBudget = thinkingBudget;
+          requestBody.topP = topP;
         }
         
         const _logTs = Date.now();
@@ -1624,7 +1626,7 @@ export default function Home() {
         }
       }, 100); // 100ms достаточно для React batching
     }
-  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, fileEditorChatKey, memoryEnabled, activeProvider, maxOutputTokens, handleSkillEvent, maxToolRounds, maxMemoryCalls]);
+  }, [selectedApiKeyEntry, model, systemPrompt, tools, temperature, topP, thinkingBudget, deepThinkState, deepThinkAnalyze, deepThinkSystemPrompt, currentChatId, fileEditorChatKey, memoryEnabled, activeProvider, maxOutputTokens, handleSkillEvent, maxToolRounds, maxMemoryCalls]);
 
   // Auto-open sheet for ai_interactive sites when streaming ends
   useEffect(() => {
@@ -2335,6 +2337,7 @@ export default function Home() {
     setDeepThinkSystemPrompt(chat.deepThinkSystemPrompt || loadDeepThinkSystemPrompt() || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
     setTools(chat.tools || []);
     setTemperature(chat.temperature ?? 1.0);
+    setTopP(chat.topP);
     setActiveChatId(chat.id);
     setUnsaved(false);
     setError('');

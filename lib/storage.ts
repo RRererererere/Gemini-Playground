@@ -708,6 +708,7 @@ export async function exportAllSettings(): Promise<void> {
     prompts: localStorage.getItem(SYSTEM_PROMPTS_KEY) || '[]',
     model: localStorage.getItem('gemini_model') || '',
     temperature: localStorage.getItem('gemini_temperature') || '1',
+    topP: localStorage.getItem('gemini_top_p'),
     thinkingBudget: localStorage.getItem('gemini_thinking_budget') || '-1',
     systemPrompt: localStorage.getItem('gemini_sys_prompt') || '',
 
@@ -767,6 +768,8 @@ export async function importAllSettings(file: File): Promise<void> {
           if (raw.prompts) localStorage.setItem(SYSTEM_PROMPTS_KEY, raw.prompts);
           if (raw.model) localStorage.setItem('gemini_model', raw.model);
           if (raw.temperature) localStorage.setItem('gemini_temperature', raw.temperature);
+          if (typeof raw.topP === 'string') localStorage.setItem('gemini_top_p', raw.topP);
+          else if (raw.topP === null) localStorage.removeItem('gemini_top_p');
           if (raw.thinkingBudget) localStorage.setItem('gemini_thinking_budget', raw.thinkingBudget);
           if (raw.systemPrompt) localStorage.setItem('gemini_sys_prompt', raw.systemPrompt);
           

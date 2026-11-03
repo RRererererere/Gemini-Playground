@@ -47,6 +47,7 @@ export function useSettings() {
   const [deepThinkModelId, setDeepThinkModelIdState] = useState<string>('');
   const [deepThinkApiKeyIndex, setDeepThinkApiKeyIndexState] = useState<number>(0);
   const [temperature, setTemperature] = useState<number>(1.0);
+  const [topP, setTopP] = useState<number | undefined>();
   const [thinkingBudget, setThinkingBudget] = useState<number>(-1);
   const [maxOutputTokens, setMaxOutputTokens] = useState<number>(8192);
   const [memoryEnabled, setMemoryEnabled] = useState<boolean>(true);
@@ -103,6 +104,7 @@ export function useSettings() {
 
       const savedSysPrompt = localStorage.getItem('gemini_sys_prompt');
       const savedTemp = localStorage.getItem('gemini_temperature');
+      const savedTopP = localStorage.getItem('gemini_top_p');
       const savedThinking = localStorage.getItem('gemini_thinking_budget');
       const savedMemoryEnabled = localStorage.getItem('gemini_memory_enabled');
       const savedMaxToolRounds = localStorage.getItem('gemini_max_tool_rounds');
@@ -112,6 +114,10 @@ export function useSettings() {
 
       if (savedSysPrompt) setSystemPrompt(savedSysPrompt);
       if (savedTemp) setTemperature(parseFloat(savedTemp));
+      if (savedTopP) {
+        const value = Number(savedTopP);
+        if (value >= 0 && value <= 1) setTopP(value);
+      }
       setDeepThinkSystemPrompt(savedDeepThinkPrompt || DEFAULT_DEEPTHINK_SYSTEM_PROMPT);
       // Load DeepThink model/provider/key settings
       const savedDTProviderId = localStorage.getItem('gemini_deepthink_provider_id') || '';
@@ -148,6 +154,10 @@ export function useSettings() {
 
   useEffect(() => { localStorage.setItem('gemini_sys_prompt', systemPrompt); }, [systemPrompt]);
   useEffect(() => { localStorage.setItem('gemini_temperature', temperature.toString()); }, [temperature]);
+  useEffect(() => {
+    if (topP === undefined) localStorage.removeItem('gemini_top_p');
+    else localStorage.setItem('gemini_top_p', topP.toString());
+  }, [topP]);
   useEffect(() => {
     Object.entries(activeKeyIndex).forEach(([providerId, idx]) => {
       localStorage.setItem(`${providerId}_active_key_index`, idx.toString());
@@ -283,6 +293,8 @@ export function useSettings() {
     setDeepThinkApiKeyIndex,
     temperature,
     setTemperature,
+    topP,
+    setTopP,
     thinkingBudget,
     setThinkingBudget,
     maxOutputTokens,
